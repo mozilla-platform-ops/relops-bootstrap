@@ -91,8 +91,27 @@
                 <string>RSA</string>
                 <key>Key Usage</key>
                 <integer>5</integer>
+                <!--
+                    KeyIsExtractable=true allows the LaunchDaemon at
+                    /Library/LaunchDaemons/com.mozilla.relops.bootstrap.plist
+                    to export the SCEP-issued identity as PKCS12 from the
+                    System keychain. The bootstrap workflow then splits the
+                    PKCS12 into PEM cert + PEM key at /var/root/.relops-bootstrap/,
+                    uses them for mTLS to forge.relops.mozilla.com, and writes
+                    the resulting vault.yaml to /var/root/vault.yaml.
+                    Required because URLSession on macOS can't reliably
+                    present keychain-managed identities to GCP HTTPS LB.
+
+                    AllowAllAppsAccess=true wildcards the keychain ACL for
+                    encrypt operations, but exporting the key (export_clear
+                    auth) is gated separately. Whether the LaunchDaemon can
+                    `security export` without a UI prompt is a known-unknown
+                    that gets validated on first deploy — see B-1 spec.
+                -->
                 <key>KeyIsExtractable</key>
-                <false/>
+                <true/>
+                <key>AllowAllAppsAccess</key>
+                <true/>
                 <key>Retries</key>
                 <integer>3</integer>
                 <key>RetryDelay</key>

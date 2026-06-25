@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Installed at /Library/LaunchDaemons/com.mozilla.relops.bootstrap.plist by
+    Puppet (or manually during initial bring-up). Runs as root.
+
+    Triggers:
+      - RunAtLoad: once per boot, after launchd has initialized
+      - StartCalendarInterval: once daily at 04:00 local, to refresh vault.yaml
+        in case the role's secrets rotated
+
+    The script handles its own logging to /var/log/relops-bootstrap.log.
+    Stdout/stderr land in the same place via shell redirect inside the script,
+    so launchd's StandardErrorPath is purely for early-failure crash output.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mozilla.relops.bootstrap</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/relops-bootstrap.sh</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/relops-bootstrap.launchd.err</string>
+</dict>
+</plist>
