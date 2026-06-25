@@ -31,8 +31,14 @@ CRT="certs/${PROVISIONER}-decrypter.crt"
 KEY="secrets/${PROVISIONER}-decrypter.key"
 
 if [ -f "\$CRT" ] && [ -f "\$KEY" ]; then
-  echo "decrypter files already exist for ${PROVISIONER}, skipping generation" >&2
-else
+  echo "=== existing decrypter for ${PROVISIONER}; checking it's NOT marked CA:TRUE ===" >&2
+  if openssl x509 -in "\$CRT" -text -noout | grep -q "CA:TRUE"; then
+    echo "  ⚠️ existing cert has CA:TRUE — regenerating without it (Apple SCEP rejects CA-flagged certs as encryption candidates)" >&2
+    rm -f "\$CRT" "\$KEY"
+  fi
+fi
+
+if [ ! -f "\$CRT" ] || [ ! -f "\$KEY" ]; then
   echo "=== generating RSA-2048 decrypter keypair + self-signed cert for ${PROVISIONER} ===" >&2
   openssl genrsa -out "\$KEY" 2048 2>/dev/null
   openssl req -new -x509 \\
@@ -40,7 +46,9 @@ else
     -out "\$CRT" \\
     -days 3650 \\
     -subj "/CN=${PROVISIONER}-decrypter/O=Mozilla RelOps Bootstrap CA" \\
-    -addext "keyUsage=keyEncipherment,dataEncipherment" 2>/dev/null
+    -addext "basicConstraints=critical,CA:FALSE" \\
+    -addext "keyUsage=critical,keyEncipherment,dataEncipherment" \\
+    -addext "extendedKeyUsage=emailProtection" 2>/dev/null
   chmod 0600 "\$KEY"
 fi
 
