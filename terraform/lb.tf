@@ -83,42 +83,59 @@ resource "google_compute_backend_service" "broker" {
 
 # --- SCEP-through-LB backend (so Apple mdmclient gets a publicly-trusted cert) ---
 #
-# An Internet NEG with step-ca's external IP as endpoint; LB connects to step-ca
-# over HTTPS for backend traffic. Backend cert is step-ca's self-CA-signed (cert
-# SAN includes 34.61.3.27 + step-ca.relops.mozilla) — the backend service uses
-# its TLS settings to validate against step-ca's root via a Trust Config.
+# Zonal NEG of type GCE_VM_IP_PORT — connects directly to step-ca's internal
+# VPC IP via Google's internal networking. Internet NEG was the wrong choice
+# here: Internet NEGs are for non-Google-Cloud backends; using one with a
+# GCE VM's external IP makes GCP refuse to route (hairpin-like behavior).
 
-resource "google_compute_global_network_endpoint_group" "step_ca" {
+resource "google_compute_network_endpoint_group" "step_ca" {
   name                  = "step-ca-neg"
-  network_endpoint_type = "INTERNET_IP_PORT"
+  network_endpoint_type = "GCE_VM_IP_PORT"
+  network               = google_compute_network.bootstrap.id
+  subnetwork            = google_compute_subnetwork.step_ca.id
+  zone                  = var.zone
   default_port          = 443
 }
 
-resource "google_compute_global_network_endpoint" "step_ca" {
-  global_network_endpoint_group = google_compute_global_network_endpoint_group.step_ca.name
-  ip_address                    = google_compute_address.step_ca.address
-  port                          = 443
+resource "google_compute_network_endpoint" "step_ca" {
+  network_endpoint_group = google_compute_network_endpoint_group.step_ca.name
+  zone                   = var.zone
+  instance               = google_compute_instance.step_ca.name
+  ip_address             = google_compute_instance.step_ca.network_interface[0].network_ip
+  port                   = 443
 }
 
-# Backend service for SCEP traffic. Same Cloud Armor policy as the broker
-# (same allowlist). HTTPS protocol; backend cert validation defers to the
-# system trust store + the cert's SAN match on the IP. step-ca's TLS cert
-# is signed by step-ca's own CA so chain validation will fail unless we
-# also provide a Backend Authentication Config with the step-ca root.
-#
-# For v1 we accept that the LB skips strict backend cert validation by
-# relying on the IP-restricted Internet NEG (only LB → step-ca traffic) and
-# Cloud Armor on the front door. A tighter setup would attach a
-# Backend Authentication Config with step-ca's root in a Trust Config.
+# Health check for the zonal NEG (required, unlike serverless NEG). Probes
+# step-ca's /health endpoint. Health checks come from Google's standard
+# probe ranges — already allowed in the step-ca firewall rule.
+resource "google_compute_health_check" "step_ca" {
+  name                = "step-ca-health"
+  check_interval_sec  = 30
+  timeout_sec         = 10
+  healthy_threshold   = 1
+  unhealthy_threshold = 3
+
+  https_health_check {
+    port         = 443
+    request_path = "/health"
+    # step-ca's /health returns plain "ok"; cert validation is N/A for the
+    # health probe path because GCP doesn't verify backend cert chains on
+    # health checks against private IPs.
+  }
+}
+
 resource "google_compute_backend_service" "step_ca" {
   name                  = "step-ca-backend"
   protocol              = "HTTPS"
   load_balancing_scheme = "EXTERNAL_MANAGED"
   security_policy       = google_compute_security_policy.broker.id
   timeout_sec           = 30
+  health_checks         = [google_compute_health_check.step_ca.id]
 
   backend {
-    group = google_compute_global_network_endpoint_group.step_ca.id
+    group           = google_compute_network_endpoint_group.step_ca.id
+    balancing_mode  = "RATE"
+    max_rate_per_endpoint = 100
   }
 
   log_config {
