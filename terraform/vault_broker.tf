@@ -69,6 +69,15 @@ resource "google_cloud_run_v2_service" "vault_broker" {
         value = "step-ca-root-cert"
       }
 
+      # Expected JWT aud claim. Bootstrap scripts on hosts sign JWTs with aud set to
+      # this URL; the broker rejects any JWT whose aud doesn't match exactly.
+      # When broker_hostname isn't set yet, we fall back to the Cloud Run service URL
+      # so the broker still starts cleanly during initial bring-up.
+      env {
+        name  = "JWT_AUDIENCE"
+        value = var.broker_hostname != "" ? "https://${var.broker_hostname}" : "https://vault-broker.invalid"
+      }
+
       env {
         name  = "LOG_JSON"
         value = "true"
