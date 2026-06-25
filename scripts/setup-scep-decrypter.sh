@@ -67,9 +67,12 @@ if [ ! -f "\$CRT" ] || [ ! -f "\$KEY" ]; then
     -out "\$CSR" \\
     -subj "/O=Mozilla RelOps Bootstrap CA/CN=Mozilla RelOps Bootstrap CA Intermediate CA" 2>/dev/null
 
+  # RFC 8894 §2.1.1: the RA cert serves both signing (PKI messages) and
+  # encryption (PKCS#7 envelopes). macOS SecSCEPValidateCACertMessage rejects
+  # with errSecCertificateKeyUsageNotPermitted (-67731) when either is missing.
   cat > "\$EXT" <<EXTEND
 basicConstraints = critical, CA:FALSE
-keyUsage = critical, keyEncipherment, dataEncipherment
+keyUsage = critical, digitalSignature, keyEncipherment, dataEncipherment
 extendedKeyUsage = emailProtection
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer
