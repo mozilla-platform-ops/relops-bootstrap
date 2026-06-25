@@ -72,13 +72,19 @@ def step_drain(ctx: HostContext) -> None:
     s = get_settings()
     console.print(f"[bold]drain[/]: waiting for {ctx.hostname} to finish its current task")
     deadline = time.monotonic() + s.drain_max_wait_seconds
+    consecutive_idle = 0
     while time.monotonic() < deadline:
-        # See note in clients/taskcluster.py — claimed_task_count is a placeholder.
-        # Operator should `ssh ctx.fqdn pgrep -fl 'task-X'` to confirm in v1.
-        n = taskcluster.claimed_task_count(ctx.worker_pool_id, ctx.worker_group, ctx.hostname)
-        if n == 0:
-            console.print("  → drained.")
-            return
+        busy = taskcluster.is_currently_busy(ctx.worker_pool_id, ctx.worker_group, ctx.hostname)
+        if not busy:
+            consecutive_idle += 1
+            # Require 2 consecutive idle polls so we don't race a worker that's
+            # between two tasks (recentTasks shows the completed one; the new one
+            # hasn't propagated yet).
+            if consecutive_idle >= 2:
+                console.print("  → drained.")
+                return
+        else:
+            consecutive_idle = 0
         time.sleep(s.drain_poll_seconds)
     raise TimeoutError(f"drain wait exceeded {s.drain_max_wait_seconds}s")
 
