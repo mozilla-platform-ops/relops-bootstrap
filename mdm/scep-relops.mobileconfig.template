@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadDescription</key>
+            <string>SCEP enrollment payload for vault-broker client cert</string>
+            <key>PayloadDisplayName</key>
+            <string>Mozilla RelOps SCEP</string>
+            <key>PayloadIdentifier</key>
+            <string>com.mozilla.relops.scep.payload</string>
+            <key>PayloadOrganization</key>
+            <string>Mozilla</string>
+            <key>PayloadType</key>
+            <string>com.apple.security.scep</string>
+            <key>PayloadUUID</key>
+            <string>{{PAYLOAD_UUID}}</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadContent</key>
+            <dict>
+                <key>URL</key>
+                <string>{{STEP_CA_URL}}</string>
+                <key>Name</key>
+                <string>scep-relops</string>
+                <key>Subject</key>
+                <array>
+                    <array>
+                        <array>
+                            <string>O</string>
+                            <string>Mozilla</string>
+                        </array>
+                    </array>
+                    <array>
+                        <array>
+                            <string>OU</string>
+                            <string>RelOps</string>
+                        </array>
+                    </array>
+                    <array>
+                        <array>
+                            <string>CN</string>
+                            <string>{{COMMON_NAME}}</string>
+                        </array>
+                    </array>
+                </array>
+                <key>Challenge</key>
+                <string>{{SCEP_CHALLENGE}}</string>
+                <key>Keysize</key>
+                <integer>2048</integer>
+                <key>Key Type</key>
+                <string>RSA</string>
+                <key>Key Usage</key>
+                <integer>5</integer>
+                <key>KeyIsExtractable</key>
+                <false/>
+                <key>Retries</key>
+                <integer>3</integer>
+                <key>RetryDelay</key>
+                <integer>10</integer>
+            </dict>
+        </dict>
+    </array>
+    <key>PayloadDescription</key>
+    <string>Issues an SCEP-based client cert from the Mozilla RelOps Bootstrap CA. The cert authenticates the host to the vault-broker service for fetching role secrets.</string>
+    <key>PayloadDisplayName</key>
+    <string>Mozilla RelOps SCEP Enrollment</string>
+    <key>PayloadIdentifier</key>
+    <string>com.mozilla.relops.scep</string>
+    <key>PayloadOrganization</key>
+    <string>Mozilla</string>
+    <key>PayloadRemovalDisallowed</key>
+    <false/>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>{{PROFILE_UUID}}</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+</dict>
+</plist>
