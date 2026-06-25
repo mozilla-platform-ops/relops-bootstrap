@@ -51,6 +51,29 @@ gcloud run services update vault-broker \
 rm -f /tmp/root_ca.crt /tmp/_scep_challenge /tmp/scep-x509-template.json
 ```
 
+## setup-scep-decrypter.sh
+
+step-ca's intermediate CA is ECDSA P-256, but Apple SCEP uses RSA to wrap
+the PKCS#7 envelope key in `PKIOperation` requests. Without an RSA decrypter
+configured on the SCEP provisioner, Apple's mdmclient enrollment will fail
+to decrypt — `GetCACaps` and `GetCACert` look fine, but cert issuance
+silently breaks at PKIOperation.
+
+This script (runs on the step-ca VM) generates a fresh RSA-2048 keypair,
+self-signs a decrypter cert, and configures the SCEP provisioner to use
+it. Idempotent.
+
+```bash
+gcloud compute scp scripts/setup-scep-decrypter.sh step-ca:/tmp/ \
+  --zone=us-central1-a --project=relops-bootstrap --tunnel-through-iap
+gcloud compute ssh step-ca \
+  --zone=us-central1-a --project=relops-bootstrap --tunnel-through-iap \
+  --command='chmod +x /tmp/setup-scep-decrypter.sh && /tmp/setup-scep-decrypter.sh'
+```
+
+Pass a provisioner name as the first arg to manage a different provisioner;
+defaults to `scep-no-sip`.
+
 ## scep-x509-template.json.example
 
 step-ca's Go-template-driven x509 cert template for SCEP enrollments. The
