@@ -6,21 +6,24 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /build
+
+# Copy pyproject + the package so `pip install .` works.
 COPY pyproject.toml /build/
-RUN pip install --target=/install fastapi 'uvicorn[standard]' pydantic pydantic-settings \
-                                  cryptography 'pyjwt[crypto]' google-cloud-secret-manager structlog
+COPY app /build/app
+
+# Install the project (drives deps from pyproject.toml — no need to maintain a second list here).
+RUN pip install --target=/install .
 
 
 FROM python:3.12-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/app:/deps
+    PYTHONPATH=/deps
 
 WORKDIR /app
 
 COPY --from=builder /install /deps
-COPY app /app/app
 
 # Cloud Run injects PORT.
 EXPOSE 8080

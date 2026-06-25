@@ -48,9 +48,44 @@ resource "google_project_iam_member" "step_ca_metric_writer" {
   member  = "serviceAccount:${google_service_account.step_ca_vm.email}"
 }
 
-# Cloud Build SA bindings are intentionally NOT in here yet.
-#
-# The default `<project_num>@cloudbuild.gserviceaccount.com` SA is only auto-created
-# on first build, which means terraform can't bind to it before the first build.
-# Modern best practice anyway is a custom Cloud Build SA — when we wire up the
-# Cloud Build trigger, we'll create that SA explicitly and bind these roles to it.
+# Custom Cloud Build service account. Modern gcloud defaults `gcloud builds submit`
+# to the project's compute default SA which has no perms in this project (Mozilla
+# org-policy disables auto-editor on default SAs). Using a dedicated SA keeps
+# Cloud Build's grant set explicit and least-privilege.
+resource "google_service_account" "cloudbuild_run" {
+  account_id   = "cloudbuild-run"
+  display_name = "Cloud Build runner"
+  description  = "Runs Cloud Build jobs that build + push the vault-broker image and deploy Cloud Run"
+}
+
+# Cloud Build needs to read source uploads, write logs.
+resource "google_project_iam_member" "cloudbuild_run_builder" {
+  project = var.project_id
+  role    = "roles/cloudbuild.builds.builder"
+  member  = "serviceAccount:${google_service_account.cloudbuild_run.email}"
+}
+
+# Push images to AR.
+resource "google_artifact_registry_repository_iam_member" "cloudbuild_run_ar_writer" {
+  location   = google_artifact_registry_repository.broker.location
+  repository = google_artifact_registry_repository.broker.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.cloudbuild_run.email}"
+}
+
+# Deploy new revisions to Cloud Run.
+resource "google_cloud_run_v2_service_iam_member" "cloudbuild_run_deployer" {
+  project  = google_cloud_run_v2_service.vault_broker.project
+  location = google_cloud_run_v2_service.vault_broker.location
+  name     = google_cloud_run_v2_service.vault_broker.name
+  role     = "roles/run.admin"
+  member   = "serviceAccount:${google_service_account.cloudbuild_run.email}"
+}
+
+# Cloud Build acts-as vault-broker-run when deploying so the new revision keeps the
+# right runtime identity.
+resource "google_service_account_iam_member" "cloudbuild_run_act_as_broker" {
+  service_account_id = google_service_account.vault_broker_run.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.cloudbuild_run.email}"
+}
