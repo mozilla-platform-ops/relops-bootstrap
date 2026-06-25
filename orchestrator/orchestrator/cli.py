@@ -1,0 +1,70 @@
+"""
+CLI entry point. `reprovision <hostname>` for full workflow; individual subcommands
+for re-running steps after partial failure.
+"""
+
+from __future__ import annotations
+
+import typer
+
+from . import workflow
+
+app = typer.Typer(no_args_is_help=True, help="Drive an end-to-end EACS reprovision of a CI worker.")
+
+
+@app.command()
+def run(hostname: str = typer.Argument(..., help="Short hostname, e.g. macmini-m4-81")) -> None:
+    """Full workflow: quarantine -> drain -> wipe -> reenroll -> BST -> vault -> bootstrap -> unquarantine."""
+    workflow.reprovision(hostname)
+
+
+@app.command()
+def quarantine(hostname: str) -> None:
+    workflow.step_quarantine(workflow.resolve(hostname))
+
+
+@app.command()
+def unquarantine(hostname: str) -> None:
+    workflow.step_unquarantine(workflow.resolve(hostname))
+
+
+@app.command()
+def drain(hostname: str) -> None:
+    workflow.step_drain(workflow.resolve(hostname))
+
+
+@app.command()
+def wipe(hostname: str) -> None:
+    """Trigger EACS-equivalent wipe via SimpleMDM API."""
+    workflow.step_wipe(workflow.resolve(hostname))
+
+
+@app.command()
+def wait_reenroll(hostname: str) -> None:
+    workflow.step_wait_for_reenroll(workflow.resolve(hostname))
+
+
+@app.command()
+def escrow_bst(hostname: str) -> None:
+    """SSH in and run `sudo profiles install -type bootstraptoken`."""
+    workflow.step_escrow_bst(workflow.resolve(hostname))
+
+
+@app.command()
+def deliver_vault(hostname: str) -> None:
+    """Pull role's vault.yaml from 1Password, SSH-drop to /var/root/vault.yaml."""
+    workflow.step_deliver_vault(workflow.resolve(hostname))
+
+
+@app.command()
+def trigger_bootstrap(hostname: str) -> None:
+    workflow.step_trigger_bootstrap_script(workflow.resolve(hostname))
+
+
+@app.command()
+def wait_sentinel(hostname: str) -> None:
+    workflow.step_wait_for_sentinel(workflow.resolve(hostname))
+
+
+if __name__ == "__main__":
+    app()

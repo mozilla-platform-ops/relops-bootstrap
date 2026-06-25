@@ -1,0 +1,53 @@
+# Cloud Build pipeline for the vault-broker service.
+#
+# Triggered on commits to main (configure trigger via:
+#   gcloud beta builds triggers create github ...
+# ).
+#
+# Pushes a tagged image to Artifact Registry, then deploys to Cloud Run.
+# Terraform's lifecycle ignore_changes on template[0].containers[0].image means
+# deploys don't drift state — terraform owns the service shape, cloudbuild
+# owns the image rolling forward.
+
+substitutions:
+  _REGION: us-central1
+  _SERVICE: vault-broker
+  _REPO: vault-broker  # Artifact Registry repo (matches terraform/artifact_registry.tf)
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}
+      - --tag=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest
+      - --file=broker/Dockerfile
+      - broker
+    waitFor: ['-']
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}
+    waitFor: [build]
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}
+      - --region=${_REGION}
+      - --quiet
+    waitFor: [push]
+
+images:
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
