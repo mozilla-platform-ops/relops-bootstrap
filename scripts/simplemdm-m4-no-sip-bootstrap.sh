@@ -124,10 +124,14 @@ echo "Waiting for SCEP cert (issued by '$ISSUER_CN') in System keychain..."
 deadline=$(( $(/bin/date +%s) + 300 ))
 while [ "$(/bin/date +%s)" -lt "$deadline" ] && [ -z "$IDENTITY_CN" ]; do
   while IFS= read -r line; do
-    if [[ $line =~ \)\ ([0-9A-Fa-f]+)\ \"(.+)\"$ ]]; then
-      sha="${BASH_REMATCH[1]}"
+    # Match: `<n>) <sha-1-hex> "<common-name>"` followed by optional trailing
+    # cruft like `(CSSMERR_TP_NOT_TRUSTED)`. Use [^"]+ instead of .+$ so the
+    # trailing chain-validity annotation doesn't defeat the match.
+    if [[ $line =~ \)\ ([0-9A-Fa-f]+)\ \"([^\"]+)\" ]]; then
       cn="${BASH_REMATCH[2]}"
-      if /usr/bin/security find-certificate -Z "$sha" -p /Library/Keychains/System.keychain 2>/dev/null \
+      # Look the cert up by CN to fetch its PEM. `find-certificate -Z <sha>`
+      # only emits hash info (NOT the PEM), so use -c <cn> -p instead.
+      if /usr/bin/security find-certificate -c "$cn" -p /Library/Keychains/System.keychain 2>/dev/null \
           | /usr/bin/openssl x509 -noout -issuer 2>/dev/null \
           | /usr/bin/grep -q "$ISSUER_CN"; then
         IDENTITY_CN="$cn"

@@ -44,12 +44,15 @@ echo "role: $ROLE"
 #    Polls for up to 5 minutes — mdmclient may still be applying the
 #    profile on first boot after EACS.
 discover_identity() {
-    local sha cn
+    local cn
     while IFS= read -r line; do
-        if [[ $line =~ \)\ ([0-9A-Fa-f]+)\ \"(.+)\"$ ]]; then
-            sha="${BASH_REMATCH[1]}"
+        # `<n>) <sha-1> "<CN>"` possibly followed by `(CSSMERR_TP_NOT_TRUSTED)`.
+        if [[ $line =~ \)\ ([0-9A-Fa-f]+)\ \"([^\"]+)\" ]]; then
             cn="${BASH_REMATCH[2]}"
-            if security find-certificate -Z "$sha" -p /Library/Keychains/System.keychain 2>/dev/null \
+            # Use -c to fetch the cert PEM by CN. `find-certificate -Z <sha>`
+            # only emits hash info, NOT the cert PEM, which silently breaks
+            # the openssl pipeline below.
+            if security find-certificate -c "$cn" -p /Library/Keychains/System.keychain 2>/dev/null \
                 | openssl x509 -noout -issuer 2>/dev/null \
                 | grep -q "$ISSUER_CN"; then
                 echo "$cn"
@@ -67,6 +70,9 @@ while [ "$(date +%s)" -lt "$WAIT_DEADLINE" ]; do
     [ -n "$IDENTITY_LABEL" ] && break
     sleep 5
 done
+
+# NB: discover_identity also uses `find-certificate -c "$cn"` (not -Z); see
+# the SimpleMDM bootstrap script for the same fix rationale.
 if [ -z "$IDENTITY_LABEL" ]; then
     echo "ERROR: no identity issued by '$ISSUER_CN' in System keychain after 5min"
     exit 3
