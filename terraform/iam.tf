@@ -48,15 +48,9 @@ resource "google_project_iam_member" "step_ca_metric_writer" {
   member  = "serviceAccount:${google_service_account.step_ca_vm.email}"
 }
 
-# Cloud Build can deploy the broker image to Cloud Run (used by CI on commit).
-resource "google_project_iam_member" "cloudbuild_run_admin" {
-  project = var.project_id
-  role    = "roles/run.admin"
-  member  = "serviceAccount:${data.google_project.project.number}@cloudbuild.gserviceaccount.com"
-}
-
-resource "google_project_iam_member" "cloudbuild_sa_user" {
-  project = var.project_id
-  role    = "roles/iam.serviceAccountUser"
-  member  = "serviceAccount:${data.google_project.project.number}@cloudbuild.gserviceaccount.com"
-}
+# Cloud Build SA bindings are intentionally NOT in here yet.
+#
+# The default `<project_num>@cloudbuild.gserviceaccount.com` SA is only auto-created
+# on first build, which means terraform can't bind to it before the first build.
+# Modern best practice anyway is a custom Cloud Build SA — when we wire up the
+# Cloud Build trigger, we'll create that SA explicitly and bind these roles to it.

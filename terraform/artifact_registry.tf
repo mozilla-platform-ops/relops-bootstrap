@@ -18,10 +18,5 @@ resource "google_artifact_registry_repository_iam_member" "broker_run_pull" {
   member     = "serviceAccount:${google_service_account.vault_broker_run.email}"
 }
 
-# Cloud Build pushes new images on each CI run.
-resource "google_artifact_registry_repository_iam_member" "broker_cloudbuild_push" {
-  location   = google_artifact_registry_repository.broker.location
-  repository = google_artifact_registry_repository.broker.name
-  role       = "roles/artifactregistry.writer"
-  member     = "serviceAccount:${data.google_project.project.number}@cloudbuild.gserviceaccount.com"
-}
+# Cloud Build SA push binding is intentionally not here yet — see iam.tf for context.
+# Will be added with a custom Cloud Build SA when the Cloud Build trigger is configured.

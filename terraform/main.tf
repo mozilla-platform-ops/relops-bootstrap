@@ -8,11 +8,10 @@ terraform {
     }
   }
 
-  # State backend — set after first apply (chicken-and-egg: the bucket is created here too)
-  # backend "gcs" {
-  #   bucket = "relops-bootstrap-tfstate"
-  #   prefix = "terraform/state"
-  # }
+  backend "gcs" {
+    bucket = "relops-bootstrap-tfstate"
+    prefix = "terraform/state"
+  }
 }
 
 provider "google" {
