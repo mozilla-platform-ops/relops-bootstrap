@@ -1,14 +1,11 @@
 """
 Synthetic CA + cert fixtures.
-
-Generates an in-memory root CA, intermediate, and leaf cert with a SPIFFE SAN.
-Lets the broker tests verify the full chain + JWT validation flow without any
-real step-ca infrastructure.
 """
 
 from __future__ import annotations
 
 import base64
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -49,10 +46,14 @@ def _make_root() -> TestKeyAndCert:
     return TestKeyAndCert(key, cert)
 
 
-def _make_leaf(root: TestKeyAndCert, hostname: str, role: str, trust_domain: str = "relops.mozilla") -> TestKeyAndCert:
+def _make_leaf(
+    root: TestKeyAndCert,
+    hostname: str,
+    role: str,
+    trust_domain: str = "relops.mozilla",
+) -> TestKeyAndCert:
     leaf_key = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname)])
-
     spiffe_uri = f"spiffe://{trust_domain}/host/{hostname}/role/{role}"
 
     cert = (
@@ -85,7 +86,6 @@ def root_ca() -> TestKeyAndCert:
 
 @pytest.fixture
 def other_root_ca() -> TestKeyAndCert:
-    """A second CA that should NOT validate against root_ca."""
     return _make_root()
 
 
@@ -101,6 +101,8 @@ def mint_jwt(
     extra_claims: dict | None = None,
     iat_offset_seconds: int = 0,
     alg: str = "ES256",
+    include_jti: bool = True,
+    jti: str | None = None,
 ) -> str:
     now = datetime.now(timezone.utc) + timedelta(seconds=iat_offset_seconds)
     claims = {
@@ -109,6 +111,8 @@ def mint_jwt(
         "aud": audience,
         "sub": "test-sub",
     }
+    if include_jti:
+        claims["jti"] = jti or str(uuid.uuid4())
     if extra_claims:
         claims.update(extra_claims)
 
@@ -118,22 +122,43 @@ def mint_jwt(
         encryption_algorithm=serialization.NoEncryption(),
     )
 
-    return jwt.encode(
-        claims,
-        pem_key,
-        algorithm=alg,
-        headers={"x5c": [leaf.der_b64()]},
-    )
+    return jwt.encode(claims, pem_key, algorithm=alg, headers={"x5c": [leaf.der_b64()]})
 
 
 @pytest.fixture
-def auth_settings(monkeypatch, root_ca):
-    """Set environment so the broker's config picks up our test trust domain + audience."""
+def auth_settings(monkeypatch):
+    """Reset settings between tests + set the test trust domain + audience."""
     monkeypatch.setenv("GCP_PROJECT_ID", "test-project")
     monkeypatch.setenv("JWT_AUDIENCE", "https://vault-broker.test")
     monkeypatch.setenv("SPIFFE_TRUST_DOMAIN", "relops.mozilla")
-    # Force settings cache to refresh
+    monkeypatch.setenv("JWT_ALLOWED_ALGS_CSV", "ES256,RS256")
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS_PER_MINUTE", "60")
+    monkeypatch.setenv("RATE_LIMIT_BURST", "5")
     from app.config import get_settings
 
     get_settings.cache_clear()
     return get_settings()
+
+
+@pytest.fixture
+def jti_cache():
+    from app.replay_cache import JtiCache
+
+    return JtiCache(max_size=1000)
+
+
+@pytest.fixture
+def revocation_cache():
+    from app.revocation import RevocationCache
+
+    return RevocationCache()
+
+
+@pytest.fixture
+def rate_limiter(auth_settings):
+    from app.replay_cache import RateLimiter
+
+    return RateLimiter(
+        requests_per_minute=auth_settings.rate_limit_requests_per_minute,
+        burst=auth_settings.rate_limit_burst,
+    )
