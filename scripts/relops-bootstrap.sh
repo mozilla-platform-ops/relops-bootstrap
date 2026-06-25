@@ -25,7 +25,7 @@ LOGFILE=/var/log/relops-bootstrap.log
 ROLE_FILE=/var/root/.relops-role
 VAULT_OUT=/var/root/vault.yaml
 BROKER_HOST=forge.relops.mozilla.com
-IDENTITY_LABEL="${IDENTITY_LABEL:-Mac mini}"
+ISSUER_CN="${ISSUER_CN:-Mozilla RelOps Bootstrap CA Intermediate CA}"
 
 exec >>"$LOGFILE" 2>&1
 echo "=== $(date -u '+%Y-%m-%dT%H:%M:%SZ') relops-bootstrap starting ==="
@@ -38,17 +38,40 @@ fi
 ROLE=$(tr -d '[:space:]' < "$ROLE_FILE")
 echo "role: $ROLE"
 
-# 2. Wait for SCEP enrollment to complete (mdmclient may still be applying
-#    the profile on first boot). Poll for up to 5 minutes.
+# 2. Discover the SCEP-issued identity in System.keychain by issuer DN.
+#    Issuer is stable across re-enrollments; the cert's Subject CN comes
+#    from %ComputerName%-expansion at SCEP time and may vary by device.
+#    Polls for up to 5 minutes — mdmclient may still be applying the
+#    profile on first boot after EACS.
+discover_identity() {
+    local sha cn
+    while IFS= read -r line; do
+        if [[ $line =~ \)\ ([0-9A-Fa-f]+)\ \"(.+)\"$ ]]; then
+            sha="${BASH_REMATCH[1]}"
+            cn="${BASH_REMATCH[2]}"
+            if security find-certificate -Z "$sha" -p /Library/Keychains/System.keychain 2>/dev/null \
+                | openssl x509 -noout -issuer 2>/dev/null \
+                | grep -q "$ISSUER_CN"; then
+                echo "$cn"
+                return 0
+            fi
+        fi
+    done < <(security find-identity -v /Library/Keychains/System.keychain 2>/dev/null)
+    return 1
+}
+
+IDENTITY_LABEL=""
 WAIT_DEADLINE=$(( $(date +%s) + 300 ))
-while ! security find-identity -v /Library/Keychains/System.keychain 2>/dev/null | grep -q "\"${IDENTITY_LABEL}\""; do
-    if [ "$(date +%s)" -ge "$WAIT_DEADLINE" ]; then
-        echo "ERROR: identity '${IDENTITY_LABEL}' not in System keychain after 5min"
-        exit 3
-    fi
+while [ "$(date +%s)" -lt "$WAIT_DEADLINE" ]; do
+    IDENTITY_LABEL=$(discover_identity || true)
+    [ -n "$IDENTITY_LABEL" ] && break
     sleep 5
 done
-echo "identity '$IDENTITY_LABEL' present"
+if [ -z "$IDENTITY_LABEL" ]; then
+    echo "ERROR: no identity issued by '$ISSUER_CN' in System keychain after 5min"
+    exit 3
+fi
+echo "identity: '$IDENTITY_LABEL' (issued by '$ISSUER_CN')"
 
 # 3. Fetch vault.yaml via mTLS. SecureTransport backend reads the cert
 #    directly from /Library/Keychains/System.keychain by CN.
