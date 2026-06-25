@@ -6,6 +6,12 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 6.0"
     }
+    # google-beta carries the networksecurity Trust Config + Server TLS Policy
+    # resources used by mtls.tf for LB-layer mTLS.
+    google-beta = {
+      source  = "hashicorp/google-beta"
+      version = "~> 6.0"
+    }
   }
 
   backend "gcs" {
@@ -15,6 +21,11 @@ terraform {
 }
 
 provider "google" {
+  project = var.project_id
+  region  = var.region
+}
+
+provider "google-beta" {
   project = var.project_id
   region  = var.region
 }

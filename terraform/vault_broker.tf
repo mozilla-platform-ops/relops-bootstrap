@@ -1,18 +1,22 @@
 # Cloud Run service that brokers Secret Manager reads for per-host CI workers.
 #
-# Auth model (enforced in broker app code, not at the LB):
-#   1. Host presents a JWT in the Authorization header
-#   2. JWT was signed by the host's SCEP-issued client cert (issued by our step-ca)
-#   3. Broker validates JWT signature against the step-ca root cert (bundled in image)
-#   4. JWT claims: { sub: "<hostname>", role: "<puppet_role>", aud: <broker_url>, exp: <iat+60s> }
-#   5. Broker reads vault-${role} from Secret Manager and returns the YAML content
+# Auth model (mTLS at LB layer, header-forwarded identity to broker):
+#   1. Host's URLSession does TLS handshake against forge.relops.mozilla.com
+#   2. macOS Network framework presents the SCEP-issued client cert via
+#      network-stack helpers (configd, nehelper) that DO have keychain sign
+#      access (our own code can't — that's why JWT-signed-by-cert was a dead end)
+#   3. LB validates cert chain against the Trust Config (step-ca root +
+#      intermediate, see mtls.tf) and injects X-Client-Cert-* headers
+#   4. Broker reads X-Client-Cert-SPIFFE, parses host/role from the SPIFFE URI
+#   5. Broker reads vault-${role} from Secret Manager, returns YAML content
 #
 # Defense-in-depth layers:
-#   - Cloud Run ingress = INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER (no direct internet access)
+#   - Cloud Run ingress = INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER (no direct internet)
 #   - LB frontend allowlists trusted_source_cidrs (MDC1 worker network)
-#   - Broker app validates the JWT chain
+#   - LB validates client cert chain to step-ca root via Trust Config
+#   - Broker reads forwarded SPIFFE URI + does role↔URL match check
 #   - Broker SA can read ONLY vault-* secrets (per-secret IAM binding in iam.tf)
-#   - Every secret read is logged to Cloud Audit Logs with the requesting cert's SAN
+#   - Every secret read is logged to Cloud Audit Logs with the cert serial
 
 resource "google_service_account" "vault_broker_run" {
   account_id   = "vault-broker-run"
@@ -61,23 +65,6 @@ resource "google_cloud_run_v2_service" "vault_broker" {
         value = var.project_id
       }
 
-      # The broker code reads this at startup and uses it to validate
-      # the chain of incoming JWT-signing certs. The actual cert content is added as
-      # a Secret Manager secret post-CA-bootstrap so we don't bake the root into the image.
-      env {
-        name  = "STEP_CA_ROOT_CERT_SECRET"
-        value = "step-ca-root-cert"
-      }
-
-      # Expected JWT aud claim. Bootstrap scripts on hosts sign JWTs with aud set to
-      # this URL; the broker rejects any JWT whose aud doesn't match exactly.
-      # When broker_hostname isn't set yet, we fall back to the Cloud Run service URL
-      # so the broker still starts cleanly during initial bring-up.
-      env {
-        name  = "JWT_AUDIENCE"
-        value = var.broker_hostname != "" ? "https://${var.broker_hostname}" : "https://vault-broker.invalid"
-      }
-
       env {
         name  = "LOG_JSON"
         value = "true"
@@ -91,12 +78,13 @@ resource "google_cloud_run_v2_service" "vault_broker" {
   ]
 }
 
-# Allow unauthenticated invocations at the Cloud Run layer — auth happens in the broker app
-# (JWT validation against the SCEP root cert). The LB frontend's source-CIDR allowlist is the
-# outer fence; the in-app JWT check is the inner fence.
+# Allow unauthenticated invocations at the Cloud Run layer — auth happens via mTLS
+# at the LB (LB validates client cert chain to step-ca root) plus the broker's
+# SPIFFE URI role-match check on the forwarded headers.
 #
 # Note: "unauthenticated" here means "no Google IAM bearer token required to call the URL."
-# Hosts still MUST present a valid JWT signed by their SCEP cert or the broker returns 401.
+# Hosts MUST present a valid step-ca-issued client cert during TLS handshake, or
+# the broker returns 401 on the X-Client-Cert-* header check.
 resource "google_cloud_run_v2_service_iam_member" "vault_broker_public" {
   project  = google_cloud_run_v2_service.vault_broker.project
   location = google_cloud_run_v2_service.vault_broker.location

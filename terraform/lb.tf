@@ -65,6 +65,12 @@ resource "google_compute_security_policy" "broker" {
 }
 
 # Backend service wiring the NEG to Cloud Armor.
+#
+# custom_request_headers: the LB validates the client cert (chain to step-ca
+# root) and then injects parsed cert info into request headers. The broker
+# reads these instead of doing its own JWT signature check. Header values
+# are GCP-managed templates documented at:
+#   https://cloud.google.com/load-balancing/docs/https/custom-headers-global
 resource "google_compute_backend_service" "broker" {
   name                  = "vault-broker-backend"
   protocol              = "HTTPS"
@@ -74,6 +80,17 @@ resource "google_compute_backend_service" "broker" {
   backend {
     group = google_compute_region_network_endpoint_group.broker.id
   }
+
+  custom_request_headers = [
+    "X-Client-Cert-Present: {client_cert_present}",
+    "X-Client-Cert-Chain-Verified: {client_cert_chain_verified}",
+    "X-Client-Cert-Error: {client_cert_error}",
+    "X-Client-Cert-SPIFFE: {client_cert_spiffe_id}",
+    "X-Client-Cert-URI-SANs: {client_cert_uri_sans}",
+    "X-Client-Cert-Subject-DN: {client_cert_subject_dn}",
+    "X-Client-Cert-Serial-Number: {client_cert_serial_number}",
+    "X-Client-Cert-SHA256: {client_cert_sha256_fingerprint}",
+  ]
 
   log_config {
     enable      = true
@@ -184,6 +201,11 @@ resource "google_compute_target_https_proxy" "broker" {
   name             = "vault-broker-https-proxy"
   url_map          = google_compute_url_map.broker.id
   ssl_certificates = [google_compute_managed_ssl_certificate.broker[0].id]
+
+  # Enable mTLS at the LB layer. Mode = ALLOW_INVALID_OR_MISSING so SCEP
+  # enrollment (no client cert) still works; the broker enforces presence
+  # for /secret/* paths.
+  server_tls_policy = google_network_security_server_tls_policy.broker.id
 }
 
 resource "google_compute_global_forwarding_rule" "broker" {

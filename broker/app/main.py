@@ -3,15 +3,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import PlainTextResponse, Response
 
-from .auth import AuthError, ReplayError, RevokedCertError, verify
+from .auth import AuthError, verify_mtls_headers
 from .config import get_settings
 from .logging_setup import configure_logging, log
-from .replay_cache import JtiCache, RateLimiter
-from .revocation import (
-    RevocationCache,
-    start_background_refresh,
-    stop_background_refresh,
-)
+from .replay_cache import RateLimiter
 from .secrets import read_secret
 
 
@@ -20,41 +15,21 @@ async def lifespan(app: FastAPI):
     configure_logging()
     settings = get_settings()
 
-    # Pre-load the step-ca root cert.
-    root_pem = read_secret(settings.step_ca_root_cert_secret)
-    app.state.root_cert_pem = root_pem
-
-    # In-memory state shared across requests.
-    app.state.jti_cache = JtiCache(max_size=settings.jti_cache_max_size)
     app.state.rate_limiter = RateLimiter(
         requests_per_minute=settings.rate_limit_requests_per_minute,
         burst=settings.rate_limit_burst,
     )
-    app.state.revocation_cache = RevocationCache()
-
-    # CRL polling — no-op if CRL_URL not configured.
-    app.state.crl_task = start_background_refresh(
-        app.state.revocation_cache,
-        settings.crl_url,
-        settings.crl_refresh_seconds,
-        settings.crl_fetch_timeout_seconds,
-    )
 
     log.info(
         "startup",
-        root_cert_bytes=len(root_pem),
         project=settings.gcp_project_id,
-        crl_enabled=bool(settings.crl_url),
         rate_limit_rpm=settings.rate_limit_requests_per_minute,
+        spiffe_trust_domain=settings.spiffe_trust_domain,
     )
-
-    try:
-        yield
-    finally:
-        await stop_background_refresh(app.state.crl_task)
+    yield
 
 
-app = FastAPI(title="vault-broker", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="vault-broker", version="0.2.0", lifespan=lifespan)
 
 
 @app.get("/healthz", response_class=PlainTextResponse)
@@ -62,37 +37,44 @@ async def healthz() -> str:
     return "ok"
 
 
+@app.get("/_debug/headers")
+async def debug_headers(request: Request) -> dict:
+    """Dump the request headers the broker actually receives. Used to verify
+    LB-forwarded mTLS headers during bring-up. Remove after Path C is proven."""
+    return {k: v for k, v in request.headers.items()}
+
+
 @app.get("/secret/{role}")
 async def get_secret(
     role: str,
     request: Request,
-    authorization: str = Header(default=""),
+    x_client_cert_present: str = Header(default="", alias="X-Client-Cert-Present"),
+    x_client_cert_chain_verified: str = Header(
+        default="", alias="X-Client-Cert-Chain-Verified"
+    ),
+    x_client_cert_error: str = Header(default="", alias="X-Client-Cert-Error"),
+    x_client_cert_spiffe: str = Header(default="", alias="X-Client-Cert-SPIFFE"),
+    x_client_cert_serial_number: str = Header(
+        default="", alias="X-Client-Cert-Serial-Number"
+    ),
 ) -> Response:
     state = request.app.state
     remote = request.client.host if request.client else None
 
-    if not authorization:
-        log.warning("auth.missing", role=role, remote=remote)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing Authorization")
-
     try:
-        identity = verify(
-            authorization,
-            state.root_cert_pem,
-            jti_cache=state.jti_cache,
-            revocation_cache=state.revocation_cache,
+        identity = verify_mtls_headers(
+            cert_present=x_client_cert_present,
+            chain_verified=x_client_cert_chain_verified,
+            cert_error=x_client_cert_error,
+            spiffe=x_client_cert_spiffe,
+            serial_number=x_client_cert_serial_number,
         )
-    except RevokedCertError as e:
-        log.warning("auth.revoked", role=role, reason=str(e), remote=remote)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="cert revoked")
-    except ReplayError as e:
-        log.warning("auth.replay", role=role, reason=str(e), remote=remote)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="replay detected")
     except AuthError as e:
         log.warning("auth.failed", role=role, reason=str(e), remote=remote)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid client cert"
+        )
 
-    # Rate limit *after* auth so unauthenticated probes don't fill the bucket-table.
     if not state.rate_limiter.consume(identity.cert_serial):
         log.warning(
             "auth.rate_limited",
@@ -101,7 +83,6 @@ async def get_secret(
             cert_serial=identity.cert_serial,
             remote=remote,
         )
-        # 429 with a generic message; never leak rate-limit internals.
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="rate limit exceeded",
