@@ -159,7 +159,7 @@ resource "google_compute_url_map" "broker" {
     default_service = google_compute_backend_service.broker.id
 
     path_rule {
-      paths   = ["/scep", "/scep/*"]
+      paths   = ["/scep", "/scep/*", "/acme", "/acme/*"]
       service = google_compute_backend_service.step_ca.id
     }
   }

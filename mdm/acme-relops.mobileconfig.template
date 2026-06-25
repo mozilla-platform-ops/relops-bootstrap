@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+
+        <!--
+            Payload 1: step-ca root CA cert. Installed before the ACME payload
+            runs so the ACME server's TLS cert validates if we ever bypass the
+            LB. With forge.relops.mozilla.com fronting via Google-managed cert
+            this is belt-and-suspenders, but harmless to include.
+        -->
+        <dict>
+            <key>PayloadDescription</key>
+            <string>Mozilla RelOps Bootstrap CA root certificate</string>
+            <key>PayloadDisplayName</key>
+            <string>RelOps Root CA</string>
+            <key>PayloadIdentifier</key>
+            <string>com.mozilla.relops.rootca.payload</string>
+            <key>PayloadOrganization</key>
+            <string>Mozilla</string>
+            <key>PayloadType</key>
+            <string>com.apple.security.pkcs1</string>
+            <key>PayloadUUID</key>
+            <string>{{ROOTCA_PAYLOAD_UUID}}</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>AllowAllAppsAccess</key>
+            <false/>
+            <key>KeyIsExtractable</key>
+            <false/>
+            <key>PayloadCertificateFileName</key>
+            <string>step-ca-root.cer</string>
+            <key>PayloadContent</key>
+            <data>{{ROOTCA_DER_BASE64}}</data>
+        </dict>
+
+        <!-- Payload 2: ACME enrollment -->
+        <dict>
+            <key>PayloadDescription</key>
+            <string>ACME enrollment payload for vault-broker client cert</string>
+            <key>PayloadDisplayName</key>
+            <string>Mozilla RelOps ACME</string>
+            <key>PayloadIdentifier</key>
+            <string>com.mozilla.relops.acme.payload</string>
+            <key>PayloadOrganization</key>
+            <string>Mozilla</string>
+            <key>PayloadType</key>
+            <string>com.apple.security.acme</string>
+            <key>PayloadUUID</key>
+            <string>{{ACME_PAYLOAD_UUID}}</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+
+            <key>DirectoryURL</key>
+            <string>{{ACME_DIRECTORY_URL}}</string>
+            <key>ClientIdentifier</key>
+            <string>{{COMMON_NAME}}</string>
+            <key>KeySize</key>
+            <integer>2048</integer>
+            <key>KeyType</key>
+            <string>RSA</string>
+            <key>UsageFlags</key>
+            <integer>5</integer>
+            <key>HardwareBound</key>
+            <false/>
+            <key>Attest</key>
+            <false/>
+            <key>Subject</key>
+            <array>
+                <array>
+                    <array>
+                        <string>O</string>
+                        <string>Mozilla</string>
+                    </array>
+                </array>
+                <array>
+                    <array>
+                        <string>OU</string>
+                        <string>RelOps</string>
+                    </array>
+                </array>
+                <array>
+                    <array>
+                        <string>CN</string>
+                        <string>{{COMMON_NAME}}</string>
+                    </array>
+                </array>
+            </array>
+        </dict>
+
+    </array>
+    <key>PayloadDescription</key>
+    <string>Installs the Mozilla RelOps Bootstrap CA root and enrolls an ACME client cert from it. The cert authenticates the host to the vault-broker service for fetching role secrets.</string>
+    <key>PayloadDisplayName</key>
+    <string>Mozilla RelOps ACME Enrollment</string>
+    <key>PayloadIdentifier</key>
+    <string>com.mozilla.relops.acme</string>
+    <key>PayloadOrganization</key>
+    <string>Mozilla</string>
+    <key>PayloadRemovalDisallowed</key>
+    <false/>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>{{PROFILE_UUID}}</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+</dict>
+</plist>
