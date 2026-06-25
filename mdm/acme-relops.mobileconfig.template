@@ -55,18 +55,50 @@
 
             <key>DirectoryURL</key>
             <string>{{ACME_DIRECTORY_URL}}</string>
+            <!--
+                ClientIdentifier becomes the ACME order's permanent-identifier.
+                For device-attest-01, step-ca matches this against the hardware
+                identifiers inside the Apple attestation statement (UDID and
+                serial number). The value MUST match one of those — usually
+                the device serial.
+
+                Apple does NOT expand %ComputerName% / %SerialNumber% in this
+                field (verified by experiment; the literal string lands in the
+                ACME order). SimpleMDM's server-side substitution macro
+                $SERIAL_NUMBER$ is the portable way to get the serial here.
+
+                For the m4-81 proof-of-concept the serial is hardcoded so we
+                can validate the full attestation→cert flow without depending
+                on SimpleMDM's macro expansion working as documented.
+            -->
             <key>ClientIdentifier</key>
-            <string>{{COMMON_NAME}}</string>
+            <string>{{CLIENT_IDENTIFIER}}</string>
+            <!--
+                macOS ACME requires hardware-bound + attested keys to satisfy
+                the device-attest-01 challenge type. The key is generated in
+                the Secure Enclave (EC-P256 only) and the device sends an
+                Apple-signed attestation as proof of identity. Without these,
+                Apple's mdmclient fails with errSecMissingRequiredExtension
+                (-67673) because the ACME server offers challenge types macOS
+                can't satisfy.
+            -->
             <key>KeySize</key>
-            <integer>2048</integer>
+            <integer>256</integer>
             <key>KeyType</key>
-            <string>RSA</string>
+            <string>ECSECPrimeRandom</string>
             <key>UsageFlags</key>
-            <integer>5</integer>
+            <integer>1</integer>
             <key>HardwareBound</key>
-            <false/>
+            <true/>
             <key>Attest</key>
-            <false/>
+            <true/>
+            <!--
+                Subject CN MUST equal ClientIdentifier exactly — step-ca's
+                ACME finalize step rejects the CSR otherwise with
+                "CSR Subject Common Name does not match identifiers exactly".
+                This is a step-ca security check, not Apple's, so both fields
+                are templated from the same {{CLIENT_IDENTIFIER}} value.
+            -->
             <key>Subject</key>
             <array>
                 <array>
@@ -84,7 +116,7 @@
                 <array>
                     <array>
                         <string>CN</string>
-                        <string>{{COMMON_NAME}}</string>
+                        <string>{{CLIENT_IDENTIFIER}}</string>
                     </array>
                 </array>
             </array>

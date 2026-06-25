@@ -15,6 +15,11 @@ set -euo pipefail
 
 GCP_PROJECT="${GCP_PROJECT:-relops-bootstrap}"
 ACME_DIRECTORY_URL="${ACME_DIRECTORY_URL:-https://forge.relops.mozilla.com/acme/acme-no-sip/directory}"
+# ClientIdentifier value injected into the ACME profile. Defaults to
+# $SERIAL_NUMBER$ which SimpleMDM substitutes server-side. Override with
+# CLIENT_IDENTIFIER=<literal-serial> for a hardcoded single-device test
+# (e.g. CLIENT_IDENTIFIER=YMJFD620W9 for the m4-81 proof-of-concept).
+CLIENT_IDENTIFIER="${CLIENT_IDENTIFIER:-\$SERIAL_NUMBER\$}"
 OUT_PATH="${1:-/tmp/acme-relops.mobileconfig}"
 TEMPLATE="$(dirname "$0")/../mdm/acme-relops.mobileconfig.template"
 
@@ -46,7 +51,7 @@ PROFILE_UUID=$(uuidgen)
 
 sed \
   -e "s|{{ACME_DIRECTORY_URL}}|${ACME_DIRECTORY_URL}|" \
-  -e "s|{{COMMON_NAME}}|%ComputerName%|" \
+  -e "s|{{CLIENT_IDENTIFIER}}|${CLIENT_IDENTIFIER}|g" \
   -e "s|{{ACME_PAYLOAD_UUID}}|${ACME_PAYLOAD_UUID}|" \
   -e "s|{{ROOTCA_PAYLOAD_UUID}}|${ROOTCA_PAYLOAD_UUID}|" \
   -e "s|{{ROOTCA_DER_BASE64}}|${ROOTCA_DER_BASE64}|" \
@@ -56,6 +61,7 @@ sed \
 chmod 0600 "$OUT_PATH"
 echo "rendered to $OUT_PATH" >&2
 echo "  ACME_DIRECTORY_URL   = $ACME_DIRECTORY_URL" >&2
+echo "  CLIENT_IDENTIFIER    = $CLIENT_IDENTIFIER" >&2
 echo "  ACME_PAYLOAD_UUID    = $ACME_PAYLOAD_UUID" >&2
 echo "  ROOTCA_PAYLOAD_UUID  = $ROOTCA_PAYLOAD_UUID" >&2
 echo "  PROFILE_UUID         = $PROFILE_UUID" >&2
