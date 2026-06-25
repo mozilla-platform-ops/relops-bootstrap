@@ -19,3 +19,14 @@ override.tf.json
 .vscode/
 .idea/
 *.swp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.env
