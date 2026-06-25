@@ -31,25 +31,59 @@ CRT="certs/${PROVISIONER}-decrypter.crt"
 KEY="secrets/${PROVISIONER}-decrypter.key"
 
 if [ -f "\$CRT" ] && [ -f "\$KEY" ]; then
-  echo "=== existing decrypter for ${PROVISIONER}; checking it's NOT marked CA:TRUE ===" >&2
-  if openssl x509 -in "\$CRT" -text -noout | grep -q "CA:TRUE"; then
-    echo "  ⚠️ existing cert has CA:TRUE — regenerating without it (Apple SCEP rejects CA-flagged certs as encryption candidates)" >&2
+  echo "=== existing decrypter for ${PROVISIONER}; checking it chains to the intermediate CA ===" >&2
+  if openssl verify -CAfile "\$STEPPATH/certs/intermediate_ca.crt" -partial_chain "\$CRT" 2>/dev/null \\
+      | grep -q "OK"; then
+    echo "  ✅ existing cert is CA-issued — keeping it" >&2
+  else
+    echo "  ⚠️ existing cert is NOT CA-issued (self-signed or unrelated) — regenerating" >&2
+    echo "     Apple SCEP requires the RA encryption cert to chain to the SCEP server CA." >&2
     rm -f "\$CRT" "\$KEY"
   fi
 fi
 
 if [ ! -f "\$CRT" ] || [ ! -f "\$KEY" ]; then
-  echo "=== generating RSA-2048 decrypter keypair + self-signed cert for ${PROVISIONER} ===" >&2
+  echo "=== generating RSA-2048 decrypter keypair + CA-signed cert for ${PROVISIONER} ===" >&2
+
+  # Decrypt the intermediate CA private key into a tmp file. step-ca stores it
+  # encrypted with the CA password.
+  INT_KEY_DEC=\$(mktemp)
+  trap "shred -u \$INT_KEY_DEC 2>/dev/null || rm -f \$INT_KEY_DEC" EXIT
+  openssl pkey \\
+    -in "\$STEPPATH/secrets/intermediate_ca_key" \\
+    -passin "file:\$STEPPATH/secrets/password" \\
+    -out "\$INT_KEY_DEC" 2>/dev/null
+
+  CSR=\$(mktemp)
+  EXT=\$(mktemp)
+  trap "shred -u \$INT_KEY_DEC \$CSR \$EXT 2>/dev/null || rm -f \$INT_KEY_DEC \$CSR \$EXT" EXIT
+
   openssl genrsa -out "\$KEY" 2048 2>/dev/null
-  openssl req -new -x509 \\
-    -key "\$KEY" \\
+  openssl req -new -key "\$KEY" \\
+    -out "\$CSR" \\
+    -subj "/CN=${PROVISIONER}-decrypter/O=Mozilla RelOps Bootstrap CA" 2>/dev/null
+
+  cat > "\$EXT" <<EXTEND
+basicConstraints = critical, CA:FALSE
+keyUsage = critical, keyEncipherment, dataEncipherment
+extendedKeyUsage = emailProtection
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+EXTEND
+
+  openssl x509 -req -in "\$CSR" \\
+    -CA "\$STEPPATH/certs/intermediate_ca.crt" \\
+    -CAkey "\$INT_KEY_DEC" \\
+    -CAcreateserial \\
     -out "\$CRT" \\
     -days 3650 \\
-    -subj "/CN=${PROVISIONER}-decrypter/O=Mozilla RelOps Bootstrap CA" \\
-    -addext "basicConstraints=critical,CA:FALSE" \\
-    -addext "keyUsage=critical,keyEncipherment,dataEncipherment" \\
-    -addext "extendedKeyUsage=emailProtection" 2>/dev/null
+    -sha256 \\
+    -extfile "\$EXT" 2>/dev/null
+
+  chmod 0644 "\$CRT"
   chmod 0600 "\$KEY"
+
+  echo "  ✅ decrypter cert signed by step-ca intermediate" >&2
 fi
 
 ls -la "\$CRT" "\$KEY"
