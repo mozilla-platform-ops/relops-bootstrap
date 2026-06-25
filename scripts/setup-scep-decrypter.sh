@@ -59,9 +59,13 @@ if [ ! -f "\$CRT" ] || [ ! -f "\$KEY" ]; then
   trap "shred -u \$INT_KEY_DEC \$CSR \$EXT 2>/dev/null || rm -f \$INT_KEY_DEC \$CSR \$EXT" EXIT
 
   openssl genrsa -out "\$KEY" 2048 2>/dev/null
+
+  # RFC 8894 §2.2.1: the SCEP CA signing cert and RA encryption cert SHALL share
+  # an identifying value, typically the subject DN. We use the intermediate's
+  # subject DN verbatim so Apple's mdmclient recognizes them as a pair.
   openssl req -new -key "\$KEY" \\
     -out "\$CSR" \\
-    -subj "/CN=${PROVISIONER}-decrypter/O=Mozilla RelOps Bootstrap CA" 2>/dev/null
+    -subj "/O=Mozilla RelOps Bootstrap CA/CN=Mozilla RelOps Bootstrap CA Intermediate CA" 2>/dev/null
 
   cat > "\$EXT" <<EXTEND
 basicConstraints = critical, CA:FALSE
