@@ -116,10 +116,11 @@ def step_escrow_bst(ctx: HostContext) -> None:
 
 def step_deliver_vault(ctx: HostContext) -> None:
     """
-    Path A: fetch role's vault.yaml from 1Password, scp-style drop to /var/root/vault.yaml.
+    Today: fetch the role's vault.yaml from 1Password, SCP-drop to /var/root/vault.yaml.
 
-    Path C (future): no-op here; the bootstrap script on the host fetches from the broker
-    using its SCEP cert. Selectable via a flag on the CLI.
+    Future: when SCEP + broker infra is live, this becomes a no-op — the bootstrap
+    script on the host fetches vault.yaml from the broker using its SCEP cert.
+    Selectable via a flag on the CLI.
     """
     settings = get_settings()
     reference = f"op://{settings.onepassword_vault}/vault-{ctx.role}/notesPlain"

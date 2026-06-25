@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # SimpleMDM
     simplemdm_api_key: str = Field(default="")
 
-    # 1Password (Path A)
+    # 1Password (where per-role vault.yaml content lives)
     # The CLI shells out to `op` rather than using the SDK; the operator's
     # local `op` config provides auth (Service Account token or operator SSO).
     onepassword_vault: str = Field(default="RelOps Vault")

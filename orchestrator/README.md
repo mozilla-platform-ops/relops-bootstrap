@@ -54,12 +54,17 @@ All settings come from environment variables prefixed `REPROVISION_`. Drop a
 The `op` CLI must be authenticated on the operator's laptop (either `op signin`
 or an `OP_SERVICE_ACCOUNT_TOKEN` env var for a service account).
 
-## Path A vs Path C
+## Secret delivery: today and future
 
-This CLI implements **Path A** today — operator-side 1Password fetch + SSH drop.
-When Path C (broker + SCEP) is live, the `deliver_vault` step becomes a no-op
-because the bootstrap script on the host fetches vault.yaml from the broker
-using its SCEP cert. A future flag (`--path c`) will skip the 1Password step.
+Today, `deliver_vault` reads the role's vault.yaml from 1Password via the
+`op` CLI on the operator's laptop and SSH-drops it to `/var/root/vault.yaml`
+on the host. The bootstrap script there is already polling for that path,
+so no host-side changes are needed.
+
+Once the SCEP + broker infrastructure (the rest of this repo) is live,
+`deliver_vault` becomes a no-op: the bootstrap script on the host fetches
+vault.yaml from the broker directly using its SCEP-issued client cert.
+A `--no-vault-drop` flag will skip the 1Password step at that point.
 
 ## Known limitations
 

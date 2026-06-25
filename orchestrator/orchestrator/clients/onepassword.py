@@ -2,7 +2,8 @@
 1Password helper. Shells out to `op` rather than depending on a Python SDK, so the
 operator's existing `op` config (Service Account token or SSO) is the source of truth.
 
-Path A only — Path C reads from Secret Manager via the broker, this helper isn't called.
+Used by the workflow's `deliver_vault` step today. When the SCEP + broker
+infrastructure is live and `deliver_vault` becomes a no-op, this helper is unused.
 """
 
 from __future__ import annotations
