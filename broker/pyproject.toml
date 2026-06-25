@@ -10,6 +10,9 @@ dependencies = [
     "pydantic-settings>=2.4",
     "google-cloud-secret-manager>=2.20",
     "structlog>=24",
+    # X-Client-Cert-Leaf parsing — GCP LB's SPIFFE extractor drops URI SANs
+    # with URL-encoded characters, so the broker parses the leaf cert itself.
+    "cryptography>=43",
 ]
 
 [project.optional-dependencies]

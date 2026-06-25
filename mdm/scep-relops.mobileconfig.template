@@ -92,26 +92,26 @@
                 <key>Key Usage</key>
                 <integer>5</integer>
                 <!--
-                    KeyIsExtractable=true allows the LaunchDaemon at
-                    /Library/LaunchDaemons/com.mozilla.relops.bootstrap.plist
-                    to export the SCEP-issued identity as PKCS12 from the
-                    System keychain. The bootstrap workflow then splits the
-                    PKCS12 into PEM cert + PEM key at /var/root/.relops-bootstrap/,
-                    uses them for mTLS to forge.relops.mozilla.com, and writes
-                    the resulting vault.yaml to /var/root/vault.yaml.
-                    Required because URLSession on macOS can't reliably
-                    present keychain-managed identities to GCP HTTPS LB.
+                    KeyIsExtractable=false: the private key never leaves the
+                    keychain. Our bootstrap script uses curl with
+                    CURL_SSL_BACKEND=securetransport, which routes TLS signing
+                    through the OS network stack — those processes (configd,
+                    nehelper, NEIKEv2Provider) have keychain sign ACL via
+                    the "Allow All" ACL entry, so no extraction is needed.
 
-                    AllowAllAppsAccess=true wildcards the keychain ACL for
-                    encrypt operations, but exporting the key (export_clear
-                    auth) is gated separately. Whether the LaunchDaemon can
-                    `security export` without a UI prompt is a known-unknown
-                    that gets validated on first deploy — see B-1 spec.
+                    AllowAllAppsAccess=false: only adds encrypt-with-key access
+                    for arbitrary apps; doesn't enable sign or export from
+                    non-Apple processes. We don't need it.
+
+                    (Earlier iterations set both to true while investigating a
+                    PKCS12 extraction path; it turned out unnecessary because
+                    SecureTransport curl uses the keychain identity directly.
+                    See git history for the investigation trail.)
                 -->
                 <key>KeyIsExtractable</key>
-                <true/>
+                <false/>
                 <key>AllowAllAppsAccess</key>
-                <true/>
+                <false/>
                 <key>Retries</key>
                 <integer>3</integer>
                 <key>RetryDelay</key>

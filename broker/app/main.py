@@ -53,7 +53,7 @@ async def get_secret(
         default="", alias="X-Client-Cert-Chain-Verified"
     ),
     x_client_cert_error: str = Header(default="", alias="X-Client-Cert-Error"),
-    x_client_cert_spiffe: str = Header(default="", alias="X-Client-Cert-SPIFFE"),
+    x_client_cert_leaf: str = Header(default="", alias="X-Client-Cert-Leaf"),
     x_client_cert_serial_number: str = Header(
         default="", alias="X-Client-Cert-Serial-Number"
     ),
@@ -66,7 +66,7 @@ async def get_secret(
             cert_present=x_client_cert_present,
             chain_verified=x_client_cert_chain_verified,
             cert_error=x_client_cert_error,
-            spiffe=x_client_cert_spiffe,
+            cert_leaf=x_client_cert_leaf,
             serial_number=x_client_cert_serial_number,
         )
     except AuthError as e:

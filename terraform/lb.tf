@@ -90,6 +90,11 @@ resource "google_compute_backend_service" "broker" {
     "X-Client-Cert-Subject-DN: {client_cert_subject_dn}",
     "X-Client-Cert-Serial-Number: {client_cert_serial_number}",
     "X-Client-Cert-SHA256: {client_cert_sha256_fingerprint}",
+    # Leaf cert PEM (base64-encoded). Broker parses this directly so it can
+    # extract SPIFFE URIs the LB's own parser silently drops (e.g. URI SANs
+    # with URL-encoded chars from `%ComputerName%`-expanded subjects like
+    # "Mac mini" → "Mac%20mini" in the cert SAN URI).
+    "X-Client-Cert-Leaf: {client_cert_leaf}",
   ]
 
   log_config {
