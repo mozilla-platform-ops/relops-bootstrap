@@ -89,9 +89,13 @@ fi
 ls -la "\$CRT" "\$KEY"
 
 echo "=== update ${PROVISIONER} provisioner ===" >&2
+# --include-root forces step-ca to return the root cert in the GetCACert
+# response. Some SCEP clients (Apple's mdmclient included) require the full
+# chain to validate before submitting PKIOperation.
 step ca provisioner update "${PROVISIONER}" \\
   --scep-decrypter-certificate-file="\$STEPPATH/\$CRT" \\
   --scep-decrypter-key-file="\$STEPPATH/\$KEY" \\
+  --include-root \\
   --admin-provisioner=admin@mozilla.com \\
   --admin-password-file="\$STEPPATH/secrets/provisioner-password" \\
   --ca-url=https://step-ca.relops.mozilla:443 \\
