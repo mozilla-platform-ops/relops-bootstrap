@@ -112,3 +112,20 @@ resource "google_secret_manager_secret" "step_ca_root_cert" {
 
   depends_on = [google_project_service.apis]
 }
+
+# SCEP shared challenge — the value the SimpleMDM SCEP Custom Profile sends to authenticate
+# enrollment requests. Stored here so the orchestrator / operators can retrieve it when
+# configuring the MDM profile without keeping it on disk in 1Password too.
+resource "google_secret_manager_secret" "step_ca_scep_challenge" {
+  secret_id = "step-ca-scep-challenge"
+
+  replication {
+    auto {}
+  }
+
+  labels = {
+    purpose = "step-ca-scep-challenge"
+  }
+
+  depends_on = [google_project_service.apis]
+}

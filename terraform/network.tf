@@ -37,6 +37,24 @@ resource "google_compute_firewall" "step_ca_inbound" {
   target_tags   = ["step-ca"]
 }
 
+# Allow SSH from Identity-Aware Proxy (35.235.240.0/20). Operators authenticate via
+# GCP IAM/SSO; no port 22 exposed to the open internet. Used by gcloud compute ssh
+# with --tunnel-through-iap.
+resource "google_compute_firewall" "step_ca_ssh_iap" {
+  name    = "allow-step-ca-ssh-iap"
+  network = google_compute_network.bootstrap.name
+
+  description = "SSH to step-ca via IAP"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  source_ranges = ["35.235.240.0/20"]
+  target_tags   = ["step-ca"]
+}
+
 # Reserve a static external IP so the SCEP server URL doesn't rotate on VM restart.
 # This goes into the SimpleMDM SCEP Custom Profile URL field — needs to be stable.
 resource "google_compute_address" "step_ca" {

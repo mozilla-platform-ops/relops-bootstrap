@@ -65,11 +65,13 @@ resource "google_compute_instance" "step_ca" {
     apt-get install -y curl ca-certificates
 
     # Install step CLI + step-ca server from the official .deb packages.
-    STEP_VERSION="0.27.4"
-    STEP_CA_VERSION="0.27.4"
+    # Pin to specific versions (auto-bumped manually after testing). The version-less
+    # download URL exists too but pinning protects against silent server-side changes.
+    STEP_VERSION="0.30.6"
+    STEP_CA_VERSION="0.30.2"
     cd /tmp
-    curl -fsSLO "https://github.com/smallstep/cli/releases/download/v$${STEP_VERSION}/step-cli_$${STEP_VERSION}_amd64.deb"
-    curl -fsSLO "https://github.com/smallstep/certificates/releases/download/v$${STEP_CA_VERSION}/step-ca_$${STEP_CA_VERSION}_amd64.deb"
+    curl -fsSLO "https://github.com/smallstep/cli/releases/download/v$${STEP_VERSION}/step-cli_$${STEP_VERSION}-1_amd64.deb"
+    curl -fsSLO "https://github.com/smallstep/certificates/releases/download/v$${STEP_CA_VERSION}/step-ca_$${STEP_CA_VERSION}-1_amd64.deb"
     dpkg -i step-cli_*.deb step-ca_*.deb
     rm -f /tmp/step-*.deb
 
