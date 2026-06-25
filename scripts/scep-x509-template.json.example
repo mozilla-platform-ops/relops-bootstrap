@@ -1,0 +1,11 @@
+{
+  "subject": {{ toJson .Subject }},
+  "sans": [
+    {{- range $i, $s := .SANs }}{{- if $i }},{{- end }}
+    {{ toJson $s }}
+    {{- end }},
+    { "type": "uri", "value": "spiffe://relops.mozilla/host/{{ .Subject.CommonName }}/role/gecko_t_osx_1500_m4_no_sip" }
+  ],
+  "keyUsage": ["digitalSignature","keyEncipherment"],
+  "extKeyUsage": ["clientAuth"]
+}

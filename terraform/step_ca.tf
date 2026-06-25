@@ -1,31 +1,65 @@
 # step-ca GCE VM.
 #
 # Why GCE and not Cloud Run: step-ca needs persistent state (the CA database, intermediate
-# private key, audit logs). Cloud Run's filesystem is ephemeral and a managed disk on GCE is
-# a cleaner story than mounting a network filesystem into Cloud Run.
+# private key, audit logs). Cloud Run's filesystem is ephemeral and a managed disk on GCE
+# is the right home for CA state.
 #
-# IMPORTANT — manual steps that intentionally stay out of Terraform:
+# IMPORTANT — manual one-time steps after first apply (intentionally not in TF):
 #
-#   1. Initial CA bootstrap (generates root+intermediate keys, sets the CA password).
-#      Done once, on the VM, by an operator after first terraform apply:
-#         step ca init --name "Mozilla RelOps Bootstrap CA" --dns step-ca.relops.mozilla \
-#                      --address ":443" --provisioner admin@mozilla.com
-#      Then copy /home/step/.step/certs/root_ca.crt off the VM and load it as:
-#         gcloud secrets versions add step-ca-root-cert --data-file=root_ca.crt
+#   1. CA bootstrap. SSH in (via IAP), run:
+#        sudo -u step bash
+#        export STEPPATH=/home/step/.step
+#        mkdir -p $STEPPATH/secrets && chmod 700 $STEPPATH/secrets
+#        openssl rand -base64 32 | tr -d '\n' > $STEPPATH/secrets/password
+#        openssl rand -base64 32 | tr -d '\n' > $STEPPATH/secrets/provisioner-password
+#        chmod 600 $STEPPATH/secrets/*
+#        step ca init --name "Mozilla RelOps Bootstrap CA" --dns step-ca.relops.mozilla \
+#                     --dns <static-ip> --address ":443" --provisioner admin@mozilla.com \
+#                     --password-file $STEPPATH/secrets/password \
+#                     --provisioner-password-file $STEPPATH/secrets/provisioner-password \
+#                     --deployment-type standalone
+#        exit  # back to admin
+#        sudo systemctl enable --now step-ca
+#      Then push the root cert to Secret Manager:
+#        sudo cat /home/step/.step/certs/root_ca.crt | \
+#          gcloud secrets versions add step-ca-root-cert --data-file=-
 #
-#   2. Add a SCEP provisioner:
-#         step ca provisioner add scep-relops --type SCEP \
-#                      --challenge "<random-challenge>" --force-cn
-#      The challenge value is what the SimpleMDM SCEP Custom Profile will use as
-#      the shared secret. Store it in 1P + add to a Secret Manager secret so the
-#      MDM Custom Profile can read it via the orchestrator (not committed to TF).
-#
-# Bootstrap is one-time; subsequent renewals are automatic via SCEP.
+#   2. Add SCEP provisioner (one per puppet role; each provisioner has its own
+#      challenge + x509 template that injects the role-specific SPIFFE SAN):
+#        CHALLENGE=$(openssl rand -base64 32 | tr -d '\n+/=')
+#        sudo -u step step ca provisioner add scep-no-sip --type=SCEP --force-cn \
+#          --challenge="$CHALLENGE" --x509-template=/tmp/scep-x509-template.json \
+#          --admin-provisioner=admin@mozilla.com \
+#          --admin-password-file=/home/step/.step/secrets/provisioner-password \
+#          --ca-url=https://step-ca.relops.mozilla:443 \
+#          --root=/home/step/.step/certs/root_ca.crt
+#        sudo systemctl restart step-ca
+#        printf "%s" "$CHALLENGE" | \
+#          gcloud secrets versions add step-ca-scep-challenge --data-file=-
 
-# Latest Debian 12 image — auto-resolved by family name, no manual version pinning.
+# Latest Debian 12 image — auto-resolved by family name.
 data "google_compute_image" "debian" {
   family  = "debian-12"
   project = "debian-cloud"
+}
+
+# Persistent disk for CA state (root + intermediate keys, ca.json, db, secrets).
+# Lives independently of the VM so a VM recreate or boot-disk replacement doesn't
+# wipe the CA. prevent_destroy guards against accidental terraform destroy of the
+# whole project taking the CA with it.
+resource "google_compute_disk" "step_ca_state" {
+  name = "step-ca-state"
+  type = "pd-balanced"
+  zone = var.zone
+  size = 10
+
+  labels = {
+    purpose = "step-ca-state"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "google_compute_instance" "step_ca" {
@@ -40,6 +74,14 @@ resource "google_compute_instance" "step_ca" {
       size  = 20
       type  = "pd-balanced"
     }
+  }
+
+  # State disk. device_name surfaces as /dev/disk/by-id/google-<device_name> inside
+  # the VM; startup script picks it up by that path.
+  attached_disk {
+    source      = google_compute_disk.step_ca_state.id
+    device_name = "step-ca-state"
+    mode        = "READ_WRITE"
   }
 
   network_interface {
@@ -61,12 +103,11 @@ resource "google_compute_instance" "step_ca" {
   metadata_startup_script = <<-EOT
     #!/bin/bash
     set -euo pipefail
+
     apt-get update
     apt-get install -y curl ca-certificates
 
-    # Install step CLI + step-ca server from the official .deb packages.
-    # Pin to specific versions (auto-bumped manually after testing). The version-less
-    # download URL exists too but pinning protects against silent server-side changes.
+    # Install step CLI + step-ca server.
     STEP_VERSION="0.30.6"
     STEP_CA_VERSION="0.30.2"
     cd /tmp
@@ -75,16 +116,53 @@ resource "google_compute_instance" "step_ca" {
     dpkg -i step-cli_*.deb step-ca_*.deb
     rm -f /tmp/step-*.deb
 
-    # Create the step user. step-ca runs as this user.
+    # /etc/hosts entry so `step ca provisioner add` (which calls step-ca's admin
+    # API over TLS) validates against the cert's SAN. The cert has step-ca.relops.mozilla
+    # in its DNS SAN; localhost isn't there. Map it to 127.0.0.1 for the loopback case.
+    grep -q 'step-ca.relops.mozilla' /etc/hosts || \
+      echo '127.0.0.1 step-ca.relops.mozilla' >> /etc/hosts
+
+    # step user (idempotent).
     if ! id step >/dev/null 2>&1; then
       useradd --system --create-home --shell /bin/bash step
     fi
 
-    # systemd unit for step-ca — leaves the bootstrap (`step ca init`) to the operator.
+    # Persistent disk for CA state. Format on first attach (idempotent); mount at
+    # /home/step so step user's home + .step dir live on the persistent disk.
+    DISK_DEV=/dev/disk/by-id/google-step-ca-state
+    MOUNT_POINT=/home/step
+
+    # Wait briefly for the disk node to appear post-boot.
+    for _ in $(seq 1 30); do
+      [ -e "$DISK_DEV" ] && break
+      sleep 2
+    done
+
+    if [ -e "$DISK_DEV" ]; then
+      # Format with ext4 + label on first attach (mkfs is a no-op if filesystem already there).
+      if ! blkid "$DISK_DEV" >/dev/null 2>&1; then
+        mkfs.ext4 -F -L step-ca-state "$DISK_DEV"
+      fi
+
+      # fstab entry (idempotent).
+      if ! grep -q 'step-ca-state' /etc/fstab; then
+        echo 'LABEL=step-ca-state /home/step ext4 defaults,nofail 0 2' >> /etc/fstab
+      fi
+
+      # Mount if not already mounted. On first attach the mount point is empty;
+      # subsequent boots find existing CA state on the disk.
+      if ! mountpoint -q "$MOUNT_POINT"; then
+        mkdir -p "$MOUNT_POINT"
+        mount "$MOUNT_POINT"
+        chown step:step "$MOUNT_POINT"
+      fi
+    fi
+
+    # systemd unit for step-ca.
     cat > /etc/systemd/system/step-ca.service <<'UNIT'
     [Unit]
     Description=step-ca
-    After=network-online.target
+    After=network-online.target home-step.mount
     Wants=network-online.target
 
     [Service]
@@ -102,8 +180,7 @@ resource "google_compute_instance" "step_ca" {
     UNIT
 
     systemctl daemon-reload
-    # Intentionally NOT starting yet — operator must run `step ca init` first.
-    # After that, run: systemctl enable --now step-ca
+    # Don't auto-start; operator runs `step ca init` first, then enables the unit.
   EOT
 
   depends_on = [
