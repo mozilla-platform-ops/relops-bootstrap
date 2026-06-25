@@ -56,8 +56,12 @@
             <dict>
                 <key>URL</key>
                 <string>{{STEP_CA_URL}}</string>
+                <!-- Name MUST match the step-ca provisioner path segment in the URL.
+                     Apple sends this value as the SCEP `message` query parameter and
+                     some implementations validate that the returned certs correspond
+                     to that identifier. -->
                 <key>Name</key>
-                <string>scep-relops</string>
+                <string>scep-no-sip</string>
                 <key>Subject</key>
                 <array>
                     <array>
