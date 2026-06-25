@@ -84,7 +84,8 @@ fi
 
 if ! /usr/sbin/sysadminctl -secureTokenStatus admin 2>&1 | grep -q 'ENABLED'; then
   echo "ERROR: admin does not hold a SecureToken after BST attempt + 30 min wait."
-  echo "Action: VNC in as admin and complete a console login, then re-run script."
+  echo "Action: ssh in as admin (or VNC) to trigger an interactive auth, then"
+  echo "re-run this script. SSH login alone is enough to seed BST custody."
   exit 1
 fi
 echo "admin SecureToken ENABLED — BST custody good."
