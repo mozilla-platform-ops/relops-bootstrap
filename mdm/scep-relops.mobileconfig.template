@@ -4,6 +4,39 @@
 <dict>
     <key>PayloadContent</key>
     <array>
+
+        <!--
+            Payload 1: step-ca root CA cert. Apple processes profile payloads in
+            array order; installing the root first means the SCEP payload below
+            can validate step-ca's TLS cert during enrollment without hitting
+            NSURLError -1202 (server cert untrusted).
+        -->
+        <dict>
+            <key>PayloadDescription</key>
+            <string>Mozilla RelOps Bootstrap CA root certificate</string>
+            <key>PayloadDisplayName</key>
+            <string>RelOps Root CA</string>
+            <key>PayloadIdentifier</key>
+            <string>com.mozilla.relops.rootca.payload</string>
+            <key>PayloadOrganization</key>
+            <string>Mozilla</string>
+            <key>PayloadType</key>
+            <string>com.apple.security.pkcs1</string>
+            <key>PayloadUUID</key>
+            <string>{{ROOTCA_PAYLOAD_UUID}}</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>AllowAllAppsAccess</key>
+            <false/>
+            <key>KeyIsExtractable</key>
+            <false/>
+            <key>PayloadCertificateFileName</key>
+            <string>step-ca-root.cer</string>
+            <key>PayloadContent</key>
+            <data>{{ROOTCA_DER_BASE64}}</data>
+        </dict>
+
+        <!-- Payload 2: SCEP enrollment now that the root CA is trusted. -->
         <dict>
             <key>PayloadDescription</key>
             <string>SCEP enrollment payload for vault-broker client cert</string>
@@ -16,7 +49,7 @@
             <key>PayloadType</key>
             <string>com.apple.security.scep</string>
             <key>PayloadUUID</key>
-            <string>{{PAYLOAD_UUID}}</string>
+            <string>{{SCEP_PAYLOAD_UUID}}</string>
             <key>PayloadVersion</key>
             <integer>1</integer>
             <key>PayloadContent</key>
@@ -62,9 +95,10 @@
                 <integer>10</integer>
             </dict>
         </dict>
+
     </array>
     <key>PayloadDescription</key>
-    <string>Issues an SCEP-based client cert from the Mozilla RelOps Bootstrap CA. The cert authenticates the host to the vault-broker service for fetching role secrets.</string>
+    <string>Installs the Mozilla RelOps Bootstrap CA root and enrolls an SCEP client cert from it. The cert authenticates the host to the vault-broker service for fetching role secrets.</string>
     <key>PayloadDisplayName</key>
     <string>Mozilla RelOps SCEP Enrollment</string>
     <key>PayloadIdentifier</key>

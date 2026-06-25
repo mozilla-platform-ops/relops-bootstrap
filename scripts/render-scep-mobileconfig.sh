@@ -45,18 +45,38 @@ if ! command -v uuidgen >/dev/null; then
   echo "ERROR: uuidgen not on PATH" >&2; exit 4
 fi
 
-PAYLOAD_UUID=$(uuidgen)
+SCEP_PAYLOAD_UUID=$(uuidgen)
+ROOTCA_PAYLOAD_UUID=$(uuidgen)
 PROFILE_UUID=$(uuidgen)
 CHALLENGE=$(cat "$CHALLENGE_FILE")
 
-# Substitute. Use a sentinel char unlikely to appear in any value (and not '/'
-# because URL contains it).
+# Pull the step-ca root cert from Secret Manager, convert PEM -> DER -> base64
+# (single-line). The mobileconfig embeds this as the PKCS#1 cert payload so
+# Apple installs it in the System Trust Store BEFORE the SCEP payload runs.
+ROOTCA_PEM_FILE=$(mktemp)
+ROOTCA_DER_FILE=$(mktemp)
+trap 'rm -f "$CHALLENGE_FILE" "$ROOTCA_PEM_FILE" "$ROOTCA_DER_FILE"' EXIT
+
+if ! gcloud secrets versions access latest \
+       --secret=step-ca-root-cert \
+       --project="$GCP_PROJECT" > "$ROOTCA_PEM_FILE" 2>/dev/null; then
+  echo "ERROR: couldn't read step-ca-root-cert from project $GCP_PROJECT" >&2
+  exit 5
+fi
+
+openssl x509 -in "$ROOTCA_PEM_FILE" -outform DER -out "$ROOTCA_DER_FILE"
+ROOTCA_DER_BASE64=$(base64 < "$ROOTCA_DER_FILE" | tr -d '\n')
+
+# Substitute. Each value goes through a literal sed s|...|...| — values that
+# contain '/' (the URL) are fine because we use '|' as the delimiter.
 render() {
   sed \
     -e "s|{{STEP_CA_URL}}|${STEP_CA_URL}|" \
     -e "s|{{SCEP_CHALLENGE}}|${CHALLENGE}|" \
     -e "s|{{COMMON_NAME}}|%ComputerName%|" \
-    -e "s|{{PAYLOAD_UUID}}|${PAYLOAD_UUID}|" \
+    -e "s|{{SCEP_PAYLOAD_UUID}}|${SCEP_PAYLOAD_UUID}|" \
+    -e "s|{{ROOTCA_PAYLOAD_UUID}}|${ROOTCA_PAYLOAD_UUID}|" \
+    -e "s|{{ROOTCA_DER_BASE64}}|${ROOTCA_DER_BASE64}|" \
     -e "s|{{PROFILE_UUID}}|${PROFILE_UUID}|" \
     "$TEMPLATE"
 }
@@ -67,10 +87,12 @@ else
   render > "$OUT_PATH"
   chmod 0600 "$OUT_PATH"
   echo "rendered to $OUT_PATH" >&2
-  echo "  STEP_CA_URL    = $STEP_CA_URL" >&2
-  echo "  PAYLOAD_UUID   = $PAYLOAD_UUID" >&2
-  echo "  PROFILE_UUID   = $PROFILE_UUID" >&2
-  echo "  challenge      = (from step-ca-scep-challenge in $GCP_PROJECT)" >&2
+  echo "  STEP_CA_URL          = $STEP_CA_URL" >&2
+  echo "  SCEP_PAYLOAD_UUID    = $SCEP_PAYLOAD_UUID" >&2
+  echo "  ROOTCA_PAYLOAD_UUID  = $ROOTCA_PAYLOAD_UUID" >&2
+  echo "  PROFILE_UUID         = $PROFILE_UUID" >&2
+  echo "  challenge            = (from step-ca-scep-challenge in $GCP_PROJECT)" >&2
+  echo "  root CA              = (from step-ca-root-cert in $GCP_PROJECT, embedded as PKCS#1)" >&2
   echo >&2
   echo "Upload to SimpleMDM as a Custom Configuration Profile, then 'rm $OUT_PATH'." >&2
 fi
