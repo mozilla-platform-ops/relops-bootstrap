@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and fill in real values.
+# Do NOT check terraform.tfvars in — it has env-specific config.
+
+project_id = "relops-bootstrap"  # the GCP project ID (create separately before terraform apply)
+region     = "us-central1"
+zone       = "us-central1-a"
+
+# MDC1 worker IP ranges — narrow this down to the actual subnets that house m4 workers.
+# Hosts outside these CIDRs cannot reach the broker. This is defense-in-depth on top of
+# the per-host mTLS cert auth the broker itself enforces.
+trusted_source_cidrs = [
+  # "10.49.0.0/16",
+]
