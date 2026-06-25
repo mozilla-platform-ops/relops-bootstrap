@@ -1,13 +1,28 @@
 # relops-bootstrap
 
-Path C (the cutting-edge version) of the RelOps EACS re-provisioning workflow.
+Zero-touch provisioning infrastructure for Mozilla RelOps CI workers (macOS,
+eventually all hardware).
 
-GCP-native, workload-identity-style secret delivery to Mozilla CI workers (M4 Mac Minis, eventually the whole macOS fleet). Replaces the manual "open 1Password, copy vault.yaml, SSH paste" step in the EACS workflow with a per-host, audit-logged, short-lived-credential model.
+This is the "Path C" architecture: GCP-native, workload-identity-style secret
+delivery via SCEP-issued per-host client certs. It replaces the manual
+"open 1Password, copy vault.yaml, SSH paste" handoff that the older Path A
+(operator-laptop + 1Password CLI) uses today.
+
+**It's not just for EACS re-provisioning** — the same workflow applies to:
+
+- First-time provisioning of brand-new hardware coming out of DEP enrollment
+- Re-provisioning an existing host via EACS (Erase All Content and Settings)
+- Re-keying a host whose cert was compromised or whose role changed
+- Routine cert rotation (SCEP handles renewal natively, no operator action)
+
+The unifying primitive is "a freshly-DEP'd host that holds an SCEP-issued
+client cert can fetch its role's secrets from a brokered Secret Manager."
+Every operator-driven workflow above collapses to that.
 
 ## Architecture
 
 ```
-host (m4 Mac Mini, fresh out of EACS+DEP)
+host (m4 Mac Mini, fresh out of DEP — first boot OR post-EACS)
    │
    │ 1. Setup Assistant runs in Auto Advance, creates admin user with SecureToken
    │ 2. orchestrator (on operator laptop) ssh's in, runs:

@@ -27,3 +27,13 @@ output "secret_ids" {
   description = "Secret Manager secret IDs for each puppet role's vault.yaml"
   value       = [for s in google_secret_manager_secret.vault : s.secret_id]
 }
+
+output "broker_lb_ip" {
+  description = "Static external IP for the broker HTTPS LB. Point broker_hostname DNS A-record here."
+  value       = google_compute_global_address.broker.address
+}
+
+output "broker_lb_hostname" {
+  description = "Hostname workers will use to reach the broker once DNS + cert are in place."
+  value       = var.broker_hostname
+}

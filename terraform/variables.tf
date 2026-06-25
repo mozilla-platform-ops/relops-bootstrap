@@ -60,3 +60,9 @@ variable "trusted_source_cidrs" {
   default     = []
   # populate via terraform.tfvars, e.g. ["10.49.0.0/16"]
 }
+
+variable "broker_hostname" {
+  description = "FQDN for the vault-broker HTTPS endpoint. Empty disables the LB cert + forwarding rule (the rest of the LB is still built so we can attach the cert when ready)."
+  type        = string
+  default     = ""
+}
