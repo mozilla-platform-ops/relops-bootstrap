@@ -49,6 +49,7 @@ in Cloud Audit Logs.
        │                      logs to Cloud Audit                                     │
        │                                                                              │
        │   🛡️ HTTPS LB + Cloud Armor (source-CIDR allowlist) in front of broker     │
+       │      → live at https://forge.relops.mozilla.com (Google-managed cert)        │
        │                                                                              │
        └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -128,15 +129,11 @@ terraform apply
 
 ### 3️⃣  Initialize step-ca
 
-```bash
-gcloud compute ssh step-ca --zone=us-central1-a --tunnel-through-iap \
-  --command='/tmp/bootstrap-step-ca.sh' > root_ca.crt
-gcloud secrets versions add step-ca-root-cert --data-file=root_ca.crt
-rm root_ca.crt
-```
-
-Then add a SCEP provisioner with a fresh challenge and push the challenge
-to `step-ca-scep-challenge`.
+See [`scripts/README.md`](scripts/README.md) — `scripts/bootstrap-step-ca.sh`
+is the idempotent operator-side bootstrap. It generates random CA passwords,
+initializes the CA on the persistent disk, adds the SCEP provisioner with a
+role-aware x509 template, and outputs the root cert PEM for capture +
+Secret Manager upload.
 
 ### 4️⃣  Build + deploy the broker
 
@@ -182,13 +179,24 @@ device group whose hosts you want to provision via the broker.
 
 ---
 
+## 🌐 Live endpoints
+
+| URL | What it is |
+|---|---|
+| `https://forge.relops.mozilla.com` | vault-broker, HTTPS LB-fronted, Google-managed cert, Cloud Armor source-CIDR allowlist |
+| `https://step-ca.relops.mozilla` *(intra-VM only)* / `https://34.61.3.27` *(MDC1 only)* | step-ca SCEP + admin API, MDC1 source-CIDR allowlist |
+
+Authorized callers (MDC1 NAT egress `63.245.209.101/32`) get `HTTP 200` on `/healthz`
+and `HTTP 401` on `/secret/{role}` without a valid JWT — all the way through the
+LB to the broker. Off-network traffic gets `403` from Cloud Armor.
+
 ## 🛠️ Open work
 
-- 🌐 **DNS / hostname** for the LB cert — needed before workers can curl the broker
-- 🧮 **MDC1 source-CIDR allowlist** populated in `terraform.tfvars`
-- 🔁 **Cloud Build trigger** wired up (the `cloudbuild.yaml` exists but needs `gcloud builds triggers create github …` to fire on push)
-- 🧪 **End-to-end test on macmini-m4-81** once the above land
+- 🔁 **Cloud Build trigger** — `cloudbuild.yaml` exists, OAuth-flow UI got stuck during initial wire-up; switch to a PAT-based webhook trigger or retry the GitHub App connection
+- 🧪 **End-to-end SCEP enrollment test on macmini-m4-81** — SCEP profile uploaded to SimpleMDM, currently in `NotNow` retry loop
+- 🪪 **Populate the per-role vault.yaml secrets** from 1Password into Secret Manager
 - 🔒 **mTLS at the LB layer** (defense-in-depth on top of the broker's JWT check) — Server TLS Policy + Trust Config
+- 🔭 **Widen `trusted_source_cidrs`** beyond `63.245.209.101/32` if other Mozilla NAT IPs need access
 
 ---
 
