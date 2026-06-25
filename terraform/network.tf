@@ -26,15 +26,21 @@ resource "google_compute_firewall" "step_ca_inbound" {
   name    = "allow-step-ca-inbound"
   network = google_compute_network.bootstrap.name
 
-  description = "HTTPS to step-ca from MDC1 worker network only"
+  description = "HTTPS to step-ca from MDC1 worker network + GCP LB"
 
   allow {
     protocol = "tcp"
     ports    = ["443", "8443"] # 8443 is the step-ca default; 443 if we front it
   }
 
-  source_ranges = length(var.trusted_source_cidrs) > 0 ? var.trusted_source_cidrs : ["127.0.0.1/32"]
-  target_tags   = ["step-ca"]
+  # 35.191.0.0/16 + 130.211.0.0/22 are Google's LB / health-check source ranges.
+  # Required so the global HTTPS LB can reach step-ca as a backend (for the
+  # /scep/* path-routing) and run health checks against it.
+  source_ranges = concat(
+    length(var.trusted_source_cidrs) > 0 ? var.trusted_source_cidrs : ["127.0.0.1/32"],
+    ["35.191.0.0/16", "130.211.0.0/22"],
+  )
+  target_tags = ["step-ca"]
 }
 
 # Allow SSH from Identity-Aware Proxy (35.235.240.0/20). Operators authenticate via

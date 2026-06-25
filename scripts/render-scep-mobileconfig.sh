@@ -17,9 +17,10 @@
 set -euo pipefail
 
 GCP_PROJECT="${GCP_PROJECT:-relops-bootstrap}"
-# Until forge.relops.mozilla.com DNS resolves + we have a cert, use the step-ca
-# external IP directly. The CA cert has 34.61.3.27 in its SAN so TLS validates.
-STEP_CA_URL="${STEP_CA_URL:-https://34.61.3.27/scep/scep-no-sip}"
+# Default SCEP URL goes through the forge.relops.mozilla.com LB (publicly-trusted
+# Google-managed cert). The LB path-routes /scep/* to step-ca via an Internet NEG.
+# Override with STEP_CA_URL=https://34.61.3.27/scep/scep-no-sip to bypass the LB.
+STEP_CA_URL="${STEP_CA_URL:-https://forge.relops.mozilla.com/scep/scep-no-sip}"
 
 OUT_PATH="${1:-/tmp/scep-relops.mobileconfig}"
 TEMPLATE="$(dirname "$0")/../mdm/scep-relops.mobileconfig.template"

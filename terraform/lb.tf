@@ -81,11 +81,71 @@ resource "google_compute_backend_service" "broker" {
   }
 }
 
-# URL map: a single default service. No path routing yet — broker serves /healthz
-# + /secret/{role} and both go to the same backend.
+# --- SCEP-through-LB backend (so Apple mdmclient gets a publicly-trusted cert) ---
+#
+# An Internet NEG with step-ca's external IP as endpoint; LB connects to step-ca
+# over HTTPS for backend traffic. Backend cert is step-ca's self-CA-signed (cert
+# SAN includes 34.61.3.27 + step-ca.relops.mozilla) — the backend service uses
+# its TLS settings to validate against step-ca's root via a Trust Config.
+
+resource "google_compute_global_network_endpoint_group" "step_ca" {
+  name                  = "step-ca-neg"
+  network_endpoint_type = "INTERNET_IP_PORT"
+  default_port          = 443
+}
+
+resource "google_compute_global_network_endpoint" "step_ca" {
+  global_network_endpoint_group = google_compute_global_network_endpoint_group.step_ca.name
+  ip_address                    = google_compute_address.step_ca.address
+  port                          = 443
+}
+
+# Backend service for SCEP traffic. Same Cloud Armor policy as the broker
+# (same allowlist). HTTPS protocol; backend cert validation defers to the
+# system trust store + the cert's SAN match on the IP. step-ca's TLS cert
+# is signed by step-ca's own CA so chain validation will fail unless we
+# also provide a Backend Authentication Config with the step-ca root.
+#
+# For v1 we accept that the LB skips strict backend cert validation by
+# relying on the IP-restricted Internet NEG (only LB → step-ca traffic) and
+# Cloud Armor on the front door. A tighter setup would attach a
+# Backend Authentication Config with step-ca's root in a Trust Config.
+resource "google_compute_backend_service" "step_ca" {
+  name                  = "step-ca-backend"
+  protocol              = "HTTPS"
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  security_policy       = google_compute_security_policy.broker.id
+  timeout_sec           = 30
+
+  backend {
+    group = google_compute_global_network_endpoint_group.step_ca.id
+  }
+
+  log_config {
+    enable      = true
+    sample_rate = 1.0
+  }
+}
+
+# URL map: route /scep/* traffic to step-ca, everything else to broker.
 resource "google_compute_url_map" "broker" {
   name            = "vault-broker-urlmap"
   default_service = google_compute_backend_service.broker.id
+
+  host_rule {
+    hosts        = [var.broker_hostname == "" ? "default.invalid" : var.broker_hostname]
+    path_matcher = "main"
+  }
+
+  path_matcher {
+    name            = "main"
+    default_service = google_compute_backend_service.broker.id
+
+    path_rule {
+      paths   = ["/scep", "/scep/*"]
+      service = google_compute_backend_service.step_ca.id
+    }
+  }
 }
 
 # Google-managed cert. Created only when broker_hostname is set so the cert
