@@ -111,6 +111,13 @@ echo "puppet_role = $ROLE"
 # Find the SCEP-issued identity by issuer DN (subject CN varies by ComputerName
 # expansion at enrollment time; issuer DN is stable). Poll up to 5 min for
 # mdmclient to finish applying the SCEP profile.
+#
+# NB: `find-identity` WITHOUT -v on purpose. -v filters by local chain
+# validity; chain validation requires the intermediate to be locally
+# installed as a trust anchor, which mdmclient doesn't do for MDM-pushed
+# CAs. The LB does its own chain validation against the Trust Config
+# (which has both root + intermediate), so local validation doesn't
+# matter for the actual TLS handshake to forge.relops.mozilla.com.
 echo "=== fetch vault.yaml via mTLS from $BROKER_HOST ==="
 IDENTITY_CN=""
 echo "Waiting for SCEP cert (issued by '$ISSUER_CN') in System keychain..."
@@ -127,7 +134,7 @@ while [ "$(/bin/date +%s)" -lt "$deadline" ] && [ -z "$IDENTITY_CN" ]; do
         break
       fi
     fi
-  done < <(/usr/bin/security find-identity -v /Library/Keychains/System.keychain 2>/dev/null)
+  done < <(/usr/bin/security find-identity /Library/Keychains/System.keychain 2>/dev/null)
   [ -z "$IDENTITY_CN" ] && /bin/sleep 5
 done
 

@@ -56,7 +56,7 @@ discover_identity() {
                 return 0
             fi
         fi
-    done < <(security find-identity -v /Library/Keychains/System.keychain 2>/dev/null)
+    done < <(security find-identity /Library/Keychains/System.keychain 2>/dev/null)
     return 1
 }
 
