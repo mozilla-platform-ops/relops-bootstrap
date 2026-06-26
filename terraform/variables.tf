@@ -21,11 +21,21 @@ variable "puppet_roles" {
   description = "Puppet roles for which we provision a vault.yaml Secret Manager container"
   type        = list(string)
   default = [
+    # macOS hardware
     "gecko_t_osx_1500_m4",
     "gecko_t_osx_1500_m4_no_sip",
     "gecko_t_osx_1500_m4_staging",
     "gecko_t_osx_1400_r8",
     "gecko_t_osx_1015",
+
+    # Linux hardware (per modules/roles_profiles/manifests/roles/gecko_t_linux_*.pp in ronin_puppet)
+    "gecko_t_linux_talos",
+    "gecko_t_linux_2204_talos",
+    "gecko_t_linux_2404_talos",
+    "gecko_t_linux_2404_talos_wayland",
+    "gecko_t_linux_netperf",
+    "gecko_t_linux_2404_netperf",
+
     # add other roles here as the migration progresses
   ]
 }
