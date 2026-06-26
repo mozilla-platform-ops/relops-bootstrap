@@ -288,6 +288,82 @@
   ronin_puppet repo, and the run proceeded.
 </p>
 
+<div class="callout aside">
+  <div class="callout-label">For posterity: the actual old runbook</div>
+  <p>
+    The "hand-drop" framing above is a simplification. The real procedure
+    operators followed before this work — and that we're explicitly
+    replacing — was substantially worse than just one SCP. We include the
+    full thing here for completeness, because part of the value of this
+    project is making it visible how far we've moved from this baseline.
+  </p>
+
+  <p style="margin-top: 14px;">
+    <strong>Old step 5 — disable SIP, apply Puppet via Bolt from the operator's laptop:</strong>
+  </p>
+<pre><code><span class="comment"># SIP had to be disabled on the worker first via Recovery Mode</span>
+<span class="comment"># (a separate, manual, hands-on hardware step we won't reproduce here).</span>
+<span class="comment"># Then on the operator's laptop, with a checkout of ronin_puppet:</span>
+
+<span class="keyword">git</span> clone ronin_puppet
+<span class="comment"># add the new host to the role's inventory (e.g. macmini-m4.yaml)</span>
+
+<span class="keyword">export</span> VAULT_ADDR=<span class="string">"https://vault.relops.mozops.net:8200"</span>
+<span class="keyword">vault</span> login -method=oidc role=<span class="string">"hiera_admin"</span>
+<span class="keyword">export</span> VAULT_TOKEN=$(<span class="keyword">cat</span> ~/.vault-token)
+
+<span class="keyword">bolt</span> plan run deploy::apply_no_verify \
+    --targets macmini-m4-129.test.releng.mdc1.mozilla.com \
+    noop=false --native-ssh
+</code></pre>
+  <p style="font-size: 14.5px;">
+    Tester pools sometimes needed a reboot + a second Puppet run before they
+    settled. TCC permissions for <code>generic-worker-simple</code> had to
+    be applied <em>live</em> while the static task user (<code>cltbld</code>)
+    was actively logged in — meaning the operator coordinated a console
+    session at the right moment.
+  </p>
+
+  <p style="margin-top: 14px;">
+    <strong>Old step 6 — activate the worker by tripping a semaphore + reboot:</strong>
+  </p>
+<pre><code><span class="keyword">sudo</span> mkdir /var/tmp/semaphore
+<span class="keyword">sudo</span> touch /var/tmp/semaphore/run-buildbot
+<span class="keyword">reboot</span>
+
+<span class="comment"># Then check Taskcluster's worker-pool UI for the new worker to appear.</span>
+<span class="comment"># If it didn't, tail the worker stderr:</span>
+<span class="keyword">sudo</span> tail -f /opt/worker/logs/stderr.log
+</code></pre>
+
+  <p style="margin-top: 14px;">
+    <strong>Old step 7 — make Puppet auto-run on every reboot:</strong>
+    open 1Password → RELOPS vault, locate the right entry (e.g.
+    <em>Puppet Vault Auth - gecko-t-osx-1500-m4</em>), copy the YAML to
+    <code>/var/root/vault.yaml</code> on the worker. From then on,
+    subsequent reboots picked it up from there.
+  </p>
+
+  <p style="margin-top: 14px; font-size: 14.5px;">
+    Tallying the trust handoffs in this procedure:
+  </p>
+  <ul style="font-size: 14.5px;">
+    <li>The operator authenticated to an <em>external</em> HashiCorp Vault server via OIDC, getting a <code>VAULT_TOKEN</code> that lived on their laptop disk for the duration of the bootstrap.</li>
+    <li>They needed SSH access to the worker (root or sudo).</li>
+    <li>They needed 1Password access to the RELOPS vault (separately from the HashiCorp Vault).</li>
+    <li>SIP being disabled was a precondition — itself a manual hardware-side action (Recovery Mode + commands).</li>
+    <li>If the worker happened to live in a pool that required TCC perms to land while a user was logged in, the operator had to coordinate that live.</li>
+  </ul>
+  <p style="font-size: 14.5px;">
+    That's three different secret stores touched (HashiCorp Vault, 1Password
+    RELOPS vault, the worker's filesystem), four credential handoffs
+    (OIDC → vault token → bolt SSH → file copy), and one mandatory
+    out-of-band SIP-disable step. It worked at the scale Mozilla was
+    operating at, but barely — and not at all if you wanted to provision
+    in batch or have anything resembling a one-click workflow.
+  </p>
+</div>
+
 <p>
   This worked for ~10 hardware refreshes a year. It does not work for
   fleet-scale operations:
