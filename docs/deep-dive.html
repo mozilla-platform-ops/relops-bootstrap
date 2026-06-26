@@ -1,0 +1,1410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>relops-bootstrap — deep dive</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2128;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --mac: #ff8e3c;
+    --linux: #a371f7;
+    --gcp: #56d364;
+    --warn: #e3b341;
+    --danger: #f85149;
+    --shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    line-height: 1.7;
+    font-size: 16px;
+  }
+  .container { max-width: 880px; margin: 0 auto; padding: 64px 32px 96px; }
+  .container.wide { max-width: 1200px; }
+  header { margin-bottom: 48px; }
+  .eyebrow {
+    color: var(--accent);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  h1 {
+    font-size: 42px;
+    font-weight: 700;
+    margin: 0 0 16px;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+  }
+  .lede { color: var(--text); font-size: 19px; line-height: 1.55; margin: 0 0 8px; }
+  .meta-line { color: var(--text-dim); font-size: 14px; margin-top: 16px; }
+  .meta-line a { color: var(--accent); text-decoration: none; }
+  .meta-line a:hover { text-decoration: underline; }
+
+  h2 {
+    font-size: 28px;
+    font-weight: 700;
+    margin: 56px 0 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    line-height: 1.3;
+  }
+  h2 .num {
+    color: var(--text-dim);
+    font-weight: 400;
+    font-size: 22px;
+    margin-right: 12px;
+  }
+  h3 { font-size: 19px; font-weight: 600; margin: 32px 0 10px; color: var(--text); }
+  h4 { font-size: 16px; font-weight: 600; margin: 24px 0 6px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+  p { margin: 14px 0; }
+  a { color: var(--accent); }
+  strong { color: #fff; font-weight: 600; }
+  em { color: var(--text); font-style: italic; }
+
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13.5px;
+    background: var(--panel-2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #ffb86c;
+  }
+  pre {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  pre code { background: none; padding: 0; color: var(--text); }
+  .comment { color: var(--text-dim); font-style: italic; }
+  .keyword { color: #ff7b72; }
+  .string  { color: #a5d6ff; }
+  .field   { color: #79c0ff; }
+
+  .toc {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin: 32px 0;
+  }
+  .toc h3 { margin-top: 0; color: var(--accent); font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
+  .toc ol { padding-left: 22px; margin: 8px 0; column-count: 1; }
+  .toc li { margin: 4px 0; }
+  .toc a { color: var(--text); text-decoration: none; }
+  .toc a:hover { color: var(--accent); }
+
+  blockquote {
+    margin: 24px 0;
+    padding: 14px 22px;
+    border-left: 3px solid var(--accent);
+    background: rgba(88,166,255,0.05);
+    color: var(--text);
+    font-style: italic;
+  }
+  blockquote p:first-child { margin-top: 0; }
+  blockquote p:last-child { margin-bottom: 0; }
+
+  .callout {
+    margin: 28px 0;
+    padding: 18px 24px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel);
+  }
+  .callout.security { border-left: 4px solid var(--gcp); }
+  .callout.gotcha   { border-left: 4px solid var(--warn); }
+  .callout.danger   { border-left: 4px solid var(--danger); }
+  .callout.aside    { border-left: 4px solid var(--accent); background: rgba(88,166,255,0.04); }
+  .callout-label {
+    color: var(--gcp);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+  }
+  .callout.gotcha .callout-label { color: var(--warn); }
+  .callout.danger .callout-label { color: var(--danger); }
+  .callout.aside .callout-label  { color: var(--accent); }
+  .callout p:first-of-type { margin-top: 0; }
+  .callout p:last-of-type  { margin-bottom: 0; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 14.5px;
+    vertical-align: top;
+  }
+  th { background: var(--panel-2); color: var(--text-dim); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  tr:last-child td { border-bottom: none; }
+
+  .figure {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin: 28px 0;
+    box-shadow: var(--shadow);
+  }
+  .figure-caption {
+    font-size: 13.5px;
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: 12px;
+    font-style: italic;
+  }
+
+  .glossary dt {
+    color: var(--accent);
+    font-weight: 700;
+    margin-top: 18px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 14.5px;
+  }
+  .glossary dd { margin-left: 0; color: var(--text); font-size: 15px; }
+
+  ul, ol { padding-left: 24px; }
+  li { margin: 8px 0; }
+
+  /* SVG figure helpers — match the architecture-page palette */
+  svg text { font-family: inherit; }
+  .box-mac { fill: rgba(255,142,60,0.12); stroke: var(--mac); }
+  .box-linux { fill: rgba(163,113,247,0.12); stroke: var(--linux); }
+  .box-gcp { fill: rgba(86,211,100,0.10); stroke: var(--gcp); }
+  .box-attack { fill: rgba(248,81,73,0.10); stroke: var(--danger); }
+  .box-common { fill: rgba(88,166,255,0.08); stroke: var(--accent); }
+  .line { fill: none; stroke-width: 2; }
+  .line-gcp { stroke: var(--gcp); }
+  .line-danger { stroke: var(--danger); }
+  .line-dashed { stroke-dasharray: 4 4; }
+  .arrowhead-gcp { fill: var(--gcp); stroke: none; }
+  .arrowhead-danger { fill: var(--danger); stroke: none; }
+  .label { fill: var(--text); font-size: 12.5px; font-weight: 500; }
+  .label-small { fill: var(--text-dim); font-size: 11px; }
+  .label-bold { fill: var(--text); font-size: 13.5px; font-weight: 700; }
+
+  hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 48px 0;
+  }
+
+  footer {
+    margin-top: 64px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <div class="eyebrow">deep dive · ~45 min read</div>
+  <h1>How relops-bootstrap works, and why we trust it</h1>
+  <p class="lede">
+    A worked-through explanation of how an EACS'd Mac mini (or a fresh
+    Linux worker) gets its <code>vault.yaml</code> from a brokered Secret
+    Manager — what's actually happening at each step, what we're trusting
+    when, and where the threat-model edges sit. Written for someone who
+    will own or audit this system.
+  </p>
+  <div class="meta-line">
+    Companion to <a href="https://mozilla-platform-ops.github.io/relops-bootstrap/">the architecture overview</a>
+    · source at <a href="https://github.com/mozilla-platform-ops/relops-bootstrap">mozilla-platform-ops/relops-bootstrap</a>
+    · 2026-06-26
+  </div>
+</header>
+
+<div class="toc">
+  <h3>Contents</h3>
+  <ol>
+    <li><a href="#problem">The problem in plain terms</a></li>
+    <li><a href="#model">The mental model in three sentences</a></li>
+    <li><a href="#trust">Trust: what is trusted by whom, and why</a></li>
+    <li><a href="#anatomy">Anatomy of one vault.yaml fetch</a></li>
+    <li><a href="#macos">macOS — the keychain ACL story</a></li>
+    <li><a href="#linux">Linux — same primitive, different constraints</a></li>
+    <li><a href="#deadends">The dead ends we hit (and what they teach)</a></li>
+    <li><a href="#threats">Threat model — what we defended against, what we didn't</a></li>
+    <li><a href="#ops">Operational reality: how operators actually use this</a></li>
+    <li><a href="#future">Open questions and follow-ups</a></li>
+    <li><a href="#glossary">Glossary</a></li>
+  </ol>
+</div>
+
+<h2 id="problem"><span class="num">1</span>The problem in plain terms</h2>
+
+<p>
+  Every Mozilla RelOps worker — macOS, Linux, Windows — runs
+  <em>masterless Puppet</em> at first boot to provision itself: install
+  packages, set up users, register the Taskcluster generic-worker daemon,
+  and so on. Puppet pulls its per-host configuration through <em>Hiera</em>,
+  a data-lookup mechanism that reads YAML files. The most sensitive of
+  those is <code>data/secrets/vault.yaml</code>, which contains the
+  Taskcluster <code>access_token</code> for that role's worker pool, the
+  <code>cltbld</code> user's password (hashed and unhashed), the Bugzilla
+  API key, the livelog secret — all the stuff a worker needs to actually
+  do work.
+</p>
+
+<p>
+  Historically the operator delivered this file by hand. They'd open
+  1Password, find the role's vault entry, save the YAML to their laptop,
+  SCP it onto the worker at <code>/var/root/vault.yaml</code> (macOS) or
+  <code>/root/vault.yaml</code> (Linux). The Puppet bootstrap script
+  copied it into <code>./data/secrets/vault.yaml</code> within the cloned
+  ronin_puppet repo, and the run proceeded.
+</p>
+
+<p>
+  This worked for ~10 hardware refreshes a year. It does not work for
+  fleet-scale operations:
+</p>
+
+<ul>
+  <li><strong>It serializes on the operator.</strong> Batch-EACS'ing 20 M4s after a hardware refresh becomes a 20-step manual loop.</li>
+  <li><strong>It's mistake-prone.</strong> Easy to ship the wrong role's secrets to the wrong host. The error doesn't surface until the worker registers as the wrong pool.</li>
+  <li><strong>It's brittle.</strong> Operator must have 1Password, must have laptop SSH access to MDC1, must have <em>this</em> file ready at the moment the host needs it.</li>
+  <li><strong>It can't survive automation.</strong> Whatever tool drives EACS or kickstart needs the secret somewhere, and "the operator's laptop" is not somewhere.</li>
+</ul>
+
+<p>
+  So: we want a way for a worker, knowing only its own role, to fetch its
+  vault.yaml automatically. The constraint that makes this interesting is
+  that <em>"a worker"</em> is not a trustworthy actor — anyone can stand
+  up a Mac mini and claim it's <code>gecko_t_osx_1500_m4</code>. The
+  worker needs to <em>prove</em> it is that role.
+</p>
+
+<h2 id="model"><span class="num">2</span>The mental model in three sentences</h2>
+
+<ol>
+  <li>
+    The host's MDM enrollment (macOS) or operator-attested SSH bootstrap
+    (Linux) gets it a <strong>client certificate</strong> from our own
+    Certificate Authority, with the host's puppet role bound into the
+    cert's Subject Alternative Name as a SPIFFE URI.
+  </li>
+  <li>
+    The host uses that cert in a <strong>mutual-TLS</strong> request to a
+    brokered service at <code>forge.relops.mozilla.com</code>; the
+    Google-managed HTTPS Load Balancer validates the cert chain against
+    our CA, and a Cloud Run broker parses the SAN and serves back the
+    role-scoped <code>vault.yaml</code> from Secret Manager.
+  </li>
+  <li>
+    Every layer of this is designed so that <em>compromising any single
+    component does no worse damage than the operator-laptop model
+    already does</em> — and several layers do strictly better.
+  </li>
+</ol>
+
+<p>
+  The remaining sections elaborate each of those. We'll work bottom-up:
+  trust foundations first, then a single request walked through step by
+  step, then platform-specific details, then where it can fail.
+</p>
+
+<h2 id="trust"><span class="num">3</span>Trust: what is trusted by whom, and why</h2>
+
+<p>
+  Before talking about how the system works, it's worth being explicit
+  about what we're trusting at each layer. "Trust" here means: <em>if this
+  thing goes bad, what's the consequence?</em>
+</p>
+
+<h3>The certificate authority</h3>
+
+<p>
+  We run our own step-ca instance on a GCE VM in the
+  <code>relops-bootstrap</code> GCP project. It maintains a two-level
+  hierarchy: a self-signed <strong>root CA</strong> (10-year validity)
+  and an <strong>intermediate CA</strong> signed by the root (1-year
+  validity, used as the actual signing CA for all worker leaf certs).
+  This is the standard PKI pattern — keeping the root offline (or, in our
+  case, behind a separate password-protected step-ca config) limits the
+  blast radius of a compromise of the day-to-day-active intermediate.
+</p>
+
+<p>
+  step-ca's root and intermediate <em>public</em> PEMs are baked into:
+</p>
+
+<ul>
+  <li>The repo at <code>terraform/trust/{root,intermediate}.pem</code> — these are public certs, no private key material.</li>
+  <li>The Trust Config that the load balancer uses to validate incoming client certs.</li>
+  <li>The system trust store of each worker, via the SCEP profile's PKCS#1 payload (macOS) or via curl's default CA bundle for the server-side check (Linux is already trusting <code>forge.relops.mozilla.com</code>'s Google-managed cert via the public CA roots).</li>
+</ul>
+
+<p>
+  The <em>private</em> keys for the root and intermediate live on the
+  step-ca VM, encrypted with a password loaded from
+  <code>/home/step/.step/secrets/password</code> (which is itself only
+  readable by the <code>step</code> user). The VM has no public-internet
+  ingress beyond the HTTPS LB endpoint; admin access is via
+  Google's <em>Identity-Aware Proxy</em> (IAP) tunneled SSH, which
+  requires the operator's Google identity + a project-level IAM grant.
+</p>
+
+<div class="callout security">
+  <div class="callout-label">Why we trust step-ca's keys</div>
+  <p>The intermediate signing key is, in absolute terms, the most powerful piece of cryptographic material in this system. Anyone who steals it can mint a cert claiming any role and read any vault. We trust it because: (a) it lives on a VM with no public ingress except through the LB, (b) administrative SSH requires IAP + IAM, (c) the OS disk is encrypted at rest by GCP, (d) the key is encrypted at rest within the VM behind a password not stored anywhere else readable, (e) step-ca's process runs as a non-root user. There is no <em>perfect</em> protection — a cloud-platform-level compromise of GCP itself would unravel this, as it would unravel virtually any cloud-hosted secret. We accept that as the bound.</p>
+</div>
+
+<h3>The SCEP challenge — the enrollment gate</h3>
+
+<p>
+  Worker certs are issued via SCEP, the Simple Certificate Enrollment
+  Protocol (<a href="https://datatracker.ietf.org/doc/html/rfc8894">RFC
+  8894</a>). SCEP is what Apple's <code>mdmclient</code> already speaks
+  natively when an MDM-pushed profile contains a
+  <code>com.apple.security.scep</code> payload, which is why we use it
+  instead of inventing something custom.
+</p>
+
+<p>
+  A SCEP enrollment request is gated on a shared secret called the
+  "challenge." The challenge is set on each <em>provisioner</em> (one per
+  puppet role in our setup) and is included in the CSR's
+  <code>challengePassword</code> attribute. step-ca verifies the
+  challenge matches before signing. Our challenge is stored in GCP
+  Secret Manager (<code>step-ca-scep-challenge</code>) and the operator
+  reads it via their gcloud authentication when delivering a Linux host
+  (or it's embedded in the SimpleMDM SCEP profile for Mac, which
+  SimpleMDM holds securely on its servers).
+</p>
+
+<div class="callout gotcha">
+  <div class="callout-label">A weakness worth naming</div>
+  <p>The SCEP challenge is a single shared secret across all enrollments for a given provisioner. If it leaks, an attacker who can also reach <code>forge.relops.mozilla.com</code> from the MDC1 worker subnet (because Cloud Armor restricts it) can mint certs for that provisioner's role. The leak surface is narrow (it lives in SimpleMDM's secured profile delivery + GCP Secret Manager + briefly on a Linux operator's laptop during enrollment), and the network ACL bounds the damage, but it's worth noting that the challenge is the lightest piece of crypto in the system.</p>
+  <p>The macOS-equivalent of SCEP enrollment via ACME with Apple's hardware attestation would replace this shared secret with per-device hardware-bound proof. We <a href="#deadends">tried that</a> and it didn't survive Apple's keychain ACL model. So we live with the shared challenge for now.</p>
+</div>
+
+<h3>The Trust Config — the LB's job</h3>
+
+<p>
+  The HTTPS Load Balancer at <code>forge.relops.mozilla.com</code> is
+  configured with a <em>Trust Config</em> (a GCP Certificate Manager
+  resource) that contains <em>only</em> our step-ca root cert as a trust
+  anchor, plus the intermediate cert as a known signer. The LB's TLS
+  policy is set to <code>ALLOW_INVALID_OR_MISSING_CLIENT_CERT</code>:
+  meaning <em>request</em> a client cert during the TLS handshake, but
+  don't <em>require</em> one to terminate. This lets us serve the
+  <code>/scep/*</code> endpoints (which clients hit <em>before</em> they
+  have a cert, to enroll) on the same hostname as
+  <code>/secret/*</code>.
+</p>
+
+<p>
+  When a client does present a cert, the LB:
+</p>
+
+<ol>
+  <li>Asks for the cert during the TLS handshake's <code>CertificateRequest</code> message.</li>
+  <li>Receives the client's cert chain in the <code>Certificate</code> message.</li>
+  <li>Verifies the chain against the Trust Config: leaf signed by intermediate, intermediate signed by root, root matches one of our trust anchors. If verification fails, the LB <em>does not</em> reject the connection (because of the policy mode) — instead it forwards the request with an <code>X-Client-Cert-Chain-Verified: false</code> header.</li>
+  <li>Validates the cert hasn't expired (<code>notBefore</code> ≤ now ≤ <code>notAfter</code>).</li>
+  <li>Forwards the request to the broker, injecting headers: <code>X-Client-Cert-Present</code>, <code>X-Client-Cert-Chain-Verified</code>, <code>X-Client-Cert-Leaf</code> (base64-encoded PEM of the leaf), <code>X-Client-Cert-Serial-Number</code>, and several others.</li>
+</ol>
+
+<div class="callout aside">
+  <div class="callout-label">Why "allow invalid or missing" rather than "require valid"</div>
+  <p>We want the broker to do the policy enforcement, not the LB. The LB validates <em>cryptography</em> (chain math) but doesn't know whether a particular cert is allowed to fetch a particular role's secret — that's the broker's job. By forwarding the request regardless and letting the broker decide, we keep all the role-binding logic in one auditable place. And we get a side benefit: requests without a cert reach the broker, which logs them and returns 401, so we have visibility into who's poking at the endpoint without one.</p>
+</div>
+
+<h3>The broker's role</h3>
+
+<p>
+  <code>vault-broker</code> is a small FastAPI service running on Cloud
+  Run. It reads the LB-forwarded headers, decodes the leaf cert PEM,
+  parses its SubjectAltName extension for a URI of the form
+  <code>spiffe://relops.mozilla/host/&lt;hostname&gt;/role/&lt;role&gt;</code>,
+  and:
+</p>
+
+<ul>
+  <li>Verifies <code>X-Client-Cert-Present: true</code> and <code>X-Client-Cert-Chain-Verified: true</code> (otherwise → 401).</li>
+  <li>Verifies the cert has a SPIFFE URI in the expected shape (otherwise → 401).</li>
+  <li>URL-decodes the URI components — important because Apple's SCEP enrollment URL-encodes spaces (a cert subject "Mac mini" produces SAN URI ".../host/Mac%20mini/..."), and the LB's built-in SPIFFE parser silently drops malformed-looking URIs. By parsing the leaf cert ourselves we sidestep that.</li>
+  <li>Checks the role in the URI matches the URL path's role (otherwise → 403 with the role mismatch named in the body).</li>
+  <li>Reads <code>vault-&lt;role&gt;</code> from Secret Manager via the broker's service account (which has per-secret IAM bindings — it can read <em>only</em> the <code>vault-*</code> secrets, nothing else in the project).</li>
+  <li>Returns the secret content as <code>text/yaml</code>.</li>
+</ul>
+
+<p>
+  Every accept and reject decision lands in Cloud Audit Logs with the
+  cert serial number, the requested role, the requesting IP, and the
+  bytes returned. This is the audit trail.
+</p>
+
+<div class="callout security">
+  <div class="callout-label">Why we trust the broker</div>
+  <p>The broker has very little surface area. Its only sensitive operation is "read vault-&lt;role&gt; from Secret Manager," and its IAM binding allows <em>only that</em>. It does not sign anything, hold any private keys, or have administrative privileges on any other GCP resource. If the broker process is compromised, an attacker reads all <code>vault-*</code> secrets. That's bad — but it's the same blast radius as 1Password vault access, which any RelOps operator has. We've added rate limiting per cert serial (token bucket, refills 1/sec, burst 10) to slow down enumeration attacks, but the broker is fundamentally a thin proxy and we trust the GCP infrastructure to keep it isolated.</p>
+</div>
+
+<h2 id="anatomy"><span class="num">4</span>Anatomy of one vault.yaml fetch</h2>
+
+<p>
+  Let's walk through a single request from the worker's perspective, in
+  detail. Assume the worker has already been enrolled — we'll come back
+  to enrollment afterward.
+</p>
+
+<h3>Step 0: the worker has a cert</h3>
+
+<p>
+  On macOS, this means a SCEP-issued identity in the System keychain,
+  with a private key whose ACL allows the OS network stack to sign with
+  it. On Linux, this means a PEM cert + PEM key at
+  <code>/etc/relops-bootstrap/{cert,key}.pem</code> owned by root with
+  0600 permissions. The cert's Subject Common Name is the host's name;
+  its SAN includes a SPIFFE URI binding it to one puppet role.
+</p>
+
+<p>
+  The cert and key were minted by step-ca's SCEP provisioner at
+  enrollment time. The role-binding is enforced <em>by the provisioner's
+  x509 template</em> — we have one provisioner per role, and each
+  provisioner's template hardcodes
+  <code>"spiffe://relops.mozilla/host/{{ .Subject.CommonName }}/role/&lt;role&gt;"</code>
+  into the SANs. There is no way for the worker to <em>request</em> a
+  cert with a role it shouldn't have — the choice of role is determined
+  by which provisioner it enrolls against, and the provisioner's URL
+  path is delivered via MDM profile (macOS) or specified by the operator
+  (Linux). The worker has no input on it.
+</p>
+
+<h3>Step 1: TLS ClientHello</h3>
+
+<p>
+  The worker initiates a TLS 1.3 handshake with
+  <code>forge.relops.mozilla.com:443</code>. The client sends a
+  ClientHello advertising the cipher suites it supports and the SNI of
+  the hostname.
+</p>
+
+<p>
+  The LB responds with the server's certificate (a Google-managed cert
+  whose chain validates against the public CA roots already in every
+  worker's system trust store — this is the same way HTTPS works
+  everywhere on the internet) plus, critically, a
+  <code>CertificateRequest</code> message telling the client "I want
+  your cert too." The CertificateRequest also (sometimes) includes the
+  list of acceptable CA distinguished names. In our case, GCP's
+  LB sends an empty acceptable-CA list, which is a
+  <a href="#deadends">subtle point</a> that bit us in development.
+</p>
+
+<h3>Step 2: client cert presentation + signature</h3>
+
+<p>
+  The worker responds with its own <code>Certificate</code> message
+  containing its leaf cert (and optionally the intermediate, though our
+  workers send only the leaf — the LB has the intermediate in its Trust
+  Config). It then signs a hash of the entire handshake transcript with
+  its private key, and sends that signature in a
+  <code>CertificateVerify</code> message. This proves the client
+  actually possesses the private key matching the cert it just sent
+  (otherwise it could just replay someone else's cert).
+</p>
+
+<p>
+  <strong>This signing step is where the macOS keychain ACL gets
+  involved.</strong> The signing happens inside whichever process is
+  doing the TLS handshake. On macOS, when we use
+  <code>CURL_SSL_BACKEND=securetransport curl --cert "&lt;CN&gt;"</code>,
+  the handshake runs inside Apple's SecureTransport library, which is
+  permitted by the keychain ACL to sign with our SCEP-installed key. (We
+  explore why this matters in detail in <a href="#macos">section 5</a>.)
+  On Linux, the signing happens in LibreSSL / OpenSSL, reading the
+  private key from the PEM file — straightforward, no OS gatekeeping.
+</p>
+
+<h3>Step 3: LB chain validation</h3>
+
+<p>
+  The LB verifies:
+</p>
+
+<ol>
+  <li>The leaf cert is signed by a key whose corresponding cert is in our Trust Config (the step-ca intermediate).</li>
+  <li>The intermediate is signed by a trust anchor in our Trust Config (the step-ca root).</li>
+  <li>The signature in <code>CertificateVerify</code> validates against the leaf cert's public key over the handshake transcript — i.e. the client actually has the private key.</li>
+  <li>The cert's validity window contains "now."</li>
+</ol>
+
+<p>
+  If any of these fails, the LB does <em>not</em> tear down the
+  connection — its policy is "allow invalid or missing." Instead, it
+  records the failure and prepares to inject
+  <code>X-Client-Cert-Chain-Verified: false</code> later. If validation
+  succeeds, it prepares to inject the cert's metadata as request
+  headers.
+</p>
+
+<h3>Step 4: TLS handshake completes, HTTP begins</h3>
+
+<p>
+  Both sides exchange <code>Finished</code> messages. The TLS session is
+  now established and encrypted. The worker sends an HTTP/2 request:
+</p>
+
+<pre><code><span class="keyword">GET</span> /secret/gecko_t_osx_1500_m4 <span class="keyword">HTTP</span>/2
+<span class="field">Host:</span> forge.relops.mozilla.com
+<span class="field">User-Agent:</span> curl/8.7.1
+<span class="field">Accept:</span> */*
+</code></pre>
+
+<h3>Step 5: LB → broker, with headers injected</h3>
+
+<p>
+  The LB rewrites the request as it forwards to Cloud Run. The rewritten
+  request looks roughly like:
+</p>
+
+<pre><code><span class="keyword">GET</span> /secret/gecko_t_osx_1500_m4 <span class="keyword">HTTP</span>/1.1
+<span class="field">Host:</span> vault-broker-internal
+<span class="field">X-Forwarded-For:</span> 63.245.209.101
+<span class="field">X-Client-Cert-Present:</span> true
+<span class="field">X-Client-Cert-Chain-Verified:</span> true
+<span class="field">X-Client-Cert-Serial-Number:</span> 65:20:86:3c:23:5e:fa:0a:c8:5d:47:70:1a:74:43:75
+<span class="field">X-Client-Cert-SHA256:</span> TGt3g713vVfsEadMuNovHAe5460Y/py52mXy+6jkJxw
+<span class="field">X-Client-Cert-Leaf:</span> MIIDSDCC...&lt;base64 PEM of leaf cert&gt;...DEhQ==
+<span class="field">X-Client-Cert-SPIFFE:</span> &lt;possibly empty if LB couldn't parse&gt;
+<span class="field">X-Client-Cert-Subject-DN:</span> MDYxEDAOBgNV...&lt;base64 DN&gt;...
+</code></pre>
+
+<p>
+  The connection from the LB to Cloud Run uses
+  <code>INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER</code>, meaning Cloud Run
+  refuses to accept requests from anywhere else — even a leaked Cloud
+  Run URL won't accept traffic. This is why we trust the
+  <code>X-Client-Cert-*</code> headers without further validation: an
+  attacker can't bypass the LB and forge them.
+</p>
+
+<h3>Step 6: broker parses and authorizes</h3>
+
+<p>
+  Inside the broker, in
+  <a href="https://github.com/mozilla-platform-ops/relops-bootstrap/blob/main/broker/app/auth.py"><code>broker/app/auth.py</code></a>:
+</p>
+
+<pre><code><span class="comment"># 1. The basic LB-said-yes checks</span>
+<span class="keyword">if</span> cert_present != <span class="string">"true"</span>: <span class="keyword">raise</span> AuthError(<span class="string">"no client cert"</span>)
+<span class="keyword">if</span> chain_verified != <span class="string">"true"</span>: <span class="keyword">raise</span> AuthError(<span class="string">"chain not verified"</span>)
+
+<span class="comment"># 2. Decode the base64-PEM leaf into a cryptography.x509.Certificate</span>
+leaf = x509.load_pem_x509_certificate(base64.b64decode(cert_leaf))
+
+<span class="comment"># 3. Extract SAN, find a URI matching our trust domain prefix</span>
+san = leaf.extensions.get_extension_for_oid(<span class="field">SUBJECT_ALTERNATIVE_NAME</span>)
+<span class="keyword">for</span> uri <span class="keyword">in</span> san.value.get_values_for_type(x509.UniformResourceIdentifier):
+    decoded = urllib.parse.unquote(uri)  <span class="comment"># handle Mac%20mini → "Mac mini"</span>
+    <span class="keyword">if</span> decoded.startswith(<span class="string">"spiffe://relops.mozilla/host/"</span>):
+        hostname, _, role = decoded[len(prefix):].split(<span class="string">"/"</span>, 2)
+        <span class="keyword">break</span>
+
+<span class="comment"># 4. Role-match against URL path</span>
+<span class="keyword">if</span> role != url_path_role: <span class="keyword">raise</span> AuthError(<span class="string">"role mismatch"</span>)
+</code></pre>
+
+<p>
+  If everything matches, the broker calls <code>read_secret(f"vault-{role}")</code>
+  via the Google Secret Manager Python client, and returns the content
+  as the response body with content-type <code>text/yaml</code>.
+</p>
+
+<h3>Step 7: response, write to disk, puppet runs</h3>
+
+<p>
+  The broker writes a 200 OK back to the LB, the LB tunnels it back
+  through the TLS session to the worker. The worker (in our bootstrap
+  script) atomically writes the body to <code>/var/root/vault.yaml</code>
+  (macOS) or <code>/root/vault.yaml</code> (Linux) at 0600
+  root:root. From here, the rest of the puppet bootstrap is unchanged
+  from how it worked before — Hiera reads the file, populates the
+  per-role lookups, puppet applies, worker is provisioned.
+</p>
+
+<div class="figure">
+<svg viewBox="0 0 900 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block;">
+  <defs>
+    <marker id="dd-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#56d364"/>
+    </marker>
+  </defs>
+  <rect x="20" y="20" width="180" height="60" rx="6" class="box-common"/>
+  <text x="110" y="46" text-anchor="middle" class="label-bold">Worker</text>
+  <text x="110" y="64" text-anchor="middle" class="label-small">curl --cert ...</text>
+
+  <rect x="240" y="20" width="180" height="60" rx="6" class="box-gcp"/>
+  <text x="330" y="46" text-anchor="middle" class="label-bold">LB</text>
+  <text x="330" y="64" text-anchor="middle" class="label-small">mTLS termination</text>
+
+  <rect x="460" y="20" width="180" height="60" rx="6" class="box-gcp"/>
+  <text x="550" y="46" text-anchor="middle" class="label-bold">broker</text>
+  <text x="550" y="64" text-anchor="middle" class="label-small">role-match + read</text>
+
+  <rect x="680" y="20" width="180" height="60" rx="6" class="box-gcp"/>
+  <text x="770" y="46" text-anchor="middle" class="label-bold">Secret Manager</text>
+  <text x="770" y="64" text-anchor="middle" class="label-small">vault-&lt;role&gt;</text>
+
+  <path d="M 200 50 L 240 50" class="line line-gcp" marker-end="url(#dd-arrow)"/>
+  <text x="220" y="40" text-anchor="middle" class="label-small" fill="#56d364">mTLS</text>
+  <path d="M 420 50 L 460 50" class="line line-gcp" marker-end="url(#dd-arrow)"/>
+  <text x="440" y="40" text-anchor="middle" class="label-small" fill="#56d364">+headers</text>
+  <path d="M 640 50 L 680 50" class="line line-gcp" marker-end="url(#dd-arrow)"/>
+  <text x="660" y="40" text-anchor="middle" class="label-small" fill="#56d364">SDK read</text>
+
+  <!-- enforcement boxes -->
+  <rect x="240" y="120" width="180" height="80" rx="6" class="box-gcp"/>
+  <text x="330" y="142" text-anchor="middle" class="label-bold" style="font-size:12.5px;">cryptographic check</text>
+  <text x="246" y="160" class="label-small">• chain math (cert signed</text>
+  <text x="246" y="174" class="label-small">  by our intermediate)</text>
+  <text x="246" y="188" class="label-small">• CertVerify signature</text>
+
+  <rect x="460" y="120" width="180" height="80" rx="6" class="box-gcp"/>
+  <text x="550" y="142" text-anchor="middle" class="label-bold" style="font-size:12.5px;">authorization check</text>
+  <text x="466" y="160" class="label-small">• SPIFFE URI shape</text>
+  <text x="466" y="174" class="label-small">• role == URL path</text>
+  <text x="466" y="188" class="label-small">• rate limit per serial</text>
+
+  <rect x="680" y="120" width="180" height="80" rx="6" class="box-gcp"/>
+  <text x="770" y="142" text-anchor="middle" class="label-bold" style="font-size:12.5px;">IAM check</text>
+  <text x="686" y="160" class="label-small">• broker SA bound to</text>
+  <text x="686" y="174" class="label-small">  vault-&lt;role&gt; only</text>
+  <text x="686" y="188" class="label-small">• audit log written</text>
+
+  <path d="M 330 80 L 330 120" class="line line-gcp line-dashed"/>
+  <path d="M 550 80 L 550 120" class="line line-gcp line-dashed"/>
+  <path d="M 770 80 L 770 120" class="line line-gcp line-dashed"/>
+
+  <text x="440" y="265" text-anchor="middle" class="label" style="font-size:13px;">Authorization is layered. The LB validates the math of the cert;</text>
+  <text x="440" y="284" text-anchor="middle" class="label" style="font-size:13px;">the broker validates the meaning of the cert (which role); IAM validates</text>
+  <text x="440" y="303" text-anchor="middle" class="label" style="font-size:13px;">that even the broker can only read what it's supposed to.</text>
+</svg>
+<div class="figure-caption">Figure 1. Three checks happen across three components — cryptographic, authorization, and IAM — each guards a different abstraction layer.</div>
+</div>
+
+<h2 id="macos"><span class="num">5</span>macOS — the keychain ACL story</h2>
+
+<p>
+  Of the two platforms we support, macOS is the harder one to make this
+  work on, and the reasons are educational in their own right. The
+  short version: <strong>macOS treats keychain-stored cryptographic
+  keys as the OS's responsibility, not the application's</strong>, and
+  the OS imposes restrictions that took us several days to fully
+  understand. The mechanism we landed on works <em>by going through the
+  OS's own network stack</em> rather than fighting it.
+</p>
+
+<h3>Where the key actually is</h3>
+
+<p>
+  When SimpleMDM pushes a <code>com.apple.security.scep</code> profile
+  to an M4 mini, <code>mdmclient</code> on the device:
+</p>
+
+<ol>
+  <li>Generates an RSA-2048 keypair, placing the private key in the System keychain at <code>/Library/Keychains/System.keychain</code>.</li>
+  <li>Builds a CSR with the subject and challenge from the profile.</li>
+  <li>Sends the CSR to the SCEP URL from the profile, signing with the SCEP <em>encryption</em> cert (provided in the SCEP server's GetCACert response).</li>
+  <li>Receives a signed cert back, places it in the System keychain, paired with the private key as a SecIdentity.</li>
+</ol>
+
+<p>
+  Importantly, the private key never touches the filesystem in plaintext. It's stored
+  in the System keychain's encrypted database file, and reading or
+  using it requires going through the macOS Security framework.
+</p>
+
+<h3>The ACL on the key</h3>
+
+<p>
+  Every keychain key has an access-control list. Apple's SCEP-enrollment
+  flow installs the key with three ACL entries (which we discovered by
+  dumping the keychain on a real worker):
+</p>
+
+<table>
+  <thead><tr><th>Entry</th><th>Apps allowed</th><th>Authorizations</th></tr></thead>
+  <tbody>
+    <tr><td>0. <em>"MDM Allow All"</em></td><td>wildcard</td><td><code>encrypt</code> only</td></tr>
+    <tr><td>1. <em>"Allow All"</em> (despite the name)</td><td>specific list: <code>configd</code>, <code>nehelper</code>, <code>NEIKEv2Provider</code>, <code>racoon</code>, <code>pppd</code>, <code>NetAuth</code>, others</td><td><code>sign</code>, <code>decrypt</code>, <code>derive</code>, <code>export_clear</code>, <code>export_wrapped</code>, <code>mac</code></td></tr>
+    <tr><td>2. <em>"Config Profiles Cert Access"</em></td><td><code>com.apple.ConfigurationProfiles</code>, <code>nehelper</code></td><td><code>change_acl</code></td></tr>
+  </tbody>
+</table>
+
+<p>
+  Read carefully: the only ACL entry that grants <code>sign</code>
+  authorization is the second one, and it grants it only to a hardcoded
+  list of Apple's own networking-stack helpers. Our custom code — a
+  Swift binary we wrote, a Python script, even a shell command running as
+  root from a LaunchDaemon — is not in this list and never can be.
+  When we tried to call <code>SecKeyCreateSignature</code> on this key
+  from any of those contexts, macOS returned
+  <code>errSecInteractionNotAllowed (-25308)</code> with the underlying
+  CSSM error being <code>CSSMERR_CSP_NO_USER_INTERACTION</code> — i.e.,
+  "I would need to show a UI prompt to authorize this, and I can't, so
+  no."
+</p>
+
+<div class="callout gotcha">
+  <div class="callout-label">An empirical journey</div>
+  <p>We spent meaningful time exploring whether we could get our own code into that ACL. We tried setting <code>AllowAllAppsAccess=true</code> on the SCEP profile — that only adds an ACL entry for <code>encrypt</code>, not <code>sign</code>. We tried <code>KeyIsExtractable=true</code> — that exposes a documented field but the actual <code>SecItemExport</code> call from a LaunchDaemon hits the same UI-prompt wall. We tried ACME enrollment with Apple device attestation — the cert lands in <code>com.apple.identities</code>, an access group requiring an Apple-only entitlement we can't get. The conclusion: this is by design. Apple wants the network stack to use these keys, not arbitrary developer code.</p>
+</div>
+
+<h3>Working with the OS instead of against it</h3>
+
+<p>
+  Once we accepted that we cannot sign with this key from our own
+  process, the question became: <em>which process can?</em> The ACL
+  lists Apple's network-stack helpers. Anything that initiates a TLS
+  connection through those helpers can effectively sign with the key
+  during the handshake.
+</p>
+
+<p>
+  macOS's <code>curl</code> binary, since macOS 12 or so, ships with two
+  TLS backends compiled in: LibreSSL (the default) and SecureTransport
+  (Apple's own TLS implementation, deprecated for new code but still
+  present and functional). When you invoke
+  <code>curl --cert "&lt;Common Name&gt;"</code> with no key file,
+  curl assumes the argument is a keychain identity reference — but only
+  when SecureTransport is the active backend. The
+  <code>CURL_SSL_BACKEND=securetransport</code> environment variable
+  flips it.
+</p>
+
+<p>
+  With SecureTransport active, curl asks the macOS Security framework to
+  find an identity with that Common Name, get a SecIdentityRef, and use
+  it during the TLS handshake. The handshake — including the
+  <code>CertificateVerify</code> signature — runs inside SecureTransport
+  itself, which goes through the network-stack helpers that <em>are</em>
+  in the keychain ACL. Result: the cert gets used, the key never leaves
+  the keychain, no UI prompt, no PKCS#12 extraction.
+</p>
+
+<p>
+  This is, in retrospect, exactly the affordance Apple designed for. We
+  were just slow to find it because we kept trying to make our own code
+  sign things, and the documentation for the SecureTransport curl
+  backend is sparse-bordering-on-undocumented. (We have notes on this
+  for posterity in <a href="https://github.com/mozilla-platform-ops/relops-bootstrap/blob/main/scripts/INSTALL-on-worker.md"><code>scripts/INSTALL-on-worker.md</code></a>.)
+</p>
+
+<div class="callout security">
+  <div class="callout-label">Why this is actually a security <em>win</em></div>
+  <p>An attacker who compromises a worker as root cannot exfiltrate the private key. The key is in the keychain database, encrypted at rest, and the ACL prevents any process — including a root LaunchDaemon — from extracting it. The cert is still usable for fetching vault.yaml on that specific device (via SecureTransport curl), but the attacker can't take the key off the device to use it elsewhere. Compare to the Linux model where the key is a PEM file on disk and root has full read access — Linux is the weaker substrate here. (We accept the Linux model because there's no equivalent OS-managed key store on Linux that we can drive from a worker bootstrap.)</p>
+</div>
+
+<h2 id="linux"><span class="num">6</span>Linux — same primitive, different constraints</h2>
+
+<p>
+  Linux has no MDM. There is no daemon that runs at first boot and
+  enrolls the device into a management plane that holds an SCEP profile.
+  We could install one — <code>mosquitto</code>-style or
+  <code>chef-client</code>-style — but Mozilla RelOps doesn't, and
+  shipping a new agent for one bootstrap problem is the wrong tradeoff.
+</p>
+
+<p>
+  Instead, on Linux, <em>the operator</em> is the trust anchor at
+  enrollment time. The operator's laptop runs
+  <code>provisioners/linux/deliver_linux.sh</code>, which:
+</p>
+
+<ol>
+  <li>Fetches the SCEP challenge from GCP Secret Manager via the operator's <code>gcloud</code> auth.</li>
+  <li>Invokes <code>scripts/mint-scep-cert.sh</code> (from a checkout of <code>relops-bootstrap</code>) which:
+    <ul>
+      <li>Generates an RSA keypair locally with <code>openssl</code>.</li>
+      <li>Builds a CSR including the challenge in the <code>challengePassword</code> attribute.</li>
+      <li>Runs <code>sscep enroll</code> against the appropriate per-role SCEP provisioner endpoint.</li>
+    </ul>
+  </li>
+  <li>SCPs the resulting cert + key files to <code>/etc/relops-bootstrap/</code> on the target worker, as <code>cert.pem</code> and <code>key.pem</code> at 0600 root:root.</li>
+  <li>SCPs the bootstrap script and invokes it. The bootstrap script's <code>fetch_vault_yaml_via_mtls</code> function detects the cert and key, runs <code>curl --cert ... --key ...</code> against <code>forge.relops.mozilla.com</code>, lands <code>/root/vault.yaml</code>, then proceeds with the existing puppet bootstrap flow.</li>
+</ol>
+
+<p>
+  The operator's gcloud authentication is the gate. To run this flow,
+  you need (a) GCP IAM permission to read Secret Manager in the
+  <code>relops-bootstrap</code> project, (b) SSH access to the target
+  Linux worker (which the operator already needs for any provisioning
+  work), and (c) the relops-bootstrap repo checked out locally with
+  <code>sscep</code> installed.
+</p>
+
+<h3>Why we accept PEM-on-disk on Linux</h3>
+
+<p>
+  The Linux worker's PEM cert + PEM key live on the filesystem at
+  <code>/etc/relops-bootstrap/{cert,key}.pem</code>, root:root, mode
+  0600. An attacker with root on the worker can read both.
+</p>
+
+<p>
+  This is a step down from macOS's keychain protection, but it's not a
+  step down from the <em>baseline</em>: the file the cert is fetching —
+  <code>/root/vault.yaml</code> — also lives root-readable on the
+  filesystem in the same way it always has. An attacker who can read
+  the cert can also just read the vault.yaml directly. The cert's only
+  purpose is bootstrap-time enrollment; it doesn't grant any additional
+  privilege beyond what root already has on that host.
+</p>
+
+<p>
+  The choice we deliberately did not make: use TPM-backed key storage on
+  Linux. The hardware exists (TPM 2.0 is in most modern servers and
+  almost all modern Mozilla hardware), and <code>tpm2-tss</code> +
+  <code>openssl-tpm2-engine</code> would let us store the key in TPM and
+  sign via the TPM. We chose not to for two reasons: (1) it adds a
+  significant dependency to the bootstrap script, increasing the
+  surface area of "things that can break during enrollment," and (2)
+  the threat model doesn't really call for it — see the previous
+  paragraph. If the calculus changes (e.g. cert lifetimes become long
+  enough that key compromise becomes meaningful), we'd revisit.
+</p>
+
+<h2 id="deadends"><span class="num">7</span>The dead ends we hit (and what they teach)</h2>
+
+<p>
+  An honest account of how we got here. Each of these is a path we
+  pursued, sometimes deeply, before realizing it wouldn't work.
+  Understanding why each failed informs what the current design is
+  defending against.
+</p>
+
+<h3>Dead end 1: JWT signed by the cert's private key</h3>
+
+<p>
+  Our first design was conceptually clean: the worker holds a SCEP
+  cert; at request time it constructs a short-lived JWT with claims
+  <code>{sub, role, aud, exp, iat, jti}</code>, signs it with the cert's
+  private key, embeds the cert chain in the JWT header as
+  <code>x5c</code>, and sends it to the broker as a <code>Bearer</code>
+  token. The broker validates the JWT signature against the cert's
+  public key, chain-verifies the cert to our root, parses claims, role-
+  binds, returns the secret.
+</p>
+
+<p>
+  This is a very standard "workload identity" pattern (it's how
+  Kubernetes service accounts work, broadly). It died on macOS because
+  signing the JWT requires calling <code>SecKeyCreateSignature</code>
+  from our own process, which the keychain ACL forbids (see
+  <a href="#macos">section 5</a>). We tried for two days to get our
+  Swift bootstrap binary into the ACL — through profile flag changes,
+  through entitlement requests, through a LaunchDaemon at first boot,
+  through SCEP enrollment with various profile options. None of it
+  worked. The conclusion was that our own code fundamentally cannot
+  sign with this key.
+</p>
+
+<p>
+  We then briefly considered pivoting to "let curl do the JWT" but
+  curl doesn't sign JWTs. We considered a small Apple-signed helper
+  binary — we don't have an Apple Developer ID with the right
+  entitlements, and getting one would be a 3-month process. mTLS — where
+  the OS does the signing during the TLS handshake — became obviously
+  better.
+</p>
+
+<h3>Dead end 2: ACME with Apple device attestation</h3>
+
+<p>
+  Apple's macOS supports ACME enrollment with <em>device attestation</em>
+  challenges, where the device proves it's a real Apple device via a
+  signed statement from the Secure Enclave. This is the "most secure"
+  modern enrollment option — much better than our shared SCEP challenge.
+  We invested significant time to make it work: configured step-ca's
+  ACME provisioner with Apple attestation, fixed multiple iterations of
+  the mobileconfig payload, debugged the device-attest-01 challenge flow
+  with step-ca's logs.
+</p>
+
+<p>
+  We got it working end-to-end: the device successfully enrolled, step-ca
+  validated the Apple attestation, a cert was issued. <strong>But the
+  cert landed in a different access group within the keychain
+  (<code>com.apple.identities</code>) than the SCEP-issued one
+  (<code>com.apple.systemkeychain</code>).</strong> The
+  <code>com.apple.identities</code> group is gated by an Apple-only
+  entitlement that no third-party developer can request. Even
+  <code>find-identity</code> on a privileged process returned
+  <code>errSecMissingEntitlement (-34018)</code>. Neither our code nor
+  even SecureTransport curl could use the cert. It was, by Apple's
+  design, only usable by Apple's own MDM-aware services.
+</p>
+
+<p>
+  We documented this and reverted to SCEP. ACME-with-attestation might
+  become viable on a future macOS version if Apple loosens
+  com.apple.identities, but for now SCEP is what works.
+</p>
+
+<h3>Dead end 3: URLSession with explicit credential</h3>
+
+<p>
+  Before discovering the SecureTransport curl backend, we attempted to
+  do mTLS from a Swift binary using <code>URLSession</code>, which is
+  Apple's standard high-level networking API. URLSession has a delegate
+  callback for <code>NSURLAuthenticationMethodClientCertificate</code>
+  where the application provides a <code>URLCredential</code> with a
+  SecIdentityRef. We wrote this code, found the SCEP identity by Subject
+  CN, constructed the credential, returned it.
+</p>
+
+<p>
+  The behavior we observed: the TLS handshake failed with error
+  <code>-9860 (errSSLClientCertRequested)</code> and the diagnostic key
+  <code>_kCFStreamPropertySSLClientCertificateState=0</code> — meaning
+  "no client cert was actually sent." After much debugging we concluded:
+  URLSession <em>silently drops the credential</em> if the LB's
+  CertificateRequest message contains an empty acceptable-CA list
+  (which GCP's LB sends). URLSession's policy appears to be "if I don't
+  know which CA the server wants, don't send anything." There is no API
+  to override this behavior. SecureTransport curl, by contrast, sends
+  the cert anyway and lets the server reject it if it doesn't like it.
+</p>
+
+<p>
+  This was a surprising finding — URLSession is the modern, recommended
+  API, and SecureTransport is the deprecated one. But for our use case,
+  the deprecated API is the one that actually works.
+</p>
+
+<h3>What these dead ends collectively teach</h3>
+
+<p>
+  All three were attempts to use Apple's modern APIs (URLSession, JWT-
+  signing-from-app-process, ACME with attestation). All three failed
+  because Apple's modern APIs prioritize a different security model than
+  the one we needed — they assume the app is the entity holding the
+  cert, and Apple's frameworks gatekeep that. The working solution
+  (SecureTransport curl + SCEP) treats the OS as the entity holding the
+  cert and goes through Apple's own networking helpers. Once you frame
+  it that way, our setup looks more like "use macOS as nature
+  intended" than "fight macOS to get our way."
+</p>
+
+<h2 id="threats"><span class="num">8</span>Threat model — what we defended against, what we didn't</h2>
+
+<p>
+  Walking through the realistic attackers, what they can do, and how the
+  layered defenses respond. We've kept this honest — some threats are
+  not fully mitigated, and we want that to be visible.
+</p>
+
+<h3>T1: Random internet attacker (off MDC1 network)</h3>
+
+<p>
+  <strong>Mitigation: Cloud Armor source-CIDR allowlist on the LB.</strong>
+  The LB has a security policy that denies all traffic except from
+  <code>63.245.209.101/32</code> (Mozilla's MDC1 NAT egress IP, plus
+  GCP's standard health-check ranges). An attacker from anywhere else
+  on the internet sees a 403 from Cloud Armor before TLS even
+  terminates. They can't even probe.
+</p>
+<p>
+  <em>Residual risk:</em> if MDC1's NAT egress IP changes and we forget
+  to update the allowlist, legitimate traffic fails. Operational, not
+  security, but worth knowing.
+</p>
+
+<h3>T2: Attacker on MDC1 network without a valid cert</h3>
+
+<p>
+  <strong>Mitigation: mTLS at the LB rejects unauthenticated /secret/*
+  requests at the broker.</strong> The attacker can reach the LB, can
+  open a TLS connection, can send an HTTP request to
+  <code>/secret/&lt;role&gt;</code> — but without a cert,
+  <code>X-Client-Cert-Present</code> arrives as <code>false</code> and
+  the broker returns 401. Every attempt is audit-logged.
+</p>
+<p>
+  <em>Residual risk:</em> the attempt itself reveals our endpoint
+  structure. Mitigation: we don't consider <code>forge.relops.mozilla.com</code>
+  itself secret; its existence is in DNS.
+</p>
+
+<h3>T3: Attacker who compromises a worker as root</h3>
+
+<p>
+  <strong>Mitigation: the cert grants no privilege the attacker doesn't
+  already have.</strong> Root on a worker can read
+  <code>/root/vault.yaml</code> (Linux) or
+  <code>/var/root/vault.yaml</code> (macOS) directly — that's how puppet
+  reads it too. The cert lets the attacker re-fetch that same vault.yaml
+  from the broker. There's no escalation.
+</p>
+<p>
+  On macOS specifically, the cert's private key is <em>not</em>
+  exfiltrable — the keychain ACL prevents export. The attacker can use
+  the cert on that host but can't take it elsewhere.
+</p>
+<p>
+  On Linux, the PEM key is on disk and the attacker can copy it. They
+  can then use it from elsewhere to fetch the same role's vault.yaml.
+  But they need to also be on the Cloud Armor allowlist
+  (<code>63.245.209.101/32</code>), so this only works if the attack
+  pivots to a system on MDC1 first.
+</p>
+<p>
+  <em>Residual risk:</em> Linux key portability. Could be addressed with
+  TPM-backed key storage, deferred (see <a href="#linux">section 6</a>).
+</p>
+
+<h3>T4: Attacker who steals the SCEP challenge</h3>
+
+<p>
+  <strong>Mitigation: Cloud Armor + per-role-binding.</strong> Even with
+  the challenge, an attacker needs to be on the MDC1 source-IP
+  allowlist to talk to the SCEP enrollment endpoint. If they are on
+  MDC1 and have the challenge, they can mint a cert claiming any role
+  whose provisioner uses the same challenge — and then use that cert to
+  fetch any role's vault.yaml.
+</p>
+<p>
+  <em>Residual risk:</em> this is the single biggest exposure in the
+  current design. The challenge lives in (a) GCP Secret Manager (read
+  by operators via gcloud auth), (b) SimpleMDM's profile delivery
+  system (read by mdmclient on each device, embedded in the
+  mobileconfig). A compromise of either Mozilla's GCP IAM or SimpleMDM's
+  profile storage exposes this. Mitigations available but not yet
+  implemented: per-role challenges (currently we share one), short-TTL
+  challenges that rotate (step-ca supports this), moving Linux
+  enrollment to a JWT-token-based provisioner where the token is
+  signed by a key only the operator's gcloud auth can reach.
+</p>
+
+<h3>T5: Attacker who compromises the broker</h3>
+
+<p>
+  <strong>Mitigation: the broker's IAM is scoped to read
+  <code>vault-*</code> secrets only.</strong> The broker SA cannot read
+  any other Secret Manager secret, cannot read Cloud Storage, cannot
+  modify GCP resources, cannot reach the step-ca VM. Compromise gives
+  the attacker the ability to read all <code>vault-*</code> secrets —
+  every role's vault.yaml. That's significant: it includes every role's
+  taskcluster access token, every cltbld password, etc.
+</p>
+<p>
+  <em>Residual risk:</em> "read all vault-* secrets" is real. We
+  mitigate <em>how easy</em> a compromise is by keeping the broker
+  surface area tiny (it's ~150 lines of FastAPI; no crypto code; no
+  user input parsing beyond the URL path), but we do not mitigate
+  the consequence. This is the same blast radius as compromising
+  operator 1Password access, which RelOps has lived with for years.
+</p>
+
+<h3>T6: Attacker who compromises step-ca</h3>
+
+<p>
+  <strong>This is the worst case.</strong> An attacker who runs
+  arbitrary code on the step-ca VM can mint certs for any role, use
+  them to read any vault.yaml, and arguably do worse — they could
+  issue certs that are themselves trust anchors for downstream attacks.
+</p>
+<p>
+  <em>Mitigations:</em> step-ca VM has no public ingress except the LB.
+  Admin SSH requires Google IAP + IAM grant in the
+  <code>relops-bootstrap</code> project. The OS disk is encrypted at
+  rest by GCP. The intermediate signing key is encrypted at rest within
+  the VM behind a password loaded from
+  <code>/home/step/.step/secrets/password</code>, which is only readable
+  by the <code>step</code> service user.
+</p>
+<p>
+  <em>Residual risk:</em> if a Mozilla GCP admin's account is fully
+  compromised, the attacker can SSH to step-ca and read the key. This is
+  the same trust we already place in GCP admins across the entire
+  Mozilla cloud footprint — we don't have a special defense against it
+  here, and we don't pretend to.
+</p>
+
+<h3>T7: Attacker who compromises an operator's laptop</h3>
+
+<p>
+  An operator with a compromised laptop is, today, also an operator
+  with 1Password access (which is the baseline). Our system doesn't
+  make this worse: the attacker gets the operator's gcloud auth, which
+  lets them read GCP Secret Manager, which gives them the SCEP challenge
+  and the role secrets. The same compromise gave them 1Password vault
+  access anyway. No regression.
+</p>
+
+<h3>The summary table</h3>
+
+<table>
+  <thead><tr><th>Threat</th><th>Outcome</th><th>Worse or better than the previous (operator-SCP) model?</th></tr></thead>
+  <tbody>
+    <tr><td>Random internet attacker</td><td>blocked at Cloud Armor</td><td>same (no exposure before either)</td></tr>
+    <tr><td>MDC1 attacker, no cert</td><td>401, audited</td><td>better (audit trail; previously unobserved)</td></tr>
+    <tr><td>Worker root compromise</td><td>reads vault.yaml on that host</td><td>same (vault.yaml was already root-readable)</td></tr>
+    <tr><td>SCEP challenge leak</td><td>can enroll certs from MDC1</td><td>worse (new attack surface) — mitigated by Cloud Armor but real</td></tr>
+    <tr><td>Broker compromise</td><td>reads all vault-* secrets</td><td>same blast radius as 1P operator access</td></tr>
+    <tr><td>step-ca compromise</td><td>can mint any cert</td><td>new and worse — but mitigated by VM isolation</td></tr>
+    <tr><td>Operator laptop compromise</td><td>has gcloud + 1P access</td><td>same as before</td></tr>
+  </tbody>
+</table>
+
+<p>
+  Net assessment: the new system trades one fairly small new exposure
+  (SCEP challenge as a single point of failure) for several substantial
+  operational and security improvements (audit trail, automation,
+  removal of the "operator with a YAML on their laptop" chokepoint).
+  We think the tradeoff is favorable, especially given the challenge
+  surface is small and operational mitigations exist.
+</p>
+
+<h2 id="ops"><span class="num">9</span>Operational reality: how operators actually use this</h2>
+
+<h3>The macOS provisioning experience</h3>
+
+<p>
+  Operator clicks "Erase All Content and Settings" on a worker in the
+  SimpleMDM dashboard. The device wipes. DEP re-enrollment kicks in.
+  SimpleMDM pushes the assigned profiles, including
+  <code>Dev - SCEP</code>. <code>mdmclient</code> enrolls a fresh cert
+  into the System keychain. The SimpleMDM bootstrap script-job (which we
+  drafted in
+  <code>scripts/simplemdm-m4-no-sip-bootstrap.sh</code>) runs as root.
+  It auto-grants the SecureToken to the admin user via the Bootstrap
+  Token (covered briefly below), then runs
+  <code>CURL_SSL_BACKEND=securetransport curl --cert "&lt;CN&gt;" ...</code>
+  to fetch <code>/var/root/vault.yaml</code>. It clones the appropriate
+  ronin_puppet branch, installs a reboot-survivable
+  <code>com.mozilla.m4-bootstrap</code> LaunchDaemon that runs
+  <code>run-puppet.sh</code> via <code>ssh root@localhost</code> until
+  the safari semaphores fire. Once they do, the daemon writes a
+  sentinel, kicks the worker-runner trigger, and removes itself.
+</p>
+
+<p>
+  Total operator touches: one click on EACS. Optionally, one SSH login
+  if the Bootstrap Token isn't already escrowed (rare, only on certain
+  pre-existing state). The entire flow from EACS click to "worker
+  registered in Taskcluster" is roughly 30-45 minutes wall-clock; most
+  of that is puppet doing real installation work, not our bootstrap.
+</p>
+
+<h3>The Linux provisioning experience</h3>
+
+<pre><code><span class="comment"># operator terminal, MDC1-accessible laptop</span>
+<span class="keyword">export</span> RELOPS_BOOTSTRAP_REPO=~/git/relops-bootstrap
+<span class="keyword">cd</span> ~/git/ronin_puppet/provisioners/linux
+./deliver_linux.sh worker-04.mdc1.mozops.net gecko_t_linux_2404_talos
+
+<span class="comment"># script handles: SCEP enrollment locally, scp cert to host,</span>
+<span class="comment"># scp bootstrap_linux.sh, kick the bootstrap. Operator watches.</span>
+</code></pre>
+
+<p>
+  Total operator touches: one command. The operator's laptop needs
+  <code>sscep</code> installed (brew or apt) and the relops-bootstrap
+  repo cloned somewhere.
+</p>
+
+<h3>What failure looks like</h3>
+
+<p>
+  Some realistic failures and what they look like to an operator:
+</p>
+
+<table>
+  <thead><tr><th>Symptom</th><th>What's broken</th><th>How to debug</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Bootstrap script-job logs <code>fetch_vault_yaml_via_mtls: HTTP 401</code></td>
+      <td>The cert isn't in the keychain (macOS), or the cert chain didn't validate at the LB</td>
+      <td>SSH to worker; <code>security find-identity -v</code>; <code>openssl x509 -in &lt;cert&gt; -noout -text</code> to confirm SAN URI shape</td>
+    </tr>
+    <tr>
+      <td><code>HTTP 403, "cert is authorized for role X, not Y"</code></td>
+      <td>The cert's role doesn't match the URL path role</td>
+      <td>Check <code>/etc/puppet_role</code> on the worker vs the SimpleMDM device group assignment</td>
+    </tr>
+    <tr>
+      <td><code>HTTP 500, "secret unavailable"</code></td>
+      <td>The Secret Manager secret for that role has no version</td>
+      <td>Run <code>gcloud secrets versions list vault-&lt;role&gt;</code> from the operator laptop. If empty: populate from 1P.</td>
+    </tr>
+    <tr>
+      <td>Worker hangs at "Waiting for SCEP cert in System keychain..."</td>
+      <td>SimpleMDM hasn't pushed the SCEP profile (or device isn't in the right group), or mdmclient hasn't enrolled yet</td>
+      <td>Check SimpleMDM device group assignment; <code>sudo profiles list</code> on the worker to see installed profiles</td>
+    </tr>
+    <tr>
+      <td>SecureTransport curl: <code>SSL handshake failed</code></td>
+      <td>Either the cert chain doesn't validate at the LB (Trust Config mismatch?) or LibreSSL is intercepting the cert reference because <code>CURL_SSL_BACKEND</code> isn't set</td>
+      <td>Confirm env var; check <code>curl -V</code> shows <code>SecureTransport</code> as a backend</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>The Bootstrap Token thing (macOS specific)</h3>
+
+<p>
+  Briefly worth knowing: Apple Silicon devices have a concept called
+  the <em>Bootstrap Token</em> (BST), separate from SecureToken,
+  separate from FileVault. The BST is generated by macOS the first time
+  a SecureToken-eligible user logs in interactively, and is escrowed to
+  the MDM so that MDM can subsequently grant SecureToken to other users
+  programmatically.
+</p>
+
+<p>
+  Our SimpleMDM bootstrap script calls
+  <code>sysadminctl -secureTokenOn admin -password admin</code>, which
+  (on macOS 12.4+) automatically uses the escrowed BST to grant
+  SecureToken to admin without requiring another SecureToken user's
+  credentials. This is the standard way to get the admin user into a
+  state where it can manage FileVault and other privileged things later
+  on. Empirically: <em>BST generation</em> happens automatically on
+  first console login or SSH login, but <em>BST escrow to MDM</em> can
+  be in a separate state; the script explicitly calls
+  <code>profiles install -type bootstraptoken</code> to force the
+  escrow if it hasn't happened. This wasn't quite obvious from Apple's
+  docs and bit us empirically — see the
+  <code>feedback_apple_silicon_bst_escrow</code> memory if you've
+  forgotten.
+</p>
+
+<h2 id="future"><span class="num">10</span>Open questions and follow-ups</h2>
+
+<p>
+  Things we know we should think about, in roughly priority order:
+</p>
+
+<ul>
+  <li><strong>Per-role SCEP challenges.</strong> Currently all provisioners share one challenge. Splitting them would limit blast radius of a leak. step-ca supports per-provisioner challenges natively; the lift is rotating the challenge in SimpleMDM profiles + Secret Manager.</li>
+  <li><strong>Challenge rotation.</strong> The challenge is currently static. Rotating it on a schedule (e.g. monthly) would meaningfully reduce the risk of an undetected long-term leak. SimpleMDM profile updates can re-deliver it.</li>
+  <li><strong>CRL / revocation.</strong> Not currently implemented. step-ca supports CRL endpoints; the broker would need to fetch + cache the CRL and check incoming cert serials. Cert lifetimes are 24 hours so revocation gets you ~half a day of reduction in window of misuse — not zero but not nothing.</li>
+  <li><strong>Hardware-bound keys.</strong> macOS: blocked by Apple's <code>com.apple.identities</code> entitlement model; revisit if Apple loosens it. Linux: feasible via TPM 2.0; not currently a priority.</li>
+  <li><strong>Per-role expansion.</strong> r8, staging, catalina (macOS) and the remaining Linux roles each need a step-ca SCEP provisioner + SimpleMDM SCEP profile + populated Secret Manager secret. Mechanical follow-up work; ~30 min per role.</li>
+  <li><strong>Windows hardware support.</strong> Same architecture would work natively on Windows (native cert store, <code>Invoke-RestMethod -Certificate</code>, or <code>curl.exe --cert</code>). Pending finding where the existing Windows bootstrap.ps1 lives — it's not in ronin_puppet.</li>
+  <li><strong>Audit dashboard.</strong> Cloud Audit Logs has everything but a per-role/per-host view requires querying. A small page in <a href="https://github.com/mozilla-platform-ops/hangar">hangar</a> would surface this nicely.</li>
+</ul>
+
+<h2 id="glossary"><span class="num">11</span>Glossary</h2>
+
+<dl class="glossary">
+  <dt>ACME</dt>
+  <dd>Automatic Certificate Management Environment, the protocol Let's Encrypt uses (RFC 8555). step-ca supports it; we briefly tried it for macOS enrollment with Apple device attestation before hitting the keychain access group wall.</dd>
+
+  <dt>BST (Bootstrap Token)</dt>
+  <dd>A per-Apple-Silicon-device token generated at first SecureToken-eligible login, escrowed to MDM, used to grant SecureToken to other users programmatically. Distinct from but related to FileVault setup.</dd>
+
+  <dt>Cloud Armor</dt>
+  <dd>GCP's WAF / source-CIDR allowlist service that sits in front of HTTPS LBs. We use it as our outer perimeter — only the MDC1 NAT egress IP is allowed.</dd>
+
+  <dt>cltbld</dt>
+  <dd>The CI build/test user on a worker. Created by puppet; gets the cltbld_user credentials from vault.yaml; runs the actual Taskcluster generic-worker process.</dd>
+
+  <dt>CSR (Certificate Signing Request)</dt>
+  <dd>The thing a client sends to a CA when it wants a cert. Contains the public key (the CA signs this), a proposed subject, and (in SCEP's case) a <code>challengePassword</code> attribute for authentication.</dd>
+
+  <dt>EACS</dt>
+  <dd>"Erase All Content and Settings" — Apple's mechanism to factory-reset a Mac while preserving DEP enrollment. Our primary tool for re-provisioning workers.</dd>
+
+  <dt>Hiera</dt>
+  <dd>Puppet's hierarchical data-lookup system. Reads YAML files in a configured hierarchy (e.g. <code>roles/&lt;role&gt;.yaml</code> then <code>os/&lt;os&gt;.yaml</code> then <code>common.yaml</code>). Our vault.yaml lives in this hierarchy at the highest priority.</dd>
+
+  <dt>IAP (Identity-Aware Proxy)</dt>
+  <dd>GCP's authenticated proxy for SSH access to VMs without exposing port 22 publicly. We use it for step-ca admin access.</dd>
+
+  <dt>mdmclient</dt>
+  <dd>Apple's MDM client daemon on macOS. Receives profiles from the MDM server (SimpleMDM in our case), installs them, runs the SCEP enrollment flow when a SCEP profile is delivered.</dd>
+
+  <dt>mTLS (mutual TLS)</dt>
+  <dd>TLS where both the server and the client present and verify certificates. Standard TLS authenticates only the server; mTLS authenticates the client too. We use it at the LB.</dd>
+
+  <dt>PEM</dt>
+  <dd>The base64-encoded-with-headers format for X.509 certificates and private keys. <code>-----BEGIN CERTIFICATE-----</code> ... <code>-----END CERTIFICATE-----</code>. Linux workers store their cert + key as PEM files at <code>/etc/relops-bootstrap/</code>.</dd>
+
+  <dt>PKI (Public Key Infrastructure)</dt>
+  <dd>The umbrella term for the system of CAs, certs, signatures, and validation rules that lets parties trust each other's certificates. Our step-ca + Trust Config + per-host certs are the PKI here.</dd>
+
+  <dt>SCEP (Simple Certificate Enrollment Protocol)</dt>
+  <dd>RFC 8894. The protocol Apple's mdmclient natively speaks for cert enrollment when given a <code>com.apple.security.scep</code> profile. step-ca supports it.</dd>
+
+  <dt>SecureToken</dt>
+  <dd>An Apple Silicon attribute on a user account that grants them the ability to unlock FileVault and access certain hardware-backed crypto. SecureToken is granted at first interactive login or via BST.</dd>
+
+  <dt>SecureTransport</dt>
+  <dd>Apple's (deprecated but still functional) TLS library, used by macOS's <code>curl</code> as one of its backends. Has the unique property of being able to use keychain identities by Common Name. The load-bearing piece for our macOS mTLS flow.</dd>
+
+  <dt>SimpleMDM</dt>
+  <dd>The MDM SaaS Mozilla RelOps uses for macOS device management. Pushes profiles to devices, runs script-jobs at first boot, manages enrollment.</dd>
+
+  <dt>SPIFFE URI</dt>
+  <dd>A URI scheme for naming workloads (<code>spiffe://&lt;trust-domain&gt;/&lt;path&gt;</code>). We use it in the cert SAN to bind a cert to a single puppet role: <code>spiffe://relops.mozilla/host/&lt;CN&gt;/role/&lt;puppet-role&gt;</code>.</dd>
+
+  <dt>sscep</dt>
+  <dd>An open-source SCEP client CLI. Used on the operator's laptop to enroll a Linux worker's cert.</dd>
+
+  <dt>step-ca</dt>
+  <dd>An open-source ACME / SCEP / JWT-token-based certificate authority, by Smallstep. We run it on a GCE VM as our CA for relops-bootstrap.</dd>
+
+  <dt>Trust Config</dt>
+  <dd>A GCP Certificate Manager resource that lists the trust anchors (and optional intermediates) the HTTPS LB will accept for mTLS client cert validation. Ours contains the step-ca root + intermediate.</dd>
+
+  <dt>vault.yaml</dt>
+  <dd>The per-puppet-role secrets file. Hiera reads it. Contains taskcluster_access_token, cltbld_user.password (hashed and plaintext), bugzilla_api_key, livelog_secret, etc. The thing this entire system exists to deliver.</dd>
+</dl>
+
+<hr>
+
+<footer>
+  <p>
+    Companion docs:
+    <a href="https://mozilla-platform-ops.github.io/relops-bootstrap/">architecture overview</a> ·
+    <a href="https://github.com/mozilla-platform-ops/relops-bootstrap">source</a> ·
+    <a href="https://github.com/mozilla-platform-ops/ronin_puppet/pull/1253">Linux integration PR</a>
+  </p>
+  <p>
+    If you find anything in here that's wrong, unclear, or missing, please flag
+    it — this document only stays useful if it gets corrected as the system
+    evolves.
+  </p>
+</footer>
+
+</div>
+</body>
+</html>
