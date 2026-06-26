@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>relops-bootstrap — Path C architecture</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2128;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --mac: #ff8e3c;
+    --linux: #a371f7;
+    --gcp: #56d364;
+    --warn: #e3b341;
+    --shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    line-height: 1.55;
+  }
+  .container { max-width: 1200px; margin: 0 auto; padding: 48px 24px 96px; }
+  header { margin-bottom: 48px; }
+  .eyebrow {
+    color: var(--accent);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  h1 {
+    font-size: 38px;
+    font-weight: 700;
+    margin: 0 0 10px;
+    background: linear-gradient(90deg, var(--mac), var(--accent), var(--linux));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -0.01em;
+  }
+  .subtitle { color: var(--text-dim); font-size: 17px; max-width: 720px; }
+  h2 {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 48px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 { font-size: 16px; font-weight: 600; margin: 24px 0 12px; color: var(--text); }
+  p { margin: 12px 0; color: var(--text); }
+  .dim { color: var(--text-dim); font-size: 15px; }
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+    background: var(--panel-2);
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: #ffb86c;
+  }
+  .diagram {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: var(--shadow);
+    overflow: auto;
+  }
+  .legend {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  .legend span::before {
+    content: "";
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    margin-right: 6px;
+    vertical-align: -2px;
+  }
+  .legend .mac::before { background: var(--mac); }
+  .legend .linux::before { background: var(--linux); }
+  .legend .gcp::before { background: var(--gcp); }
+  .legend .common::before { background: var(--accent); }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin: 16px 0;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    padding: 18px 20px;
+  }
+  .card.mac { border-left-color: var(--mac); }
+  .card.linux { border-left-color: var(--linux); }
+  .card.gcp { border-left-color: var(--gcp); }
+  .card h3 { margin-top: 0; }
+  .card ol, .card ul { padding-left: 22px; margin: 8px 0; }
+  .card li { margin: 6px 0; font-size: 14.5px; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 14.5px;
+    vertical-align: top;
+  }
+  th { background: var(--panel-2); color: var(--text-dim); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
+  tr:last-child td { border-bottom: none; }
+  .col-mac { color: var(--mac); font-weight: 600; }
+  .col-linux { color: var(--linux); font-weight: 600; }
+  .col-gcp { color: var(--gcp); font-weight: 600; }
+
+  .status-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 12px;
+    align-items: center;
+    padding: 14px 18px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 10px;
+  }
+  .pill {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 999px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .pill.done { background: rgba(86,211,100,0.15); color: var(--gcp); border: 1px solid rgba(86,211,100,0.4); }
+  .pill.test { background: rgba(227,179,65,0.15); color: var(--warn); border: 1px solid rgba(227,179,65,0.4); }
+  .pill.next { background: rgba(88,166,255,0.15); color: var(--accent); border: 1px solid rgba(88,166,255,0.4); }
+
+  .callout {
+    background: linear-gradient(135deg, rgba(88,166,255,0.08), rgba(163,113,247,0.08));
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin: 24px 0;
+  }
+  .callout h3 { margin-top: 0; color: var(--accent); }
+
+  footer {
+    margin-top: 64px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 13px;
+    text-align: center;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  /* SVG specific */
+  svg text { font-family: inherit; }
+  .box-mac { fill: rgba(255,142,60,0.12); stroke: var(--mac); }
+  .box-linux { fill: rgba(163,113,247,0.12); stroke: var(--linux); }
+  .box-gcp { fill: rgba(86,211,100,0.08); stroke: var(--gcp); }
+  .box-common { fill: rgba(88,166,255,0.08); stroke: var(--accent); }
+  .arrow-mac { stroke: var(--mac); fill: var(--mac); }
+  .arrow-linux { stroke: var(--linux); fill: var(--linux); }
+  .arrow-common { stroke: var(--accent); fill: var(--accent); }
+  .label { fill: var(--text); font-size: 12.5px; font-weight: 500; }
+  .label-small { fill: var(--text-dim); font-size: 11px; }
+  .label-bold { fill: var(--text); font-size: 13.5px; font-weight: 700; }
+  .label-mac { fill: var(--mac); font-weight: 700; }
+  .label-linux { fill: var(--linux); font-weight: 700; }
+  .label-gcp { fill: var(--gcp); font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <div class="eyebrow">mozilla-platform-ops/relops-bootstrap</div>
+  <h1>Path C — automated vault.yaml delivery for RelOps workers</h1>
+  <p class="subtitle">
+    Step-ca-issued client certs + mTLS at a GCP HTTPS LB replace the
+    operator's hand-dropped <code>vault.yaml</code> with a brokered
+    Secret Manager fetch. Same primitive on macOS hardware (m4/r8) and
+    Linux hardware (talos/netperf).
+  </p>
+</header>
+
+<h2>End-to-end architecture</h2>
+<div class="diagram">
+<svg viewBox="0 0 1200 740" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block;">
+  <defs>
+    <marker id="arrow-mac" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-mac"/>
+    </marker>
+    <marker id="arrow-linux" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-linux"/>
+    </marker>
+    <marker id="arrow-common" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-common"/>
+    </marker>
+  </defs>
+
+  <!-- macOS worker column -->
+  <g>
+    <rect x="20" y="20" width="320" height="700" rx="12" class="box-mac" stroke-width="2"/>
+    <text x="180" y="48" text-anchor="middle" class="label-mac" style="font-size:16px;">macOS m4 / r8 hardware</text>
+    <text x="180" y="64" text-anchor="middle" class="label-small">SimpleMDM-managed</text>
+
+    <!-- SimpleMDM block -->
+    <rect x="40" y="90" width="280" height="130" rx="8" fill="rgba(255,142,60,0.20)" stroke="none"/>
+    <text x="56" y="115" class="label-bold">① SimpleMDM enrollment</text>
+    <text x="56" y="138" class="label">DEP enroll → SimpleMDM pushes:</text>
+    <text x="68" y="158" class="label">• <tspan font-weight="600">Dev - SCEP</tspan> profile</text>
+    <text x="68" y="175" class="label">• <tspan font-weight="600">Bootstrap Script</tspan> job</text>
+    <text x="68" y="192" class="label">• 11 other config profiles</text>
+    <text x="56" y="212" class="label-small">mdmclient enrolls the SCEP cert</text>
+
+    <!-- Keychain block -->
+    <rect x="40" y="240" width="280" height="125" rx="8" fill="rgba(255,142,60,0.20)" stroke="none"/>
+    <text x="56" y="265" class="label-bold">② Cert in System keychain</text>
+    <text x="56" y="288" class="label">CN = hostname, SAN URI =</text>
+    <text x="56" y="306" class="label-small" style="font-size:11px;">spiffe://relops.mozilla/host/&lt;CN&gt;/role/&lt;role&gt;</text>
+    <text x="56" y="332" class="label">Key ACL grants signing to</text>
+    <text x="56" y="349" class="label">OS network stack only</text>
+    <text x="56" y="361" class="label-small">(nehelper, configd, IKEv2…)</text>
+
+    <!-- Script-job fetch -->
+    <rect x="40" y="385" width="280" height="155" rx="8" fill="rgba(255,142,60,0.20)" stroke="none"/>
+    <text x="56" y="410" class="label-bold">③ Bootstrap Script-job</text>
+    <text x="56" y="432" class="label-small mono" style="font-size:10.5px;">CURL_SSL_BACKEND=securetransport \</text>
+    <text x="56" y="448" class="label-small mono" style="font-size:10.5px;">  curl --cert "&lt;CN&gt;" \</text>
+    <text x="56" y="464" class="label-small mono" style="font-size:10.5px;">  forge.relops.mozilla.com \</text>
+    <text x="56" y="480" class="label-small mono" style="font-size:10.5px;">    /secret/&lt;role&gt;</text>
+    <text x="56" y="504" class="label">TLS handshake signed inside</text>
+    <text x="56" y="521" class="label">SecureTransport (in allow-list)</text>
+    <text x="56" y="535" class="label-small">— our shell never touches the key</text>
+
+    <!-- Result -->
+    <rect x="40" y="560" width="280" height="125" rx="8" fill="rgba(255,142,60,0.20)" stroke="none"/>
+    <text x="56" y="585" class="label-bold">④ /var/root/vault.yaml</text>
+    <text x="56" y="608" class="label">→ ronin_puppet apply</text>
+    <text x="56" y="626" class="label-small">(hiera reads it via</text>
+    <text x="56" y="641" class="label-small mono" style="font-size:10.5px;"> data/secrets/vault.yaml)</text>
+    <text x="56" y="663" class="label">⇒ Worker registers in</text>
+    <text x="56" y="680" class="label">Taskcluster ✓</text>
+  </g>
+
+  <!-- GCP infrastructure column (center) -->
+  <g>
+    <rect x="380" y="20" width="440" height="700" rx="12" class="box-gcp" stroke-width="2"/>
+    <text x="600" y="48" text-anchor="middle" class="label-gcp" style="font-size:16px;">GCP project: relops-bootstrap</text>
+    <text x="600" y="64" text-anchor="middle" class="label-small">forge.relops.mozilla.com</text>
+
+    <!-- HTTPS LB -->
+    <rect x="400" y="90" width="400" height="150" rx="8" fill="rgba(86,211,100,0.16)" stroke="none"/>
+    <text x="600" y="115" text-anchor="middle" class="label-bold">🛡️ HTTPS Load Balancer</text>
+    <text x="600" y="138" text-anchor="middle" class="label-small">Cloud Armor (MDC1 source-CIDR allowlist)</text>
+    <text x="600" y="156" text-anchor="middle" class="label">Trust Config = step-ca root + intermediate</text>
+    <text x="600" y="174" text-anchor="middle" class="label-small">Server TLS Policy: ALLOW_INVALID_OR_MISSING</text>
+    <text x="600" y="195" text-anchor="middle" class="label-small">(so /scep/* still works without a cert)</text>
+    <text x="600" y="218" text-anchor="middle" class="label-small">Forwards X-Client-Cert-{Present,Chain-Verified,Leaf,Serial,SPIFFE}</text>
+
+    <!-- step-ca -->
+    <rect x="400" y="260" width="180" height="195" rx="8" fill="rgba(86,211,100,0.16)" stroke="none"/>
+    <text x="490" y="285" text-anchor="middle" class="label-bold">🪪 step-ca</text>
+    <text x="490" y="302" text-anchor="middle" class="label-small">GCE VM, zonal NEG</text>
+    <text x="490" y="324" text-anchor="middle" class="label">SCEP provisioners,</text>
+    <text x="490" y="340" text-anchor="middle" class="label">one per role:</text>
+    <text x="416" y="360" class="label-small mono" style="font-size:10px;">scep-no-sip</text>
+    <text x="416" y="375" class="label-small mono" style="font-size:10px;">scep-gecko-t-linux-talos</text>
+    <text x="416" y="390" class="label-small mono" style="font-size:10px;">scep-gecko-t-linux-2204-talos</text>
+    <text x="416" y="405" class="label-small mono" style="font-size:10px;">scep-gecko-t-linux-2404-talos</text>
+    <text x="416" y="420" class="label-small mono" style="font-size:10px;">scep-gecko-t-linux-2404-…-wayland</text>
+    <text x="416" y="435" class="label-small mono" style="font-size:10px;">scep-gecko-t-linux-netperf</text>
+    <text x="416" y="450" class="label-small mono" style="font-size:10px;">scep-gecko-t-linux-2404-netperf</text>
+
+    <!-- vault-broker -->
+    <rect x="600" y="260" width="200" height="195" rx="8" fill="rgba(86,211,100,0.16)" stroke="none"/>
+    <text x="700" y="285" text-anchor="middle" class="label-bold">📜 vault-broker</text>
+    <text x="700" y="302" text-anchor="middle" class="label-small">Cloud Run, serverless NEG</text>
+    <text x="700" y="324" text-anchor="middle" class="label">FastAPI service:</text>
+    <text x="615" y="345" class="label-small">• Parses X-Client-Cert-Leaf</text>
+    <text x="615" y="362" class="label-small">• URL-decodes SPIFFE URI</text>
+    <text x="615" y="379" class="label-small">• Checks role == URL path</text>
+    <text x="615" y="396" class="label-small">• Rate-limits per cert serial</text>
+    <text x="615" y="413" class="label-small">• Logs every read to</text>
+    <text x="625" y="427" class="label-small">Cloud Audit Logs</text>
+    <text x="700" y="448" text-anchor="middle" class="label-small" style="font-style:italic">reads ↓</text>
+
+    <!-- Secret Manager -->
+    <rect x="400" y="475" width="400" height="210" rx="8" fill="rgba(86,211,100,0.16)" stroke="none"/>
+    <text x="600" y="500" text-anchor="middle" class="label-bold">🔐 Secret Manager</text>
+    <text x="600" y="520" text-anchor="middle" class="label-small">Per-role IAM binding to broker SA</text>
+    <text x="600" y="544" text-anchor="middle" class="label">vault-&lt;role&gt; secret per puppet role</text>
+    <text x="416" y="568" class="label-small mono">vault-gecko_t_osx_1500_m4</text>
+    <text x="416" y="585" class="label-small mono">vault-gecko_t_osx_1500_m4_no_sip</text>
+    <text x="416" y="602" class="label-small mono">vault-gecko_t_osx_1500_m4_staging</text>
+    <text x="416" y="619" class="label-small mono">vault-gecko_t_osx_1400_r8</text>
+    <text x="416" y="636" class="label-small mono">vault-gecko_t_osx_1015</text>
+    <text x="416" y="653" class="label-small mono">vault-gecko_t_linux_…  (×6)</text>
+    <text x="600" y="676" text-anchor="middle" class="label-small">Content mirrors 1Password "RelOps Vault"</text>
+  </g>
+
+  <!-- Linux worker column -->
+  <g>
+    <rect x="860" y="20" width="320" height="700" rx="12" class="box-linux" stroke-width="2"/>
+    <text x="1020" y="48" text-anchor="middle" class="label-linux" style="font-size:16px;">Linux talos / netperf hardware</text>
+    <text x="1020" y="64" text-anchor="middle" class="label-small">operator-bootstrapped via SSH</text>
+
+    <!-- Operator action -->
+    <rect x="880" y="90" width="280" height="160" rx="8" fill="rgba(163,113,247,0.20)" stroke="none"/>
+    <text x="896" y="115" class="label-bold">① Operator runs deliver_linux.sh</text>
+    <text x="896" y="138" class="label-small">From the operator's laptop:</text>
+    <text x="896" y="156" class="label-small mono" style="font-size:10.5px;">export RELOPS_BOOTSTRAP_REPO=…</text>
+    <text x="896" y="172" class="label-small mono" style="font-size:10.5px;">./deliver_linux.sh &lt;host&gt; &lt;role&gt;</text>
+    <text x="896" y="196" class="label">Helper minted locally:</text>
+    <text x="896" y="214" class="label-small mono" style="font-size:10.5px;">mint-scep-cert.sh &lt;host&gt; &lt;role&gt;</text>
+    <text x="896" y="232" class="label-small">openssl req → sscep enroll</text>
+    <text x="896" y="246" class="label-small">(challenge from Secret Manager)</text>
+
+    <!-- /etc/relops-bootstrap on worker -->
+    <rect x="880" y="270" width="280" height="125" rx="8" fill="rgba(163,113,247,0.20)" stroke="none"/>
+    <text x="896" y="295" class="label-bold">② scp cert+key to worker</text>
+    <text x="896" y="320" class="label-small mono" style="font-size:11px;">/etc/relops-bootstrap/cert.pem</text>
+    <text x="896" y="338" class="label-small mono" style="font-size:11px;">/etc/relops-bootstrap/key.pem</text>
+    <text x="896" y="362" class="label-small">root:root 0600, dir 0700</text>
+    <text x="896" y="382" class="label">Operator's gcloud auth = gate</text>
+
+    <!-- bootstrap_linux.sh -->
+    <rect x="880" y="415" width="280" height="140" rx="8" fill="rgba(163,113,247,0.20)" stroke="none"/>
+    <text x="896" y="440" class="label-bold">③ bootstrap_linux.sh</text>
+    <text x="896" y="462" class="label-small">fetch_vault_yaml_via_mtls():</text>
+    <text x="896" y="481" class="label-small mono" style="font-size:10.5px;">curl --cert cert.pem \</text>
+    <text x="896" y="497" class="label-small mono" style="font-size:10.5px;">     --key  key.pem  \</text>
+    <text x="896" y="513" class="label-small mono" style="font-size:10.5px;">  forge.relops.mozilla.com \</text>
+    <text x="896" y="529" class="label-small mono" style="font-size:10.5px;">    /secret/&lt;role&gt;</text>
+    <text x="896" y="550" class="label-small">No keychain dance — plain PEM</text>
+
+    <!-- Result -->
+    <rect x="880" y="575" width="280" height="110" rx="8" fill="rgba(163,113,247,0.20)" stroke="none"/>
+    <text x="896" y="600" class="label-bold">④ /root/vault.yaml</text>
+    <text x="896" y="623" class="label">→ puppet apply runs as usual</text>
+    <text x="896" y="641" class="label-small">(hiera reads via</text>
+    <text x="896" y="656" class="label-small mono" style="font-size:10.5px;"> data/secrets/vault.yaml)</text>
+    <text x="896" y="678" class="label">⇒ Worker registers in TC ✓</text>
+  </g>
+
+  <!-- Arrows: mac → GCP -->
+  <path d="M 340 155 C 360 155, 380 155, 400 155" stroke-width="2" fill="none" class="arrow-mac" stroke="currentColor"
+        marker-end="url(#arrow-mac)" style="color: var(--mac);"/>
+  <text x="370" y="146" class="label-small" style="font-size:10.5px;" fill="#ff8e3c">SCEP enroll</text>
+
+  <path d="M 340 462 C 360 462, 380 350, 400 350" stroke-width="2" fill="none" class="arrow-mac" stroke="currentColor"
+        marker-end="url(#arrow-mac)" style="color: var(--mac);"/>
+  <text x="346" y="436" class="label-small" style="font-size:10.5px;" fill="#ff8e3c">mTLS GET</text>
+
+  <!-- Arrows: linux → GCP -->
+  <path d="M 880 170 C 860 170, 840 170, 800 170" stroke-width="2" fill="none" class="arrow-linux" stroke="currentColor"
+        marker-end="url(#arrow-linux)" style="color: var(--linux);"/>
+  <text x="816" y="162" class="label-small" style="font-size:10.5px;" fill="#a371f7">SCEP enroll</text>
+
+  <path d="M 880 495 C 855 495, 830 350, 800 350" stroke-width="2" fill="none" class="arrow-linux" stroke="currentColor"
+        marker-end="url(#arrow-linux)" style="color: var(--linux);"/>
+  <text x="836" y="464" class="label-small" style="font-size:10.5px;" fill="#a371f7">mTLS GET</text>
+</svg>
+
+<div class="legend">
+  <span class="mac">macOS path</span>
+  <span class="linux">Linux path</span>
+  <span class="gcp">shared GCP infrastructure</span>
+</div>
+</div>
+
+<h2>Same on both platforms</h2>
+<div class="grid-2">
+  <div class="card gcp">
+    <h3>Shared infrastructure</h3>
+    <ul>
+      <li><strong>One LB</strong> at <code>forge.relops.mozilla.com</code> validates every client cert chain via the same Trust Config</li>
+      <li><strong>One broker</strong> (Cloud Run) only sees X-Client-Cert-* headers — platform-agnostic</li>
+      <li><strong>One step-ca</strong> with per-role SCEP provisioners that stamp the same SPIFFE URI convention into every cert SAN</li>
+      <li><strong>One Secret Manager</strong> holds vault-&lt;role&gt; secrets; broker reads via per-secret IAM binding</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>SPIFFE URI convention</h3>
+    <p class="dim">Same SAN URI shape across all certs:</p>
+    <p><code>spiffe://relops.mozilla/host/&lt;CN&gt;/role/&lt;puppet-role&gt;</code></p>
+    <p class="dim">Broker URL-decodes (handles <code>Mac%20mini</code>), parses host + role, enforces role-match against URL path. Cert chain validation already happened at the LB.</p>
+  </div>
+</div>
+
+<h2>Where the platforms diverge</h2>
+<table>
+  <thead>
+    <tr><th></th><th><span class="col-mac">macOS</span></th><th><span class="col-linux">Linux</span></th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Cert delivery</strong></td>
+      <td>SimpleMDM pushes SCEP profile → mdmclient enrolls into System keychain</td>
+      <td>Operator's <code>mint-scep-cert.sh</code> → sscep → scp to worker</td>
+    </tr>
+    <tr>
+      <td><strong>Where the key lives</strong></td>
+      <td>macOS System keychain — ACL-restricted to OS network stack (configd, nehelper, NEIKEv2Provider)</td>
+      <td><code>/etc/relops-bootstrap/key.pem</code> on disk — root:root 0600</td>
+    </tr>
+    <tr>
+      <td><strong>TLS client invocation</strong></td>
+      <td><code>CURL_SSL_BACKEND=securetransport curl --cert "&lt;CN&gt;"</code><br><span class="dim">(SecureTransport looks up identity by Subject CN)</span></td>
+      <td><code>curl --cert cert.pem --key key.pem</code><br><span class="dim">(plain PEM, LibreSSL backend)</span></td>
+    </tr>
+    <tr>
+      <td><strong>vault.yaml destination</strong></td>
+      <td><code>/var/root/vault.yaml</code></td>
+      <td><code>/root/vault.yaml</code></td>
+    </tr>
+    <tr>
+      <td><strong>Run-puppet trigger</strong></td>
+      <td>SimpleMDM script-job installs <code>com.mozilla.m4-bootstrap</code> LaunchDaemon → loops run-puppet via ssh-to-localhost until safari semaphores fire</td>
+      <td><code>bootstrap_linux.sh</code> runs <code>puppet apply</code> directly in line</td>
+    </tr>
+    <tr>
+      <td><strong>Operator gate</strong></td>
+      <td>SimpleMDM ops + EACS click; one VNC/SSH login to seed BST if needed</td>
+      <td>Operator's gcloud auth (reads SCEP challenge from Secret Manager) + SSH to worker</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Trust chain</h2>
+<div class="diagram">
+<svg viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block;">
+  <defs>
+    <marker id="arrow-trust" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/>
+    </marker>
+  </defs>
+
+  <rect x="350" y="20" width="200" height="60" rx="8" fill="rgba(88,166,255,0.15)" stroke="#58a6ff" stroke-width="2"/>
+  <text x="450" y="46" text-anchor="middle" class="label-bold" style="font-size:14px;">step-ca root CA</text>
+  <text x="450" y="64" text-anchor="middle" class="label-small">self-signed, 10-year</text>
+
+  <path d="M 450 80 L 450 110" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow-trust)"/>
+
+  <rect x="320" y="115" width="260" height="60" rx="8" fill="rgba(88,166,255,0.15)" stroke="#58a6ff" stroke-width="2"/>
+  <text x="450" y="141" text-anchor="middle" class="label-bold" style="font-size:14px;">step-ca intermediate</text>
+  <text x="450" y="159" text-anchor="middle" class="label-small">signs every worker leaf</text>
+
+  <path d="M 320 175 C 250 175, 250 220, 250 240" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow-trust)"/>
+  <path d="M 580 175 C 650 175, 650 220, 650 240" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow-trust)"/>
+
+  <rect x="80" y="245" width="340" height="100" rx="8" class="box-mac" stroke-width="2"/>
+  <text x="250" y="271" text-anchor="middle" class="label-bold" style="font-size:13.5px;">macOS worker leaf</text>
+  <text x="250" y="291" text-anchor="middle" class="label-small">issued via SimpleMDM → mdmclient → SCEP</text>
+  <text x="250" y="309" text-anchor="middle" class="label-small">CN = <tspan font-family="monospace">"Mac mini"</tspan> (from %ComputerName%)</text>
+  <text x="250" y="327" text-anchor="middle" class="label-small">SAN: <tspan font-family="monospace" font-size="10px">spiffe://…/host/&lt;CN&gt;/role/&lt;role&gt;</tspan></text>
+
+  <rect x="480" y="245" width="340" height="100" rx="8" class="box-linux" stroke-width="2"/>
+  <text x="650" y="271" text-anchor="middle" class="label-bold" style="font-size:13.5px;">Linux worker leaf</text>
+  <text x="650" y="291" text-anchor="middle" class="label-small">issued via mint-scep-cert.sh → sscep → SCEP</text>
+  <text x="650" y="309" text-anchor="middle" class="label-small">CN = host's FQDN</text>
+  <text x="650" y="327" text-anchor="middle" class="label-small">SAN: <tspan font-family="monospace" font-size="10px">spiffe://…/host/&lt;CN&gt;/role/&lt;role&gt;</tspan></text>
+</svg>
+
+<p class="dim" style="margin-top: 12px;">
+  The LB's Trust Config contains the step-ca root + intermediate PEMs. Any leaf
+  step-ca issues — to any platform — chains correctly. The LB validates the
+  client cert chain on every mTLS request to <code>forge.relops.mozilla.com</code>.
+  <strong>Single trust anchor for the whole fleet.</strong>
+</p>
+</div>
+
+<h2>Current status</h2>
+
+<div class="status-row">
+  <span style="font-size:18px;">🍎</span>
+  <div>
+    <strong>macOS m4 — proven end-to-end on m4-81</strong>
+    <div class="dim" style="font-size:13px;">Fresh EACS → DEP enroll → SimpleMDM profiles → SCEP cert in keychain → script-job fetches vault.yaml → puppet bootstrap → worker registered in Taskcluster, autonomously.</div>
+  </div>
+  <span class="pill done">Live</span>
+</div>
+
+<div class="status-row">
+  <span style="font-size:18px;">🐧</span>
+  <div>
+    <strong>Linux talos — implementation complete</strong>
+    <div class="dim" style="font-size:13px;">Per-role step-ca SCEP provisioners stood up. Secret containers ready. <code>bootstrap_linux.sh</code> + <code>deliver_linux.sh</code> changes in ronin_puppet PR <a href="https://github.com/mozilla-platform-ops/ronin_puppet/pull/1253" style="color:var(--accent)">#1253</a>. Pending a real-host test from @aerickson before merge.</div>
+  </div>
+  <span class="pill test">Awaiting test</span>
+</div>
+
+<div class="status-row">
+  <span style="font-size:18px;">🍎</span>
+  <div>
+    <strong>macOS r8 / staging / catalina — per-role expansion</strong>
+    <div class="dim" style="font-size:13px;">Mechanical follow-up: one new step-ca SCEP provisioner + matching SimpleMDM SCEP profile per role + populate the corresponding Secret Manager secret. Architecture is set.</div>
+  </div>
+  <span class="pill next">Next</span>
+</div>
+
+<div class="status-row">
+  <span style="font-size:18px;">🪟</span>
+  <div>
+    <strong>Windows hardware — pending discovery</strong>
+    <div class="dim" style="font-size:13px;">Same architecture would work. Native Windows cert store + <code>Invoke-RestMethod -Certificate</code> or <code>curl.exe</code> for the mTLS step. Need to find where the existing Windows bootstrap.ps1 lives (not in ronin_puppet).</div>
+  </div>
+  <span class="pill next">Later</span>
+</div>
+
+<div class="callout">
+  <h3>What changed conceptually</h3>
+  <p>The vault.yaml itself didn't get any more or less sensitive. What changed is <em>who's allowed to put one on a worker</em>. Before: anyone with the 1Password vault entry and SSH access. After: only an authenticated MDM-enrolled (or operator-attested) host with a step-ca-issued, per-role-bound client cert. Every fetch is logged in Cloud Audit with the cert's serial number. The operator's job goes from <em>"SCP this file"</em> to <em>"click EACS in SimpleMDM"</em> (macOS) or <em>"run one command"</em> (Linux).</p>
+</div>
+
+<footer>
+  <p>
+    Generated 2026-06-26 ·
+    repos:
+    <a href="https://github.com/mozilla-platform-ops/relops-bootstrap">mozilla-platform-ops/relops-bootstrap</a> ·
+    <a href="https://github.com/mozilla-platform-ops/ronin_puppet">mozilla-platform-ops/ronin_puppet</a>
+  </p>
+</footer>
+
+</div>
+</body>
+</html>
