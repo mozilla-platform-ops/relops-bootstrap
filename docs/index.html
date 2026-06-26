@@ -170,6 +170,62 @@
   }
   .callout h3 { margin-top: 0; color: var(--accent); }
 
+  .repo-link {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px dashed transparent;
+    transition: border-bottom-color 0.15s;
+  }
+  .repo-link:hover { border-bottom-color: var(--accent); }
+  .meta {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 18px;
+    font-size: 14px;
+    color: var(--text-dim);
+  }
+  .meta a {
+    color: var(--accent);
+    text-decoration: none;
+    padding: 6px 14px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--panel);
+    transition: border-color 0.15s, background 0.15s;
+    white-space: nowrap;
+  }
+  .meta a:hover { border-color: var(--accent); background: var(--panel-2); }
+  .meta .icon { margin-right: 4px; }
+  .meta .sep { color: var(--border); }
+
+  .cta {
+    background: linear-gradient(135deg, rgba(255,142,60,0.10), rgba(163,113,247,0.10));
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin: 36px 0 8px;
+    text-align: center;
+  }
+  .cta h3 { color: var(--text); margin: 0 0 8px; font-size: 19px; }
+  .cta p { color: var(--text-dim); margin: 6px 0 18px; max-width: 700px; margin-left: auto; margin-right: auto; }
+  .cta-buttons { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .cta-buttons a {
+    color: var(--text);
+    text-decoration: none;
+    padding: 10px 22px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+    font-weight: 600;
+    font-size: 14px;
+    transition: border-color 0.15s, background 0.15s, transform 0.1s;
+  }
+  .cta-buttons a:hover { border-color: var(--accent); background: var(--panel-2); transform: translateY(-1px); }
+  .cta-buttons a.primary { background: var(--accent); color: #0e1116; border-color: var(--accent); }
+  .cta-buttons a.primary:hover { background: #79b8ff; border-color: #79b8ff; }
+
   footer {
     margin-top: 64px;
     padding-top: 24px;
@@ -209,7 +265,11 @@
 <div class="container">
 
 <header>
-  <div class="eyebrow">mozilla-platform-ops/relops-bootstrap</div>
+  <div class="eyebrow">
+    <a href="https://github.com/mozilla-platform-ops/relops-bootstrap" class="repo-link" style="color: inherit;">
+      mozilla-platform-ops/relops-bootstrap
+    </a>
+  </div>
   <h1>Automated vault.yaml delivery for RelOps workers</h1>
   <p class="subtitle">
     Step-ca-issued client certs + mTLS at a GCP HTTPS LB replace the
@@ -217,6 +277,19 @@
     Secret Manager fetch. Same primitive on macOS hardware (m4/r8) and
     Linux hardware (talos/netperf).
   </p>
+  <div class="meta">
+    <a href="https://github.com/mozilla-platform-ops/relops-bootstrap">
+      <span class="icon">📂</span>relops-bootstrap repo
+    </a>
+    <a href="https://github.com/mozilla-platform-ops/relops-bootstrap#readme">
+      <span class="icon">📖</span>README
+    </a>
+    <a href="https://github.com/mozilla-platform-ops/ronin_puppet/pull/1253">
+      <span class="icon">🔀</span>ronin_puppet PR #1253 (Linux)
+    </a>
+    <span class="sep">·</span>
+    <span>Updated 2026-06-26</span>
+  </div>
 </header>
 
 <h2>Why this exists</h2>
@@ -713,6 +786,21 @@
 <div class="callout">
   <h3>What changed conceptually</h3>
   <p>The vault.yaml itself didn't get any more or less sensitive. What changed is <em>who's allowed to put one on a worker</em>. Before: anyone with the 1Password vault entry and SSH access. After: only an authenticated MDM-enrolled (or operator-attested) host with a step-ca-issued, per-role-bound client cert. Every fetch is logged in Cloud Audit with the cert's serial number. The operator's job goes from <em>"SCP this file"</em> to <em>"click EACS in SimpleMDM"</em> (macOS) or <em>"run one command"</em> (Linux).</p>
+</div>
+
+<div class="cta">
+  <h3>Want to dig in, contribute, or roll a role onto this?</h3>
+  <p>
+    Everything is open source inside Mozilla — the broker code, the terraform,
+    the operator-side helpers, the SimpleMDM script-job. Per-role rollout (r8,
+    staging, catalina, the rest of the Linux roles) is mechanical follow-up
+    work; happy to pair on it if you've got a role you want to migrate.
+  </p>
+  <div class="cta-buttons">
+    <a href="https://github.com/mozilla-platform-ops/relops-bootstrap" class="primary">Browse the repo →</a>
+    <a href="https://github.com/mozilla-platform-ops/relops-bootstrap#readme">Read the README</a>
+    <a href="https://github.com/mozilla-platform-ops/ronin_puppet/pull/1253">Review the Linux PR</a>
+  </div>
 </div>
 
 <footer>
