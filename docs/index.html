@@ -219,6 +219,56 @@
   </p>
 </header>
 
+<h2>Why this exists</h2>
+<div class="grid-2">
+  <div class="card mac">
+    <h3 style="color: var(--mac);">The problem we kept hitting</h3>
+    <p style="font-size: 14.5px;">
+      Every worker needs a <code>/var/root/vault.yaml</code> (macOS) or
+      <code>/root/vault.yaml</code> (Linux) containing the per-role taskcluster
+      tokens, cltbld credentials, livelog secret, etc. Puppet reads it via
+      Hiera; without it, <code>run-puppet.sh</code> won't even start.
+    </p>
+    <p style="font-size: 14.5px;">
+      Today: an operator looks the role's entry up in 1Password,
+      saves it locally, SCPs it onto the host. Every wipe, every replacement,
+      every new role assignment — same dance.
+    </p>
+    <p class="dim" style="font-size: 13.5px; margin-top: 12px;">
+      <strong>Costs:</strong> operator must be online + have 1P + SSH + the right
+      file. Easy to mistype a role and ship the wrong secret. Doesn't survive
+      automation. Becomes the chokepoint when a fleet of M4s or r8s gets EACS'd
+      in a batch.
+    </p>
+  </div>
+  <div class="card linux">
+    <h3 style="color: var(--linux);">What this unlocks</h3>
+    <p style="font-size: 14.5px;">
+      The vault.yaml fetches itself. A host that's been MDM-enrolled (macOS) or
+      operator-attested via SCEP enrollment (Linux) holds a step-ca-issued
+      client cert; the cert's SPIFFE URI binds it to a single puppet role; the
+      broker hands back the matching secret on demand.
+    </p>
+    <p style="font-size: 14.5px;">
+      <strong>Provisioning</strong> — EACS a Mac mini, walk away. SimpleMDM pushes
+      profiles, the bootstrap script-job fetches vault.yaml itself, puppet
+      provisions, worker registers in Taskcluster. Zero operator touches beyond
+      the EACS click.
+    </p>
+    <p style="font-size: 14.5px;">
+      <strong>Re-provisioning</strong> — Same flow. Worker dies, replace hardware,
+      EACS the new one (or run <code>deliver_linux.sh</code> for Linux), it
+      bootstraps into the same role automatically. No "find the right vault.yaml
+      again" step.
+    </p>
+    <p class="dim" style="font-size: 13.5px; margin-top: 12px;">
+      <strong>Operationally:</strong> the bottleneck moves from "a human with the
+      right files" to "the device has a valid cert." That's a known-quantity
+      infrastructure check, not a tribal-knowledge handoff.
+    </p>
+  </div>
+</div>
+
 <h2>End-to-end architecture</h2>
 <div class="diagram">
 <svg viewBox="0 0 1200 740" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block;">
