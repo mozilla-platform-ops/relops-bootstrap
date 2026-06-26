@@ -358,23 +358,13 @@
     That's three different secret stores touched (HashiCorp Vault, 1Password
     RELOPS vault, the worker's filesystem), four credential handoffs
     (OIDC → vault token → bolt SSH → file copy), and one mandatory
-    out-of-band SIP-disable step.
-  </p>
-
-  <p style="font-size: 14.5px;">
-    <strong>In fairness:</strong> the puppet-apply step itself <em>did</em>
-    batch — <code>bolt --targets &lt;group&gt;</code> happily fans out to a
-    whole inventory of workers in parallel, and operators routinely used
-    this to roll a manifest change across a pool. So this wasn't entirely
-    a one-at-a-time procedure. The bottlenecks were the
-    <em>per-worker</em> bits sandwiched around the bolt run: hand-dropping
-    each worker's vault.yaml beforehand, the SIP-disable hardware step
-    (per worker, in Recovery Mode), and the TCC-while-cltbld-logged-in
-    live-coordination (per worker). This work targets the vault.yaml
-    bottleneck specifically — once it's gone, the bolt-batchable parts
-    keep working and the manual-per-worker parts shrink to just the
-    SIP/TCC pieces (which are themselves being addressed by separate
-    work: SIP-compatible safari automation + PPPC TCC profiles).
+    out-of-band SIP-disable step. The puppet-apply step accepted
+    <code>--targets</code> with a worker-group inventory, so the
+    apply itself could fan out across a pool in one invocation; the
+    per-worker chokepoints were everything else (vault.yaml drop, SIP
+    disable, TCC live-coordination). It worked at the scale Mozilla was
+    operating at, but barely — and not at all if you wanted a one-click
+    workflow.
   </p>
 </div>
 
