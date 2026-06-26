@@ -8,7 +8,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # GCP
-    gcp_project_id: str = Field(default="", description="GCP project ID; auto-detected on Cloud Run")
+    gcp_project_id: str = Field(
+        default="",
+        description="GCP project ID; auto-detected on Cloud Run",
+    )
 
     # SPIFFE URI structure that step-ca puts in cert SANs (forwarded by the
     # LB as X-Client-Cert-SPIFFE after it validates the chain).

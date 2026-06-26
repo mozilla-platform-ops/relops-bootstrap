@@ -73,7 +73,7 @@ async def get_secret(
         log.warning("auth.failed", role=role, reason=str(e), remote=remote)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid client cert"
-        )
+        ) from e
 
     if not state.rate_limiter.consume(identity.cert_serial):
         log.warning(
@@ -109,7 +109,7 @@ async def get_secret(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="secret unavailable",
-        )
+        ) from e
 
     log.info(
         "secret.served",
