@@ -4,9 +4,9 @@
 > (macOS today, eventually all hardware).
 
 GCP-native, workload-identity-style secret delivery via SCEP-issued per-host
-client certs. The same primitive — *a DEP-enrolled host that holds an SCEP
-client cert can fetch its role's secrets from a brokered Secret Manager* —
-covers every operator-driven flow against a worker:
+client certs and **mTLS at the load balancer**. The same primitive — *a
+DEP-enrolled host that holds an SCEP client cert can fetch its role's secrets
+from a brokered Secret Manager* — covers every operator-driven flow:
 
 | 🚀 | first-time provisioning of brand-new hardware out of DEP enrollment |
 |----|----|
@@ -19,6 +19,11 @@ session to type `vault.yaml` into. Every secret read is logged with the
 requesting cert's serial number — *"who pulled what, when"* is a one-liner
 in Cloud Audit Logs.
 
+**Status:** Validated end-to-end on m4-81 (2026-06-25) — fresh EACS → DEP
+enroll → SimpleMDM profiles → SCEP cert in keychain → bootstrap script
+auto-fetches vault.yaml → puppet bootstrap → worker registered in Taskcluster,
+zero operator touches beyond the initial EACS click.
+
 ---
 
 ## 🏗️ Architecture
@@ -27,32 +32,69 @@ in Cloud Audit Logs.
                  ┌─────────────────────────────────────────────────┐
                  │   host (m4 Mac Mini, fresh out of DEP)          │
                  │                                                 │
-                 │   1. Setup Assistant → admin user + SecureToken │
-                 │   2. ssh: profiles install -type bootstraptoken │
-                 │   3. SCEP profile → mdmclient → keypair in      │
-                 │      Secure Enclave, cert in System keychain    │
-                 │   4. Bootstrap script mints a 60s JWT signed    │
-                 │      by the cert's private key                  │
-                 │   5. curl https://broker/secret/<role>          │
+                 │   1. Setup Assistant → admin user                │
+                 │   2. SimpleMDM script-job grants BST →           │
+                 │      SecureToken on admin                        │
+                 │   3. SCEP profile → mdmclient → keypair +        │
+                 │      cert in System keychain                     │
+                 │   4. Bootstrap script:                           │
+                 │      CURL_SSL_BACKEND=securetransport \          │
+                 │      curl --cert "<CN>" https://forge/secret/X   │
+                 │      (TLS handshake signs via OS network stack,  │
+                 │       which holds the keychain sign ACL)         │
                  └─────────────────┬───────────────────────────────┘
-                                   │
+                                   │ mTLS
                                    ▼
        ┌──────────────────────  GCP project: relops-bootstrap  ──────────────────────┐
        │                                                                              │
-       │   🪪 step-ca  ────►  📜 vault-broker  ────►  🔐 Secret Manager               │
-       │   GCE VM             Cloud Run                                               │
-       │   SCEP issuer        validate JWT             vault-<role> per puppet role   │
-       │   ~24h client        chain-check cert         (mirrors 1P "RelOps Vault")    │
-       │   certs              role from cert SAN                                      │
-       │                      JTI replay check                                        │
-       │                      per-cert rate limit                                     │
-       │                      logs to Cloud Audit                                     │
+       │   🛡️ HTTPS LB                                                                │
+       │      • Cloud Armor (source-CIDR allowlist, MDC1 NAT)                         │
+       │      • Trust Config: step-ca root + intermediate (validates client cert)     │
+       │      • Server TLS Policy: ALLOW_INVALID_OR_MISSING (so /scep/* still works)  │
+       │      • Forwards X-Client-Cert-{Present,Chain-Verified,Leaf,Serial,SPIFFE}    │
+       │      • Live at https://forge.relops.mozilla.com (Google-managed cert)        │
        │                                                                              │
-       │   🛡️ HTTPS LB + Cloud Armor (source-CIDR allowlist) in front of broker     │
-       │      → live at https://forge.relops.mozilla.com (Google-managed cert)        │
+       │           │                                          │                       │
+       │           ▼                                          ▼                       │
+       │   🪪 step-ca                              📜 vault-broker                    │
+       │   GCE VM (zonal NEG)                      Cloud Run (serverless NEG)         │
+       │   SCEP issuer per puppet role             • Reads X-Client-Cert-Leaf         │
+       │   Cert SPIFFE URI =                       • URL-decodes SPIFFE URI from SAN  │
+       │     spiffe://relops.mozilla/              • Checks role matches URL path     │
+       │       host/<CN>/role/<role>               • Reads vault-<role> secret        │
+       │                                           • Per-cert-serial rate limit       │
+       │                                           • Logs to Cloud Audit              │
+       │                                                                              │
+       │                                           🔐 Secret Manager                  │
+       │                                              vault-<role> per puppet role    │
+       │                                              (mirrors 1P "RelOps Vault")     │
        │                                                                              │
        └──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Why mTLS-at-LB instead of JWT-signed-by-cert?
+
+macOS keychain ACL gates `SecKeyCreateSignature` to a hard-coded list of
+network-stack helpers (`configd`, `nehelper`, `NEIKEv2Provider`). A
+Developer-ID-signed binary running as root in a LaunchDaemon — let alone our
+bootstrap shell — gets `errSecInteractionNotAllowed` when trying to sign with
+a keychain-stored key. We proved this end of every plausible workaround
+(`AllowAllAppsAccess=true`, `KeyIsExtractable=true`, `SecItemExport`, ACME
+via the data-protection keychain). The keychain genuinely will not let our
+code use the SCEP key directly.
+
+But the keychain ACL *does* allow signing from the OS network stack — which is
+exactly the path `curl` takes when invoked with `CURL_SSL_BACKEND=securetransport`.
+The TLS handshake's CertificateVerify is signed *inside* SecureTransport
+(via the helpers in the allowlist), not in our process. Our code never
+touches the private key. No PKCS12 extraction. No key on disk. The cert
+never leaves the keychain.
+
+The LB validates the cert chain via its Trust Config (step-ca root +
+intermediate) and forwards parsed cert info to the broker as request
+headers. The broker reads `X-Client-Cert-Leaf` and parses the SPIFFE URI
+out of the SAN — we don't trust the LB's built-in SPIFFE parser because it
+silently drops URI SANs with URL-encoded chars (e.g. `Mac%20mini`).
 
 ---
 
@@ -60,27 +102,41 @@ in Cloud Audit Logs.
 
 ```
 .
-├── terraform/                    🏗️  GCP infra (Cloud Run, Secret Manager, step-ca VM, LB)
+├── terraform/                    🏗️  GCP infra
 │   ├── main.tf, variables.tf, outputs.tf
-│   ├── vault_broker.tf           ─ Cloud Run service + Secret Manager containers
+│   ├── vault_broker.tf           ─ Cloud Run service + IAM
 │   ├── step_ca.tf, network.tf    ─ step-ca GCE VM + VPC + firewalls
-│   ├── lb.tf                     ─ HTTPS LB + Cloud Armor allowlist
+│   ├── lb.tf                     ─ HTTPS LB + Cloud Armor + custom request headers
+│   ├── mtls.tf                   ─ Trust Config + Server TLS Policy
+│   ├── trust/{root,intermediate}.pem ─ step-ca PEMs the Trust Config points at
 │   ├── iam.tf                    ─ scoped IAM bindings (least privilege)
 │   ├── secrets.tf                ─ per-puppet-role secret containers
 │   └── artifact_registry.tf      ─ broker image registry
 │
 ├── broker/                       📜  FastAPI vault-broker service
-│   ├── app/                      ─ auth (JWT + cert chain), revocation (CRL), replay cache, rate limit
-│   ├── tests/                    ─ 31 tests covering happy + adversarial paths
+│   ├── app/                      ─ reads X-Client-Cert-* headers, parses leaf,
+│   │                               URL-decodes SPIFFE, role-binds, fetches secret
+│   ├── tests/                    ─ pytest happy-path + adversarial cases
 │   └── Dockerfile, pyproject.toml
 │
 ├── orchestrator/                 🧰  Operator CLI (`reprovision`)
-│   ├── orchestrator/             ─ TC + SimpleMDM + 1P clients + workflow steps
-│   ├── tests/
-│   └── pyproject.toml
+│   └── ... TC + SimpleMDM + 1P clients + workflow steps
 │
 ├── mdm/                          📱  SimpleMDM artifacts
-│   └── scep-relops.mobileconfig.template
+│   ├── scep-relops.mobileconfig.template
+│   ├── acme-relops.mobileconfig.template     ─ historical (ACME path investigated)
+│   └── com.mozilla.relops.bootstrap.plist     ─ optional periodic refresh daemon
+│
+├── scripts/                      🛠️  Operator helpers + worker bootstrap
+│   ├── bootstrap-step-ca.sh                  ─ idempotent step-ca init
+│   ├── render-scep-mobileconfig.sh           ─ render SCEP profile for SimpleMDM upload
+│   ├── simplemdm-m4-no-sip-bootstrap.sh      ─ ⭐ DROP-IN body for SimpleMDM script-job
+│   ├── simplemdm-vault-fetch-snippet.sh      ─ just the fetch block, for splicing
+│   ├── relops-bootstrap.sh                   ─ LaunchDaemon variant for periodic refresh
+│   ├── install-on-worker.sh                  ─ operator-laptop installer
+│   ├── integration-test-broker.py            ─ end-to-end test via real step-ca cert
+│   ├── INSTALL-on-worker.md                  ─ install guide + threat-model table
+│   └── fetch-vault-mtls.swift                ─ historical URLSession variant (dead end)
 │
 ├── .github/workflows/test.yml    ✅  CI: pytest + terraform fmt/validate
 └── cloudbuild.yaml               🚀  build + push + deploy broker on commit
@@ -91,7 +147,7 @@ in Cloud Audit Logs.
 ## 🧭 Bringing it up
 
 One-time operator steps. After this, the whole worker-provisioning flow is
-`reprovision <hostname>` from any operator laptop.
+"EACS the host + paste the bootstrap script into SimpleMDM."
 
 ### 1️⃣  Create the GCP project + state bucket
 
@@ -104,8 +160,6 @@ gcloud storage buckets create gs://relops-bootstrap-tfstate \
   --location=us-central1 --uniform-bucket-level-access --public-access-prevention
 gcloud storage buckets update gs://relops-bootstrap-tfstate --versioning
 ```
-
-Enable the `backend "gcs"` block in `terraform/main.tf` once the bucket exists.
 
 ### 2️⃣  Terraform apply
 
@@ -121,8 +175,8 @@ terraform apply
 
 | Output | Used for |
 |---|---|
-| `vault_broker_url` | Cloud Run URL of the broker |
-| `step_ca_ip` | static external IP of the step-ca VM (goes into the SCEP profile) |
+| `vault_broker_url` | Cloud Run URL of the broker (debug only — production traffic via LB) |
+| `step_ca_ip` | static external IP of the step-ca VM |
 | `broker_lb_ip` | static external IP of the LB (point DNS here) |
 | `artifact_registry_repo_url` | where to `docker push` the broker image |
 | `secret_ids` | Secret Manager containers waiting for content |
@@ -130,18 +184,18 @@ terraform apply
 ### 3️⃣  Initialize step-ca
 
 See [`scripts/README.md`](scripts/README.md) — `scripts/bootstrap-step-ca.sh`
-is the idempotent operator-side bootstrap. It generates random CA passwords,
-initializes the CA on the persistent disk, adds the SCEP provisioner with a
-role-aware x509 template, and outputs the root cert PEM for capture +
-Secret Manager upload.
+is the idempotent operator-side bootstrap. Per-role SCEP provisioners get
+added afterward with `step ca provisioner add scep-<role> --type=SCEP ...`.
 
 ### 4️⃣  Build + deploy the broker
 
 ```bash
-IMAGE=us-central1-docker.pkg.dev/relops-bootstrap/vault-broker/vault-broker:v0.1.0
-docker buildx build --platform linux/amd64 -t $IMAGE broker
-docker push $IMAGE
-gcloud run deploy vault-broker --image=$IMAGE --region=us-central1
+gcloud builds submit broker \
+  --tag us-central1-docker.pkg.dev/relops-bootstrap/vault-broker/vault-broker:latest \
+  --project relops-bootstrap
+gcloud run deploy vault-broker \
+  --image us-central1-docker.pkg.dev/relops-bootstrap/vault-broker/vault-broker:latest \
+  --region us-central1 --project relops-bootstrap
 ```
 
 (Or push to `main` and let Cloud Build do it via `cloudbuild.yaml`.)
@@ -157,8 +211,21 @@ op read "op://RelOps Vault/vault-gecko_t_osx_1500_m4/notesPlain" \
 
 ### 6️⃣  Upload the SCEP profile to SimpleMDM
 
-See [mdm/README.md](mdm/README.md) for the substitution dance. Assign to the
-device group whose hosts you want to provision via the broker.
+`scripts/render-scep-mobileconfig.sh` produces a .mobileconfig with the
+step-ca root embedded + SCEP enrollment payload. Upload to SimpleMDM as a
+Custom Configuration Profile, assign to the device group whose hosts you
+want to provision via the broker.
+
+### 7️⃣  Paste the bootstrap script into SimpleMDM
+
+`scripts/simplemdm-m4-no-sip-bootstrap.sh` is the drop-in body for the
+SimpleMDM Script Job that runs on each device at enrollment time. It:
+
+1. Auto-grants SecureToken to admin via Bootstrap Token escrow
+2. Discovers the SCEP identity in the keychain by issuer DN
+3. Fetches the role-scoped `vault.yaml` from the broker via SecureTransport curl
+4. Clones ronin_puppet, sets up ssh-to-localhost, installs the m4-bootstrap-driver
+   LaunchDaemon (which loops `run-puppet.sh` until the safari semaphores fire)
 
 ---
 
@@ -167,15 +234,15 @@ device group whose hosts you want to provision via the broker.
 | Layer | Mechanism | Protects against |
 |---|---|---|
 | Cloud Run ingress | `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` | random internet traffic |
-| HTTPS LB | Cloud Armor source-CIDR allowlist | off-network attackers with a stolen cert |
-| Broker app | JWT chain-verifies against the step-ca root | forged JWTs |
-| Broker app | Claim checks (`sub`, `role`, `exp`, `aud`, `jti`) + alg whitelist | replay, role escalation, `alg=none` |
-| Broker app | JTI replay cache + per-cert-serial rate limit | credential abuse |
+| HTTPS LB | Cloud Armor source-CIDR allowlist | off-network attackers |
+| HTTPS LB | mTLS via Trust Config (step-ca root + intermediate) | requests without a valid step-ca-issued cert |
+| Broker app | Reads LB-forwarded `X-Client-Cert-Chain-Verified` + parses leaf for SPIFFE | spoofed headers (LB strips client-supplied X-Client-Cert-* before adding its own) |
+| Broker app | Role from cert SPIFFE URI must match URL path role | role escalation / cross-host secret theft |
+| Broker app | Per-cert-serial rate limit | credential abuse |
 | Broker IAM | Per-secret binding (no project-wide grants) | lateral movement if broker is compromised |
 | Cloud Audit | Every secret read logged with cert serial | after-the-fact incident response |
 | Cert lifecycle | SCEP auto-renew, short cert lifetime | long-lived compromised credentials |
-| Cert private key | Apple Secure Enclave (non-extractable) | key exfiltration from disk |
-| WIF | No SA key files anywhere | SA key leakage |
+| Cert private key | macOS System keychain ACL-restricted to network-stack helpers | key exfiltration by non-OS code |
 
 ---
 
@@ -183,20 +250,29 @@ device group whose hosts you want to provision via the broker.
 
 | URL | What it is |
 |---|---|
-| `https://forge.relops.mozilla.com` | vault-broker, HTTPS LB-fronted, Google-managed cert, Cloud Armor source-CIDR allowlist |
-| `https://step-ca.relops.mozilla` *(intra-VM only)* / `https://34.61.3.27` *(MDC1 only)* | step-ca SCEP + admin API, MDC1 source-CIDR allowlist |
+| `https://forge.relops.mozilla.com` | vault-broker (path `/secret/{role}`) AND step-ca (`/scep/*`), HTTPS LB-fronted with Google-managed server cert + mTLS for `/secret/*` |
+| Cloud Run direct URL | broker, for debug-only (no LB-forwarded mTLS headers; broker returns 401) |
 
-Authorized callers (MDC1 NAT egress `63.245.209.101/32`) get `HTTP 200` on `/healthz`
-and `HTTP 401` on `/secret/{role}` without a valid JWT — all the way through the
-LB to the broker. Off-network traffic gets `403` from Cloud Armor.
+Path C status (m4 role): proven end-to-end. The validating call from a
+real EACS'd m4 returns the full role-scoped vault.yaml with the broker's
+strict checks all green.
 
 ## 🛠️ Open work
 
-- 🔁 **Cloud Build trigger** — `cloudbuild.yaml` exists, OAuth-flow UI got stuck during initial wire-up; switch to a PAT-based webhook trigger or retry the GitHub App connection
-- 🧪 **End-to-end SCEP enrollment test on macmini-m4-81** — SCEP profile uploaded to SimpleMDM, currently in `NotNow` retry loop
-- 🪪 **Populate the per-role vault.yaml secrets** from 1Password into Secret Manager
-- 🔒 **mTLS at the LB layer** (defense-in-depth on top of the broker's JWT check) — Server TLS Policy + Trust Config
-- 🔭 **Widen `trusted_source_cidrs`** beyond `63.245.209.101/32` if other Mozilla NAT IPs need access
+- 🪪 **Per-role expansion** — currently one step-ca SCEP provisioner +
+  matching SimpleMDM profile for the `gecko_t_osx_1500_m4` role. Repeat for
+  `gecko_t_osx_1500_m4_staging`, `gecko_t_osx_1400_r8`, `gecko_t_osx_1015`.
+  Each is mechanical: new provisioner with template hardcoding the role in
+  the SPIFFE URI + new "Dev - SCEP - <role>" SimpleMDM profile + populate
+  the corresponding Secret Manager secret.
+- 🔁 **Cloud Build trigger** — `cloudbuild.yaml` exists, OAuth-flow UI
+  got stuck during initial wire-up; switch to a PAT-based webhook trigger
+  or retry the GitHub App connection. Manual `gcloud builds submit` works.
+- 🔭 **Widen `trusted_source_cidrs`** beyond `63.245.209.101/32` if other
+  Mozilla NAT IPs need access (other datacenters, VPN egress, etc.).
+- 📦 **SimpleMDM Custom App delivery** — for a future "true zero-touch"
+  posture where the LaunchDaemon refresh path (`relops-bootstrap.sh`) is
+  installed automatically rather than baked into the script-job.
 
 ---
 
