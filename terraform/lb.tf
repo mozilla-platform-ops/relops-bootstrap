@@ -2,12 +2,17 @@
 #
 # Trust model layers (outside-in):
 #   1. Cloud Armor allows only trusted_source_cidrs to reach the LB at all.
-#   2. LB terminates TLS (cert wired in once a hostname is provisioned).
-#   3. Cloud Run accepts only LB ingress (INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER).
-#   4. Broker app validates the JWT-signed-by-cert + role check + jti + rate limit.
+#   2. LB terminates TLS + does mTLS: validates client cert chain against the
+#      step-ca root + intermediate via Trust Config (see mtls.tf).
+#   3. LB injects X-Client-Cert-* request headers carrying chain-verified
+#      flag, parsed SPIFFE URI, and the base64-encoded leaf PEM.
+#   4. Cloud Run accepts only LB ingress (INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER).
+#   5. Broker app reads forwarded headers, URL-decodes SPIFFE URI from the
+#      leaf, role-binds against URL path, per-cert-serial rate-limit.
 #
-# mTLS at the LB layer is deferred — when we add it, the Server TLS Policy +
-# Trust Config will replace the simple google_compute_target_https_proxy below.
+# Mode = ALLOW_INVALID_OR_MISSING_CLIENT_CERT (in mtls.tf) so SCEP enrollment
+# at /scep/* still works without a client cert — the broker enforces presence
+# for /secret/* paths via the header checks.
 
 # Static external anycast IP for the LB. Reserve it always so DNS can point at
 # something stable even before we attach the cert.
@@ -34,8 +39,8 @@ resource "google_compute_security_policy" "broker" {
 
   # Rule priority 1000: allow trusted CIDRs.
   rule {
-    action   = "allow"
-    priority = 1000
+    action      = "allow"
+    priority    = 1000
     description = "Allow from MDC1 worker network"
 
     match {
@@ -51,8 +56,8 @@ resource "google_compute_security_policy" "broker" {
 
   # Default rule (required by Cloud Armor): deny everything not matched above.
   rule {
-    action   = "deny(403)"
-    priority = 2147483647
+    action      = "deny(403)"
+    priority    = 2147483647
     description = "Default deny"
 
     match {
@@ -155,8 +160,8 @@ resource "google_compute_backend_service" "step_ca" {
   health_checks         = [google_compute_health_check.step_ca.id]
 
   backend {
-    group           = google_compute_network_endpoint_group.step_ca.id
-    balancing_mode  = "RATE"
+    group                 = google_compute_network_endpoint_group.step_ca.id
+    balancing_mode        = "RATE"
     max_rate_per_endpoint = 100
   }
 
