@@ -187,9 +187,16 @@
   .box-linux { fill: rgba(163,113,247,0.12); stroke: var(--linux); }
   .box-gcp { fill: rgba(86,211,100,0.08); stroke: var(--gcp); }
   .box-common { fill: rgba(88,166,255,0.08); stroke: var(--accent); }
-  .arrow-mac { stroke: var(--mac); fill: var(--mac); }
-  .arrow-linux { stroke: var(--linux); fill: var(--linux); }
-  .arrow-common { stroke: var(--accent); fill: var(--accent); }
+
+  /* Arrows: stroke-only on the line, fill-only on the arrowhead marker.
+     Don't combine — combining causes the Bezier curve to get filled in. */
+  .line       { fill: none; stroke-width: 2; }
+  .line-mac   { stroke: var(--mac); }
+  .line-linux { stroke: var(--linux); }
+  .line-gcp   { stroke: var(--gcp); }
+  .arrowhead-mac   { fill: var(--mac);   stroke: none; }
+  .arrowhead-linux { fill: var(--linux); stroke: none; }
+  .arrowhead-gcp   { fill: var(--gcp);   stroke: none; }
   .label { fill: var(--text); font-size: 12.5px; font-weight: 500; }
   .label-small { fill: var(--text-dim); font-size: 11px; }
   .label-bold { fill: var(--text); font-size: 13.5px; font-weight: 700; }
@@ -217,13 +224,13 @@
 <svg viewBox="0 0 1200 740" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block;">
   <defs>
     <marker id="arrow-mac" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-mac"/>
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead-mac"/>
     </marker>
     <marker id="arrow-linux" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-linux"/>
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead-linux"/>
     </marker>
-    <marker id="arrow-common" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-common"/>
+    <marker id="arrow-gcp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead-gcp"/>
     </marker>
   </defs>
 
@@ -372,23 +379,35 @@
     <text x="896" y="678" class="label">⇒ Worker registers in TC ✓</text>
   </g>
 
-  <!-- Arrows: mac → GCP -->
-  <path d="M 340 155 C 360 155, 380 155, 400 155" stroke-width="2" fill="none" class="arrow-mac" stroke="currentColor"
-        marker-end="url(#arrow-mac)" style="color: var(--mac);"/>
-  <text x="370" y="146" class="label-small" style="font-size:10.5px;" fill="#ff8e3c">SCEP enroll</text>
+  <!-- macOS → LB: SCEP enroll (top arrow) -->
+  <path d="M 340 155 C 365 155, 380 130, 400 130"
+        class="line line-mac" marker-end="url(#arrow-mac)"/>
+  <text x="346" y="124" class="label-small" style="font-size:10.5px;" fill="#ff8e3c">SCEP enroll</text>
 
-  <path d="M 340 462 C 360 462, 380 350, 400 350" stroke-width="2" fill="none" class="arrow-mac" stroke="currentColor"
-        marker-end="url(#arrow-mac)" style="color: var(--mac);"/>
-  <text x="346" y="436" class="label-small" style="font-size:10.5px;" fill="#ff8e3c">mTLS GET</text>
+  <!-- macOS → LB: mTLS fetch (lower arrow curving up to LB left edge) -->
+  <path d="M 340 462 C 380 462, 380 210, 400 210"
+        class="line line-mac" marker-end="url(#arrow-mac)"/>
+  <text x="346" y="380" class="label-small" style="font-size:10.5px;" fill="#ff8e3c">mTLS GET</text>
 
-  <!-- Arrows: linux → GCP -->
-  <path d="M 880 170 C 860 170, 840 170, 800 170" stroke-width="2" fill="none" class="arrow-linux" stroke="currentColor"
-        marker-end="url(#arrow-linux)" style="color: var(--linux);"/>
-  <text x="816" y="162" class="label-small" style="font-size:10.5px;" fill="#a371f7">SCEP enroll</text>
+  <!-- Linux → LB: SCEP enroll (top arrow) -->
+  <path d="M 860 170 C 835 170, 820 130, 800 130"
+        class="line line-linux" marker-end="url(#arrow-linux)"/>
+  <text x="800" y="124" class="label-small" style="font-size:10.5px;" fill="#a371f7">SCEP enroll</text>
 
-  <path d="M 880 495 C 855 495, 830 350, 800 350" stroke-width="2" fill="none" class="arrow-linux" stroke="currentColor"
-        marker-end="url(#arrow-linux)" style="color: var(--linux);"/>
-  <text x="836" y="464" class="label-small" style="font-size:10.5px;" fill="#a371f7">mTLS GET</text>
+  <!-- Linux → LB: mTLS fetch (lower arrow curving up to LB right edge) -->
+  <path d="M 860 495 C 820 495, 820 210, 800 210"
+        class="line line-linux" marker-end="url(#arrow-linux)"/>
+  <text x="800" y="380" class="label-small" style="font-size:10.5px;" fill="#a371f7">mTLS GET</text>
+
+  <!-- Inner GCP flow: LB → step-ca (SCEP path) and LB → broker (mTLS path) -->
+  <path d="M 490 240 L 490 260" class="line line-gcp" marker-end="url(#arrow-gcp)"/>
+  <text x="500" y="253" class="label-small" style="font-size:10px;" fill="#56d364">/scep/*</text>
+
+  <path d="M 700 240 L 700 260" class="line line-gcp" marker-end="url(#arrow-gcp)"/>
+  <text x="710" y="253" class="label-small" style="font-size:10px;" fill="#56d364">/secret/*</text>
+
+  <!-- broker → Secret Manager -->
+  <path d="M 700 455 L 650 475" class="line line-gcp" marker-end="url(#arrow-gcp)"/>
 </svg>
 
 <div class="legend">
