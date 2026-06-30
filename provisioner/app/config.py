@@ -33,8 +33,6 @@ class Settings(BaseSettings):
 
     # Taskcluster
     tc_root_url: str = Field(default="https://firefox-ci-tc.services.mozilla.com")
-    tc_alive_threshold_minutes: int = Field(default=10)
-    tc_recent_task_threshold_hours: int = Field(default=6)
 
     # Rate limit
     rate_limit_per_device_hours: int = Field(default=24)

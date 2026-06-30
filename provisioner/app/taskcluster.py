@@ -44,43 +44,15 @@ class TaskclusterClient:
         return None
 
     def get_worker(self, role: str, hostname: str) -> dict | None:
-        """Return parsed worker state, or None if TC has no record.
-
-        Queue API record carries: quarantineUntil, firstClaim, expires,
-        recentTasks, actions. No 'lastChecked' field — workers register
-        once and stay until expiry; checking in isn't a separate signal."""
+        """Return the fields the tc_state guard needs, or None if TC has
+        no record. The composite guard only reads quarantineUntil — if you
+        add more fields here, extend the guard in lockstep."""
         raw = self._fetch_queue_worker(role, hostname)
         if raw is None:
             return None
-        # 'lastChecked' is our internal abstraction; for queue workers we
-        # treat the most recent task time as the freshness proxy.
         return {
-            "lastChecked": _most_recent_run_time(raw),
             "quarantineUntil": _parse_iso8601(raw.get("quarantineUntil")),
-            "state": "registered",
         }
-
-    def most_recent_task_completion(self, role: str, hostname: str) -> datetime | None:
-        """Approximate timestamp of the most recent run by this worker, or
-        None if no record / no recent tasks. The queue API doesn't surface
-        per-run timestamps directly; recentTasks is a recency-ordered list
-        of {taskId, runId}, so the existence of any entries means 'this
-        worker has been active in TC's rolling window' which is the signal
-        we actually care about for the production-protection guard."""
-        raw = self._fetch_queue_worker(role, hostname)
-        if raw is None:
-            return None
-        return _most_recent_run_time(raw)
-
-
-def _most_recent_run_time(raw: dict) -> datetime | None:
-    """Queue worker doesn't have a 'lastChecked' field. If recentTasks is
-    non-empty, the worker has been active recently — return 'now' as a
-    conservative proxy so the freshness guards trip. If empty, return
-    None (worker is truly idle, eligible for re-provisioning)."""
-    if raw.get("recentTasks"):
-        return datetime.now(timezone.utc)
-    return None
 
 
 def _parse_iso8601(s: str | None) -> datetime | None:
