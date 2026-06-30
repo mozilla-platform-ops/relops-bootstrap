@@ -1,5 +1,5 @@
 """
-The seven safety guards that decide whether a device is eligible for
+The six safety guards that decide whether a device is eligible for
 automated script-job firing. Default-deny — *all* must pass; any single
 failure means "skip this device."
 
@@ -7,12 +7,27 @@ This is the load-bearing safety surface. Read this file when changing
 any provisioning logic. If you can't explain why a guard exists in one
 sentence, don't change it.
 
-Historical note: an eighth guard (no_prior_success) checked SimpleMDM
+Design pivot (2026-06-30): the original eight guards treated quarantine
+as a hard veto ("operator pulled this worker, don't touch"). But that
+broke the re-provisioning workflow, where quarantine is the operator's
+signal that the worker is ready for refresh ("quarantine → EACS →
+auto-fire → un-quarantine"). The three independent TC guards
+(tc_not_alive, no_recent_task, not_quarantined) were collapsed into
+one composite `tc_state` guard with this semantic:
+
+    fire is allowed iff (no TC record at all)
+                     OR (TC record + worker is currently quarantined)
+
+i.e. quarantine becomes positive operator consent rather than negative
+veto. The allowlist (guard #2) remains the load-bearing opt-in — to
+provision/re-provision a host, the operator must (a) allowlist it AND
+(b) quarantine it.
+
+Historical: an earlier no_prior_success guard checked SimpleMDM
 script-job history per device. SimpleMDM's list endpoint doesn't expose
-per-device outcomes (only aggregate counts), so it was removed. The
-intended future replacement: bootstrap script writes a
-`provisioned_at` custom attribute on completion; new guard checks
-that attribute. See README for the follow-up.
+per-device outcomes (only aggregate counts), so it was removed. Future
+replacement: bootstrap script writes a `provisioned_at` custom
+attribute on completion; new guard checks that attribute.
 """
 
 from __future__ import annotations
@@ -29,10 +44,16 @@ from .taskcluster import TaskclusterClient
 class Device:
     """Minimum we need to evaluate guards for one device."""
     simplemdm_id: int
-    hostname: str          # FQDN, used as Taskcluster worker_id
+    hostname: str          # short hostname; used as TC workerId
     role: str              # e.g. "gecko_t_osx_1500_m4"
     group_assigned_at: datetime
     custom_attributes: dict[str, str]
+    # MDM preconditions for Bootstrap Token escrow / future EACS-ability.
+    # All three must be True for SimpleMDM to be able to manage the BST
+    # flow at all — necessary, not sufficient.
+    dep_enrolled: bool
+    is_user_approved_enrollment: bool
+    is_supervised: bool
 
 
 @dataclass(frozen=True)
@@ -53,58 +74,54 @@ def guard_allowlist(device: Device, allowlist: set[str]) -> GuardResult:
 
 
 # ---------------------------------------------------------------------------
-# Guard 2: worker is not currently alive in Taskcluster
+# Guard 2: composite Taskcluster state — operator-intent check
 # ---------------------------------------------------------------------------
-# Production-protection. If TC says the worker is currently in the pool and
-# was last-checked recently, do NOT touch it — it's probably running tasks.
-def guard_tc_not_alive(device: Device, tc: TaskclusterClient) -> GuardResult:
+# Eligibility logic (see module docstring for the why):
+#   * no TC record    → eligible (new HW, or aged-out registration)
+#   * record + quarantined → eligible (operator's "refresh me" signal)
+#   * record + not quarantined → skip (worker is in production service)
+#
+# Quarantine is operator consent here, not veto. The allowlist (guard 3)
+# is the explicit opt-in that gates which hosts this logic even applies to.
+def guard_tc_state(device: Device, tc: TaskclusterClient) -> GuardResult:
     info = tc.get_worker(device.role, device.hostname)
     if info is None:
-        return GuardResult(True, "no TC worker record found (cold)")
-    last_checked = info.get("lastChecked")
-    if last_checked is None:
-        return GuardResult(True, "TC worker has no lastChecked")
-    age = datetime.now(timezone.utc) - last_checked
-    threshold = timedelta(minutes=get_settings().tc_alive_threshold_minutes)
-    if age < threshold:
-        return GuardResult(False, f"worker checked in {age.total_seconds():.0f}s ago — alive")
-    return GuardResult(True, f"last TC check-in {age.total_seconds():.0f}s ago (cold)")
-
-
-# ---------------------------------------------------------------------------
-# Guard 3: worker has not completed a task in the last N hours
-# ---------------------------------------------------------------------------
-# Production-protection, stronger than guard 2. Even if the worker isn't
-# currently alive (it may be mid-reboot, network blip, etc), if it ran a
-# task recently we treat it as "working" and refuse to disturb.
-def guard_no_recent_task_activity(device: Device, tc: TaskclusterClient) -> GuardResult:
-    most_recent = tc.most_recent_task_completion(device.role, device.hostname)
-    if most_recent is None:
-        return GuardResult(True, "no recent task history in TC")
-    age = datetime.now(timezone.utc) - most_recent
-    threshold = timedelta(hours=get_settings().tc_recent_task_threshold_hours)
-    if age < threshold:
-        return GuardResult(False, f"task completed {age.total_seconds()/3600:.1f}h ago")
-    return GuardResult(True, f"no task activity for {age.total_seconds()/3600:.1f}h")
-
-
-# ---------------------------------------------------------------------------
-# Guard 4: worker is not quarantined in Taskcluster
-# ---------------------------------------------------------------------------
-# Quarantine means an operator intentionally pulled the worker. Auto-
-# provisioning would un-do that intent. Hard skip.
-def guard_not_quarantined(device: Device, tc: TaskclusterClient) -> GuardResult:
-    info = tc.get_worker(device.role, device.hostname)
-    if info is None:
-        return GuardResult(True, "no TC worker record")
+        return GuardResult(True, "no TC record — eligible (fresh or aged-out)")
     quarantine_until = info.get("quarantineUntil")
     if quarantine_until and quarantine_until > datetime.now(timezone.utc):
-        return GuardResult(False, f"quarantined until {quarantine_until.isoformat()}")
-    return GuardResult(True, "not quarantined")
+        return GuardResult(True, f"quarantined until {quarantine_until.isoformat()} — operator consent")
+    return GuardResult(False, "worker is registered in TC and not quarantined — in service, hands off")
 
 
 # ---------------------------------------------------------------------------
-# Guard 5: per-device rate limit
+# Guard 3: MDM preconditions for Bootstrap Token / future EACS
+# ---------------------------------------------------------------------------
+# Bootstrap Token escrow requires DEP enrollment + User-Approved MDM
+# Enrollment + Supervised mode. If any of these isn't True, future EACS
+# commands will silently fail and re-provisioning won't work — better to
+# refuse to fire now than to leave a host in a state that can't be
+# managed later.
+#
+# This is a NECESSARY but NOT SUFFICIENT check. SimpleMDM doesn't expose
+# whether the BST actually landed on the privileged user (admin) vs the
+# task user (cltbld) — that gotcha can still bite even with this guard
+# passing. The guard catches the easier "MDM doesn't have the rights"
+# misconfiguration cases.
+def guard_mdm_state(device: Device) -> GuardResult:
+    missing = []
+    if not device.dep_enrolled:
+        missing.append("dep_enrolled")
+    if not device.is_user_approved_enrollment:
+        missing.append("is_user_approved_enrollment")
+    if not device.is_supervised:
+        missing.append("is_supervised")
+    if missing:
+        return GuardResult(False, f"MDM preconditions not met: {', '.join(missing)} = False")
+    return GuardResult(True, "DEP + UAE + supervised — MDM has BST management rights")
+
+
+# ---------------------------------------------------------------------------
+# Guard 4: per-device rate limit
 # ---------------------------------------------------------------------------
 # Even if all other guards pass, refuse to fire more than once per N hours
 # against the same device. Defense against guard-logic bugs that could
@@ -121,7 +138,7 @@ def guard_rate_limit(device: Device, state: RateLimitState) -> GuardResult:
 
 
 # ---------------------------------------------------------------------------
-# Guard 6: global kill switch
+# Guard 5: global kill switch
 # ---------------------------------------------------------------------------
 # A Secret Manager value the operator can flip to halt all firing
 # without redeploying. Read on every tick.
@@ -132,7 +149,7 @@ def guard_kill_switch(enabled: bool) -> GuardResult:
 
 
 # ---------------------------------------------------------------------------
-# Guard 7: per-device opt-out via SimpleMDM Custom Attribute
+# Guard 6: per-device opt-out via SimpleMDM Custom Attribute
 # ---------------------------------------------------------------------------
 # If an operator sets `provisioning_locked=true` on a specific device in
 # SimpleMDM, the reconciler never touches it. Useful for hand-tuned hosts.
@@ -176,14 +193,13 @@ def evaluate_all_guards(
 
     # Order chosen so cheapest/most-categorical checks come first:
     # kill switch, allowlist, lock attribute (no API calls), local state
-    # (rate limit, no API), then Taskcluster (two API calls).
+    # (rate limit, no API), then Taskcluster (one API call).
     results = [
-        ("kill_switch",       guard_kill_switch(kill_switch_enabled)),
-        ("allowlist",         guard_allowlist(device, allowlist)),
-        ("not_locked",        guard_not_locked(device)),
-        ("rate_limit",        guard_rate_limit(device, state)),
-        ("tc_not_alive",      guard_tc_not_alive(device, tc)),
-        ("no_recent_task",    guard_no_recent_task_activity(device, tc)),
-        ("not_quarantined",   guard_not_quarantined(device, tc)),
+        ("kill_switch",  guard_kill_switch(kill_switch_enabled)),
+        ("allowlist",    guard_allowlist(device, allowlist)),
+        ("not_locked",   guard_not_locked(device)),
+        ("mdm_state",    guard_mdm_state(device)),
+        ("rate_limit",   guard_rate_limit(device, state)),
+        ("tc_state",     guard_tc_state(device, tc)),
     ]
     return GuardEvaluation(device=device, results=results)

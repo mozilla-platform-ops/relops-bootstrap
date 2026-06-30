@@ -1,11 +1,11 @@
 # relops-provisioner
 
 Cloud Run polling reconciler. Every 5 minutes, Cloud Scheduler invokes the
-`/run` endpoint. The service walks the configured SimpleMDM device groups,
-evaluates 7 safety guards per device, and creates a SimpleMDM script-job
-against any device that passes all 7.
+`/run` endpoint. The service walks the configured SimpleMDM assignment
+groups, evaluates 6 safety guards per device, and creates a SimpleMDM
+script-job against any device that passes all 6.
 
-## The 7 guards (default-deny)
+## The 6 guards (default-deny)
 
 All must pass before the script-job fires. See `app/guards.py` for the
 canonical implementations and the one-sentence "why" comment on each.
@@ -13,25 +13,26 @@ canonical implementations and the one-sentence "why" comment on each.
 1. **`kill_switch`** — `provisioner-enabled` Secret Manager value is exactly `true`
 2. **`allowlist`** — hostname in the explicit `provisioner-allowlist` Secret Manager value
 3. **`not_locked`** — SimpleMDM device's `provisioning_locked` Custom Attribute is not `true`
-4. **`rate_limit`** — this device hasn't had a script-job fired within the last 24 hours
-5. **`tc_not_alive`** — Taskcluster doesn't show the worker checked in within last 10 min
-6. **`no_recent_task`** — Taskcluster shows no task completion in last 6 hours
-7. **`not_quarantined`** — Taskcluster `quarantineUntil` is not in the future
+4. **`mdm_state`** — SimpleMDM reports `dep_enrolled` AND `is_user_approved_enrollment` AND `is_supervised`, all True. Necessary preconditions for Bootstrap Token escrow and future EACS-ability. Not sufficient — SimpleMDM doesn't expose whether the BST landed on the privileged user (admin) vs the task user (cltbld) — but catches the easier misconfiguration cases.
+5. **`rate_limit`** — this device hasn't had a script-job fired within the last 24 hours
+6. **`tc_state`** — composite Taskcluster check: device is eligible iff (no TC record at all) OR (TC record exists AND device is currently quarantined). Quarantine is operator consent — the explicit "I'm refreshing this worker" signal. An active TC registration that isn't quarantined means the worker is in production service: hands off.
 
-## Removed guard: `no_prior_success`
+## Operator workflow for re-provisioning an existing worker
 
-An earlier design had an 8th guard that checked SimpleMDM script-job history
-per-device. SimpleMDM's `GET /script_jobs` doesn't expose per-device outcomes
-(only aggregate counts across whatever device set the job targeted), so the
-guard wasn't implementable against the public API.
+1. Make sure the host is in the `provisioner-allowlist` secret (one-time per host)
+2. Quarantine the worker in Taskcluster (signals re-provisioning consent)
+3. EACS the host (wipes local disk)
+4. Within ≤5 min, the provisioner's next scheduler tick fires the bootstrap script-job against the host
+5. Worker re-registers with Taskcluster after bootstrap completes
+6. Un-quarantine the worker in Taskcluster — it's back in service
 
-The replacement plan is to have the bootstrap script set a `provisioned_at`
-SimpleMDM custom attribute on completion (SimpleMDM's `POST /script_jobs`
-accepts a `custom_attribute` parameter for exactly this) and add a new guard
-that checks for that attribute. Until that's wired up, the protection that
-guard would have given is approximately covered by `tc_not_alive` (already-
-provisioned workers register in TC and look alive) and `rate_limit` (24h
-floor between fires per device).
+Steps 1–2 are the explicit operator opt-in; step 3 is the disruptive action;
+steps 4–5 are the zero-touch part.
+
+## Removed guards (history)
+
+- **`no_prior_success`** — checked SimpleMDM script-job history per device. SimpleMDM's `GET /script_jobs` doesn't expose per-device outcomes (only aggregate counts), so it wasn't implementable against the public API. Future replacement: have the bootstrap script write a `provisioned_at` SimpleMDM custom attribute on completion and add a guard that checks for it.
+- **`tc_not_alive`, `no_recent_task`, `not_quarantined`** (the original three TC guards) — collapsed into the composite `tc_state` guard above. The originals treated quarantine as a hard veto ("operator pulled this, don't touch"), which broke the re-provisioning workflow where quarantine *is* the consent signal. The new composite makes quarantine positive consent and treats "alive in TC without quarantine" as the only true do-not-touch state.
 
 ## Default-safe deployment
 

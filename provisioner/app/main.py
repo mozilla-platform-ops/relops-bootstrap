@@ -127,6 +127,9 @@ async def run_reconciler(request: Request) -> dict:
                 role=group_cfg["role"],
                 group_assigned_at=raw["last_seen_at"],   # closest proxy SimpleMDM gives us
                 custom_attributes=raw.get("custom_attributes") or {},
+                dep_enrolled=raw.get("dep_enrolled", False),
+                is_user_approved_enrollment=raw.get("is_user_approved_enrollment", False),
+                is_supervised=raw.get("is_supervised", False),
             )
             summary["devices_evaluated"] += 1
 

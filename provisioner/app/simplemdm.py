@@ -57,6 +57,10 @@ class SimpleMDMClient:
                 "hostname": attrs.get("name") or attrs.get("device_name") or "",
                 "last_seen_at": _parse_iso8601(attrs.get("last_seen_at")),
                 "custom_attributes": _flatten_custom_attrs(raw),
+                # MDM-state preconditions for BST escrow / future EACS-ability.
+                "dep_enrolled": bool(attrs.get("dep_enrolled")),
+                "is_user_approved_enrollment": bool(attrs.get("is_user_approved_enrollment")),
+                "is_supervised": bool(attrs.get("is_supervised")),
             })
         return devices
 
