@@ -76,3 +76,15 @@ variable "broker_hostname" {
   type        = string
   default     = ""
 }
+
+variable "provisioner_image" {
+  description = "Container image for the relops-provisioner Cloud Run service."
+  type        = string
+  default     = "us-docker.pkg.dev/cloudrun/container/hello"
+}
+
+variable "provisioner_dry_run" {
+  description = "When true, the relops-provisioner logs 'would_fire' decisions but never calls the SimpleMDM API. Defaults to true; flip to false only after dry-run validation."
+  type        = bool
+  default     = true
+}
