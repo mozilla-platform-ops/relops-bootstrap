@@ -1,12 +1,15 @@
 """Thin Taskcluster API client. Only the endpoints we use for guard checks.
 
+We hit the QUEUE API (not worker-manager) because worker-manager only tracks
+provisioner-spawned workers; bare-metal hardware shows up only in the queue
+side. The queue records track quarantine state, last task, and expiry.
+
 No auth headers — these are public read-only TC endpoints.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from urllib.parse import quote
 
 import httpx
 
@@ -17,64 +20,67 @@ class TaskclusterClient:
         self._client = httpx.Client(timeout=timeout, headers={"Accept": "application/json"})
 
     @staticmethod
-    def _pool_id_path(role: str) -> str:
-        """Convention from ronin_puppet hiera: workerPoolId is
-        'releng-hardware/<role-with-hyphens>'. TC's worker-manager API expects
-        the workerPoolId as a single URL path segment with the slash
-        percent-encoded (`%2F`)."""
-        return quote(f"releng-hardware/{role.replace('_', '-')}", safe="")
+    def _worker_type(role: str) -> str:
+        """Convention from ronin_puppet hiera: TC worker type matches the
+        puppet role with underscores swapped for hyphens."""
+        return role.replace("_", "-")
 
-    def get_worker(self, role: str, hostname: str) -> dict | None:
-        """Look up the worker by (workerPoolId, workerGroup, workerId).
-
-        For our hosts: workerPoolId is "releng-hardware/<role-with-hyphens>",
-        workerGroup is "mdc1" (or "mdc2"), workerId is the FQDN.
-
-        Returns None if the worker isn't currently known to TC.
-        """
-        pool_id = self._pool_id_path(role)
-        # We don't know which workerGroup (mdc1/mdc2) the host is in without
-        # other context, so we try both and pick the matching workerId.
+    def _fetch_queue_worker(self, role: str, hostname: str) -> dict | None:
+        """Query the queue API for one (provisioner, workerType, workerGroup,
+        workerId) tuple. We try both mdc1 and mdc2 since we don't know the
+        host's actual workerGroup. Returns the raw queue worker record or
+        None if not found."""
+        worker_type = self._worker_type(role)
         for group in ("mdc1", "mdc2"):
-            url = f"{self._root}/api/worker-manager/v1/workers/{pool_id}/{group}/{hostname}"
+            url = (
+                f"{self._root}/api/queue/v1/provisioners/releng-hardware"
+                f"/worker-types/{worker_type}/workers/{group}/{hostname}"
+            )
             resp = self._client.get(url)
             if resp.status_code == 404:
                 continue
             resp.raise_for_status()
-            data = resp.json()
-            return {
-                "lastChecked": _parse_iso8601(data.get("lastChecked")),
-                "quarantineUntil": _parse_iso8601(data.get("quarantineUntil")),
-                "state": data.get("state"),
-            }
+            return resp.json()
         return None
 
-    def most_recent_task_completion(self, role: str, hostname: str) -> datetime | None:
-        """Returns the timestamp of the most recent task this worker completed,
-        or None if the worker has no recent task history.
+    def get_worker(self, role: str, hostname: str) -> dict | None:
+        """Return parsed worker state, or None if TC has no record.
 
-        Implementation uses the worker-manager 'recentTasks' field which TC
-        maintains as a rolling list. For our purposes "recent enough" means
-        "within the past 6 hours" so this is sufficient resolution.
-        """
-        info_raw = None
-        pool_id = self._pool_id_path(role)
-        for group in ("mdc1", "mdc2"):
-            url = f"{self._root}/api/worker-manager/v1/workers/{pool_id}/{group}/{hostname}"
-            resp = self._client.get(url)
-            if resp.status_code != 200:
-                continue
-            info_raw = resp.json()
-            break
-        if info_raw is None:
+        Queue API record carries: quarantineUntil, firstClaim, expires,
+        recentTasks, actions. No 'lastChecked' field — workers register
+        once and stay until expiry; checking in isn't a separate signal."""
+        raw = self._fetch_queue_worker(role, hostname)
+        if raw is None:
             return None
+        # 'lastChecked' is our internal abstraction; for queue workers we
+        # treat the most recent task time as the freshness proxy.
+        return {
+            "lastChecked": _most_recent_run_time(raw),
+            "quarantineUntil": _parse_iso8601(raw.get("quarantineUntil")),
+            "state": "registered",
+        }
 
-        # recentTasks is a list of {taskId, runId} with no timestamp directly,
-        # so we fall back to lastChecked as a proxy for "this worker has been
-        # active recently." A more precise check would lookup task definitions,
-        # but lastChecked is a good-enough conservative signal: a worker that
-        # has checked in recently is doing something.
-        return _parse_iso8601(info_raw.get("lastChecked"))
+    def most_recent_task_completion(self, role: str, hostname: str) -> datetime | None:
+        """Approximate timestamp of the most recent run by this worker, or
+        None if no record / no recent tasks. The queue API doesn't surface
+        per-run timestamps directly; recentTasks is a recency-ordered list
+        of {taskId, runId}, so the existence of any entries means 'this
+        worker has been active in TC's rolling window' which is the signal
+        we actually care about for the production-protection guard."""
+        raw = self._fetch_queue_worker(role, hostname)
+        if raw is None:
+            return None
+        return _most_recent_run_time(raw)
+
+
+def _most_recent_run_time(raw: dict) -> datetime | None:
+    """Queue worker doesn't have a 'lastChecked' field. If recentTasks is
+    non-empty, the worker has been active recently — return 'now' as a
+    conservative proxy so the freshness guards trip. If empty, return
+    None (worker is truly idle, eligible for re-provisioning)."""
+    if raw.get("recentTasks"):
+        return datetime.now(timezone.utc)
+    return None
 
 
 def _parse_iso8601(s: str | None) -> datetime | None:

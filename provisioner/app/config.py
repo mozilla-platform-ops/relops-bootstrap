@@ -51,12 +51,13 @@ class Settings(BaseSettings):
     # code (rather than a secret) is intentional: changes need code review.
     target_groups: dict[str, dict] = Field(
         default={
-            # 2377013 = gecko-t-osx-1500-m4-no-sip, m4-81's group during initial
-            # testing. closely resembles production gecko-t-osx-1500-m4 (2017918)
-            # but is a separate group so the dry-run / first live fire only
-            # touches m4-81. 14716 = "Dev - CC- Bootstrap" script.
+            # 2377013 = SimpleMDM assignment_group gecko-t-osx-1500-m4-no-sip,
+            # m4-81's MDM grouping during initial testing. The TC worker pool
+            # is the production gecko-t-osx-1500-m4 — TC pool membership is
+            # independent of SimpleMDM assignment-group membership.
+            # 14716 = "Dev - CC- Bootstrap" script.
             "2377013": {
-                "role": "gecko_t_osx_1500_m4_no_sip",
+                "role": "gecko_t_osx_1500_m4",
                 "script_id": 14716,
             },
             # Add other (assignment_group, role, script) tuples as more roles
