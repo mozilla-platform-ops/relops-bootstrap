@@ -55,7 +55,7 @@ resource "google_network_security_server_tls_policy" "broker" {
   location = "global"
 
   mtls_policy {
-    client_validation_mode         = "ALLOW_INVALID_OR_MISSING_CLIENT_CERT"
+    client_validation_mode = "ALLOW_INVALID_OR_MISSING_CLIENT_CERT"
     # Trust config must be referenced by project NUMBER, not project ID — the
     # Network Security API normalizes the field to the number form and the
     # field is immutable, so a project-ID form here forces a delete+recreate
