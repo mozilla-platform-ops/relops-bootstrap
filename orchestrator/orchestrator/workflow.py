@@ -93,10 +93,20 @@ def step_drain(ctx: HostContext) -> None:
 def step_wipe(ctx: HostContext) -> None:
     if not ctx.simplemdm_device_id:
         raise RuntimeError(f"{ctx.hostname} not found in SimpleMDM")
+    # Guard: EACS needs an escrowed Bootstrap Token. Without it, the erase either fails
+    # (DoNotObliterate) or full-obliterates into a long headless macOS reinstall. Refuse to
+    # wipe a box that can't EACS — verify BST over ssh first (operator key, no password).
+    bst = ssh.run(ctx.fqdn, "sudo profiles status -type bootstraptoken", check=False)
+    if b"escrowed to server: YES" not in bst.stdout:
+        raise RuntimeError(
+            f"{ctx.fqdn}: Bootstrap Token not escrowed — EACS can't run, so a wipe would fail or "
+            f"full-obliterate (headless reinstall). Mint + escrow first (reprovision mint, escrow-bst), "
+            f"or wipe manually via the SimpleMDM UI if a full obliterate is truly intended."
+        )
     # Record the current enrolled_at so wait_for_reenroll can detect a *fresh* enrollment
     # (status alone is unreliable: it stays "enrolled" until the erase actually executes).
     ctx.pre_wipe_enrolled_at = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {}).get("enrolled_at")
-    console.print(f"[bold]wipe[/]: EACS-equivalent obliteration on device {ctx.simplemdm_device_id}")
+    console.print(f"[bold]wipe[/]: EACS (DoNotObliterate) on device {ctx.simplemdm_device_id}")
     simplemdm.wipe(ctx.simplemdm_device_id)
 
 

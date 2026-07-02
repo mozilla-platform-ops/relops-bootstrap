@@ -81,6 +81,25 @@ def test_escrow_bst_raises_when_not_escrowed():
             workflow.step_escrow_bst(_ctx())
 
 
+# --- wipe guard ---
+
+def test_wipe_aborts_without_escrowed_bst():
+    """Refuse to wipe a box that can't EACS (no escrowed BST) — else it full-obliterates."""
+    with patch("orchestrator.workflow.ssh.run") as run:
+        run.return_value.stdout = b"profiles: Bootstrap Token escrowed to server: NO"
+        with pytest.raises(RuntimeError):
+            workflow.step_wipe(_ctx())
+
+
+def test_wipe_proceeds_with_escrowed_bst():
+    with patch("orchestrator.workflow.ssh.run") as run, \
+         patch("orchestrator.workflow.simplemdm.get_device", return_value={"attributes": {"enrolled_at": "x"}}), \
+         patch("orchestrator.workflow.simplemdm.wipe") as wipe:
+        run.return_value.stdout = b"profiles: Bootstrap Token escrowed to server: YES"
+        workflow.step_wipe(_ctx())
+        wipe.assert_called_once()
+
+
 # --- reprovision() sequence ---
 
 def _run_reprovision_capturing(**kwargs) -> list[str]:
