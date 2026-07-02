@@ -63,21 +63,3 @@ def get_script_job(job_id: int) -> dict:
     r = httpx.get(f"{BASE}/script_jobs/{job_id}", auth=_auth(), timeout=30)
     r.raise_for_status()
     return r.json()["data"]
-
-
-def rotate_admin_password(device_id: int) -> None:
-    """
-    Rotate the macOS auto-admin password to a fresh SimpleMDM-generated one.
-
-    POST /devices/{id}/rotate_admin_password -> 202 Accepted (async). The new password
-    is NOT returned and is not retrievable via API — view it in the SimpleMDM UI. Requires
-    an escrowed Bootstrap Token (MDM uses it to reset the password while preserving the
-    SecureToken). Run this AFTER bootstrap: the DEP account-setup must keep a *fixed*
-    bootstrap password so the mint can log in; this call secures it afterward.
-    """
-    r = httpx.post(f"{BASE}/devices/{device_id}/rotate_admin_password", auth=_auth(), timeout=30)
-    if r.status_code >= 400:
-        # Surface the API's explanation (raise_for_status hides the body). Common 400 cause:
-        # the device has no SimpleMDM-managed auto-admin to rotate (e.g. "auto-generate
-        # unique local admin password" not enabled for the enrollment).
-        raise RuntimeError(f"rotate_admin_password HTTP {r.status_code}: {r.text.strip() or '<no body>'}")

@@ -186,37 +186,12 @@ def step_wait_for_sentinel(ctx: HostContext) -> None:
     raise TimeoutError("bootstrap sentinel did not appear in time")
 
 
-def step_rotate_admin_password(ctx: HostContext) -> None:
-    """
-    Rotate the auto-admin password to a fresh SimpleMDM-generated one, post-bootstrap.
-
-    The bootstrap needs the fixed DEP account-setup password (so the mint can log in);
-    this secures it afterward. Relies on the escrowed BST (MDM resets the password while
-    preserving the SecureToken). The new password lives in the SimpleMDM UI; the operator
-    ssh key keeps working regardless.
-    """
-    if not ctx.simplemdm_device_id:
-        raise RuntimeError(f"{ctx.hostname} not found in SimpleMDM")
-    console.print(f"[bold]rotate_admin[/]: rotating auto-admin password on device {ctx.simplemdm_device_id}")
-    # Best-effort: the worker is already provisioned by the time we get here, so a rotation
-    # failure must not fail the whole run. Warn loudly and continue. Re-run `rotate-admin`
-    # once the underlying cause is fixed.
-    try:
-        simplemdm.rotate_admin_password(ctx.simplemdm_device_id)
-        console.print("  → rotation requested (202); new password is in the SimpleMDM UI.")
-    except Exception as e:  # noqa: BLE001 — provisioning already succeeded; never crash on the post-step
-        console.print(f"[yellow]  → WARN: admin-password rotation failed: {e}[/]")
-        console.print("[yellow]     Worker is provisioned and quarantined regardless; fix + re-run `rotate-admin`.[/]")
-
-
 def step_unquarantine(ctx: HostContext) -> None:
     console.print(f"[bold]unquarantine[/]: {ctx.hostname}")
     taskcluster.unquarantine(ctx.worker_pool_id, ctx.worker_group, ctx.hostname)
 
 
-def reprovision(
-    hostname: str, *, skip_wipe: bool = False, unquarantine: bool = False, rotate_admin: bool = False
-) -> None:
+def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = False) -> None:
     """Full E2E workflow. skip_wipe lets operators re-run later steps after a wipe.
 
     unquarantine defaults to False: by design a host stays quarantined through wipe +
@@ -224,12 +199,10 @@ def reprovision(
     to return the host to service at the end — the eventual prod-return flow, once a
     queue:quarantine-scoped credential is available.
 
-    rotate_admin defaults to False: SimpleMDM's rotate_admin_password only works when the
-    enrollment uses "auto-generate unique local admin password", which is incompatible with
-    the fixed bootstrap password the mint needs (and SimpleMDM won't expose the generated
-    password via API). It returns "macOS Auto Admin password can not be rotated" otherwise.
-    Left in place (opt-in) for enrollments that do use a managed auto-admin; the real
-    hardening for fixed-password fleets is a strong DEP password or an on-box reset.
+    Admin-password hardening is a DEP config concern, not a workflow step: set a strong,
+    random admin password in the SimpleMDM DEP account-setup and point the mint at it via
+    REPROVISION_SSH_ADMIN_PASSWORD. (SimpleMDM's rotate_admin_password can't be used — it
+    requires an auto-generated managed password, which the mint can't read back.)
     """
     ctx = resolve(hostname)
     console.print(f"=> reprovisioning {ctx.hostname} (role={ctx.role}, pool={ctx.worker_pool_id})")
@@ -244,10 +217,6 @@ def reprovision(
     # via mTLS using its SCEP-issued cert. (Was a 1Password op-read + SSH drop.)
     step_trigger_bootstrap_script(ctx)
     step_wait_for_sentinel(ctx)
-    if rotate_admin:
-        # Secure the auto-admin password now that bootstrap (which needed the fixed
-        # password) is done. Safe: MDM uses the escrowed BST, SecureToken is preserved.
-        step_rotate_admin_password(ctx)
     # Default: leave the host quarantined (matches current fleet reality; no un-quarantine
     # key wired). Only return it to service when explicitly asked — the eventual prod flow.
     if unquarantine:

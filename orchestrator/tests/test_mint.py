@@ -81,14 +81,6 @@ def test_escrow_bst_raises_when_not_escrowed():
             workflow.step_escrow_bst(_ctx())
 
 
-# --- rotate ---
-
-def test_rotate_calls_simplemdm():
-    with patch("orchestrator.workflow.simplemdm.rotate_admin_password") as rot:
-        workflow.step_rotate_admin_password(_ctx())
-        rot.assert_called_once_with(1962176)
-
-
 # --- reprovision() sequence ---
 
 def _run_reprovision_capturing(**kwargs) -> list[str]:
@@ -107,27 +99,20 @@ def _run_reprovision_capturing(**kwargs) -> list[str]:
          patch("orchestrator.workflow.step_escrow_bst", rec("escrow")), \
          patch("orchestrator.workflow.step_trigger_bootstrap_script", rec("trigger")), \
          patch("orchestrator.workflow.step_wait_for_sentinel", rec("sentinel")), \
-         patch("orchestrator.workflow.step_rotate_admin_password", rec("rotate")), \
          patch("orchestrator.workflow.step_unquarantine", rec("unquarantine")):
         workflow.reprovision("macmini-m4-81", **kwargs)
     return calls
 
 
 def test_reprovision_default_flow():
-    """Default: mint before escrow, NO rotate, NO unquarantine, no vault step."""
+    """Default: mint before escrow, NO unquarantine, no vault step."""
     calls = _run_reprovision_capturing()
     assert "unquarantine" not in calls  # quarantine persists by default
-    assert "rotate" not in calls  # SimpleMDM rotate incompatible with fixed-password mint; off by default
     assert calls.index("mint") < calls.index("escrow")  # mint precedes BST escrow
     assert not hasattr(workflow, "step_deliver_vault")  # Path C: no 1Password vault drop
-
-
-def test_reprovision_rotate_flag_on():
-    """With rotate_admin=True the rotate step runs, only after the worker lands."""
-    calls = _run_reprovision_capturing(rotate_admin=True)
-    assert calls.index("sentinel") < calls.index("rotate")
+    assert not hasattr(workflow, "step_rotate_admin_password")  # rotation is a DEP-config concern
 
 
 def test_reprovision_unquarantine_flag_returns_to_service():
     calls = _run_reprovision_capturing(unquarantine=True)
-    assert calls[-1] == "unquarantine"  # runs, and last (after rotate)
+    assert calls[-1] == "unquarantine"  # runs, and last

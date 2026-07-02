@@ -23,12 +23,6 @@ reprovision run macmini-m4-81
    The bootstrap fetches `vault.yaml` itself over mTLS using its SCEP cert (Path C),
    so there is **no vault-delivery step** (previously a 1Password `op read` + SSH drop).
 8. **wait_for_sentinel** — poll for `/var/log/m4-bootstrap-complete` over SSH
-9. **rotate_admin** — `POST /devices/{id}/rotate_admin_password` — **off by default** (opt in
-   with `--rotate-admin`). SimpleMDM only rotates when the enrollment uses "auto-generate unique
-   local admin password", which is **incompatible** with the fixed bootstrap password the `mint`
-   step needs (and SimpleMDM won't expose the generated password via API). With a fixed password
-   it returns `"macOS Auto Admin password can not be rotated"`. See **Admin password** below for
-   the real hardening options.
 
 The host **stays quarantined** through the whole reprovision by default — `run` does
 **not** auto-unquarantine unless you pass `--unquarantine`. Returning a host to service
@@ -43,7 +37,6 @@ reprovision mint macmini-m4-81            # re-run just the SecureToken mint
 reprovision escrow-bst macmini-m4-81      # re-run just the BST escrow
 reprovision trigger-bootstrap macmini-m4-81
 reprovision wait-sentinel macmini-m4-81
-reprovision rotate-admin macmini-m4-81    # rotate the auto-admin password
 reprovision unquarantine macmini-m4-81
 ```
 
@@ -62,15 +55,15 @@ All settings come from environment variables prefixed `REPROVISION_`. Drop a
 
 | Var | Required | Purpose |
 |---|---|---|
-| `REPROVISION_SIMPLEMDM_API_KEY` | yes | SimpleMDM API key: device wipe, script_jobs, rotate_admin_password |
+| `REPROVISION_SIMPLEMDM_API_KEY` | yes | SimpleMDM API key: device wipe + script_jobs |
 | `REPROVISION_BOOTSTRAP_SCRIPT_ID` | yes | Numeric SimpleMDM script id for the bootstrap script |
 | `REPROVISION_TC_CLIENT_ID` | quarantine steps only | TC client with `queue:quarantine-worker:*` scope |
 | `REPROVISION_TC_ACCESS_TOKEN` | quarantine steps only | TC client access token |
 | `REPROVISION_SSH_ADMIN_USER` | no | Default: `admin` |
-| `REPROVISION_SSH_ADMIN_PASSWORD` | no | Fixed DEP bootstrap password for the mint login (default: `admin`) |
+| `REPROVISION_SSH_ADMIN_PASSWORD` | yes (prod) | The DEP account-setup admin password, used for the mint login. Set to your strong DEP password (from a secret); defaults to `admin` only for lab use. |
 
 TC credentials are only needed for the `quarantine` / `drain` / `unquarantine`
-steps. The core `wipe → reenroll → mint → escrow → bootstrap → rotate` sequence
+steps. The core `wipe → reenroll → mint → escrow → bootstrap` sequence
 runs without them.
 
 ## Secret delivery (Path C)
@@ -86,19 +79,14 @@ have been removed.
 The DEP macOS Account Setup must create `admin` with a **fixed** password, because the
 `mint` step logs in with it (`REPROVISION_SSH_ADMIN_PASSWORD`) to grant the first SecureToken.
 
-This makes SimpleMDM's `rotate_admin_password` unusable: it only rotates an *auto-generated
-managed* password, and returns `"macOS Auto Admin password can not be rotated"` for a fixed
-one — and SimpleMDM won't expose an auto-generated password via API for the mint to use. The
-two requirements are mutually exclusive. Hardening options for a fixed-password fleet:
+**Hardening:** set a strong, random password in the SimpleMDM DEP account-setup and point
+`REPROVISION_SSH_ADMIN_PASSWORD` at it (ideally sourced from a secret store, not committed).
+That's the whole story — no rotation step is needed.
 
-- **Strong fixed password** — set a strong admin password in the DEP account-setup, stored in
-  a secret; point `REPROVISION_SSH_ADMIN_PASSWORD` at it. Simple; shared across the fleet.
-- **On-box per-device rotation** — after bootstrap, `sudo sysadminctl -resetPasswordFor admin
-  -newPassword <generated>` over ssh (admin holds a SecureToken by then), storing the new
-  password per-device in a secret store. Unique per device; SimpleMDM's stored password goes stale.
-
-`rotate_admin` / `--rotate-admin` remains available for enrollments that *do* use a managed
-auto-admin, but is off by default.
+Why not SimpleMDM's `rotate_admin_password`? It only rotates an *auto-generated managed*
+password and returns `"macOS Auto Admin password can not be rotated"` for a fixed one — and
+SimpleMDM won't expose an auto-generated password via API for the mint to read. The two
+requirements are mutually exclusive, so we harden via a strong fixed DEP password instead.
 
 ## Known limitations
 

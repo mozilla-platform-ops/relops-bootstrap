@@ -21,20 +21,13 @@ def run(
         help="Return the host to service at the end. Default off: host stays quarantined "
         "through reprovision (needs a queue:quarantine-scoped credential).",
     ),
-    rotate_admin: bool = typer.Option(
-        False,
-        "--rotate-admin/--no-rotate-admin",
-        help="Rotate the SimpleMDM auto-admin password after landing (default OFF). Only works "
-        "for enrollments using an auto-generated managed admin password — incompatible with the "
-        "fixed bootstrap password the mint needs, so off by default.",
-    ),
 ) -> None:
-    """Full workflow: quarantine -> drain -> wipe -> reenroll -> mint -> BST -> bootstrap -> rotate.
+    """Full workflow: quarantine -> drain -> wipe -> reenroll -> mint -> BST -> bootstrap.
 
     Vault is fetched by the bootstrap script over mTLS (SCEP), so there is no vault-delivery step.
     By default the host stays quarantined throughout; pass --unquarantine to return it to service.
     """
-    workflow.reprovision(hostname, unquarantine=unquarantine, rotate_admin=rotate_admin)
+    workflow.reprovision(hostname, unquarantine=unquarantine)
 
 
 @app.command()
@@ -78,12 +71,6 @@ def escrow_bst(hostname: str) -> None:
 @app.command()
 def trigger_bootstrap(hostname: str) -> None:
     workflow.step_trigger_bootstrap_script(workflow.resolve(hostname))
-
-
-@app.command()
-def rotate_admin(hostname: str) -> None:
-    """Rotate the auto-admin password to a fresh SimpleMDM-generated one (needs escrowed BST)."""
-    workflow.step_rotate_admin_password(workflow.resolve(hostname))
 
 
 @app.command()
