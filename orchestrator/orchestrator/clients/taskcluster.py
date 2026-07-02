@@ -48,8 +48,10 @@ def quarantine(worker_pool_id: str, worker_group: str, worker_id: str, until: st
     Set quarantineUntil = ISO timestamp. Use a far-future date to quarantine
     "indefinitely" and call unquarantine() to clear.
     """
-    url = _provisioner_url(worker_pool_id, worker_group, worker_id) + "/quarantine"
-    r = httpx.post(url, auth=_auth(), json={"quarantineUntil": until}, timeout=15)
+    # TC Queue quarantineWorker is a PUT to the worker resource itself with
+    # {quarantineUntil} — there is no ".../quarantine" subpath (that 404s).
+    url = _provisioner_url(worker_pool_id, worker_group, worker_id)
+    r = httpx.put(url, auth=_auth(), json={"quarantineUntil": until}, timeout=15)
     r.raise_for_status()
     return r.json()
 
