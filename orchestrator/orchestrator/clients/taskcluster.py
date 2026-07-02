@@ -7,6 +7,7 @@ client to keep the orchestrator dep set small.
 from __future__ import annotations
 
 import httpx
+import taskcluster
 
 from ..config import get_settings
 
@@ -48,12 +49,19 @@ def quarantine(worker_pool_id: str, worker_group: str, worker_id: str, until: st
     Set quarantineUntil = ISO timestamp. Use a far-future date to quarantine
     "indefinitely" and call unquarantine() to clear.
     """
-    # TC Queue quarantineWorker is a PUT to the worker resource itself with
-    # {quarantineUntil} — there is no ".../quarantine" subpath (that 404s).
-    url = _provisioner_url(worker_pool_id, worker_group, worker_id)
-    r = httpx.put(url, auth=_auth(), json={"quarantineUntil": until}, timeout=15)
-    r.raise_for_status()
-    return r.json()
+    # quarantineWorker is an AUTHENTICATED mutation: TC uses Hawk auth (not HTTP Basic),
+    # so we go through the official client here. (The read-only GETs above are public and
+    # stay on httpx.) The library builds the correct PUT + Hawk Authorization header.
+    provisioner, worker_type = worker_pool_id.split("/", 1)
+    return _queue().quarantineWorker(provisioner, worker_type, worker_group, worker_id, {"quarantineUntil": until})
+
+
+def _queue() -> "taskcluster.Queue":
+    s = get_settings()
+    opts: dict = {"rootUrl": s.tc_root_url}
+    if s.tc_client_id and s.tc_access_token:
+        opts["credentials"] = {"clientId": s.tc_client_id, "accessToken": s.tc_access_token}
+    return taskcluster.Queue(opts)
 
 
 def unquarantine(worker_pool_id: str, worker_group: str, worker_id: str) -> dict:

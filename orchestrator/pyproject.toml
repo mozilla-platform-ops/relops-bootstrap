@@ -9,6 +9,7 @@ dependencies = [
     "rich>=13",
     "pydantic>=2.7",
     "pydantic-settings>=2.4",
+    "taskcluster>=101",
 ]
 
 [project.optional-dependencies]

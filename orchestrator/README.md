@@ -23,6 +23,12 @@ reprovision run macmini-m4-81
    The bootstrap fetches `vault.yaml` itself over mTLS using its SCEP cert (Path C),
    so there is **no vault-delivery step** (previously a 1Password `op read` + SSH drop).
 8. **wait_for_sentinel** — poll for `/var/log/m4-bootstrap-complete` over SSH
+9. **rotate_admin** — `POST /devices/{id}/rotate_admin_password` (default on): rotate the
+   auto-admin password off the fixed DEP bootstrap password to a unique SimpleMDM-generated
+   one, now that bootstrap (which needed the fixed password) is done. Relies on the escrowed
+   BST, so the SecureToken is preserved; the operator ssh **key** keeps working. Skip with
+   `--no-rotate-admin`. **Note:** the DEP account-setup must keep a *fixed* bootstrap password
+   (don't enable "auto-generate unique local admin password") or the `mint` login can't authenticate.
 
 The host **stays quarantined** through the whole reprovision by default — `run` does
 **not** auto-unquarantine unless you pass `--unquarantine`. Returning a host to service
@@ -37,6 +43,7 @@ reprovision mint macmini-m4-81            # re-run just the SecureToken mint
 reprovision escrow-bst macmini-m4-81      # re-run just the BST escrow
 reprovision trigger-bootstrap macmini-m4-81
 reprovision wait-sentinel macmini-m4-81
+reprovision rotate-admin macmini-m4-81    # rotate the auto-admin password
 reprovision unquarantine macmini-m4-81
 ```
 
@@ -55,27 +62,33 @@ All settings come from environment variables prefixed `REPROVISION_`. Drop a
 
 | Var | Required | Purpose |
 |---|---|---|
-| `REPROVISION_TC_CLIENT_ID` | yes | TC client with `queue:quarantine-worker:*` scope |
-| `REPROVISION_TC_ACCESS_TOKEN` | yes | TC client access token |
-| `REPROVISION_SIMPLEMDM_API_KEY` | yes | SimpleMDM API key with device wipe + script_jobs perms |
+| `REPROVISION_SIMPLEMDM_API_KEY` | yes | SimpleMDM API key: device wipe, script_jobs, rotate_admin_password |
 | `REPROVISION_BOOTSTRAP_SCRIPT_ID` | yes | Numeric SimpleMDM script id for the bootstrap script |
-| `REPROVISION_ONEPASSWORD_VAULT` | no | 1P vault name (default: "RelOps Vault") |
+| `REPROVISION_TC_CLIENT_ID` | quarantine steps only | TC client with `queue:quarantine-worker:*` scope |
+| `REPROVISION_TC_ACCESS_TOKEN` | quarantine steps only | TC client access token |
 | `REPROVISION_SSH_ADMIN_USER` | no | Default: `admin` |
+| `REPROVISION_SSH_ADMIN_PASSWORD` | no | Fixed DEP bootstrap password for the mint login (default: `admin`) |
 
-The `op` CLI must be authenticated on the operator's laptop (either `op signin`
-or an `OP_SERVICE_ACCOUNT_TOKEN` env var for a service account).
+TC credentials are only needed for the `quarantine` / `drain` / `unquarantine`
+steps. The core `wipe → reenroll → mint → escrow → bootstrap → rotate` sequence
+runs without them.
 
-## Secret delivery: today and future
+## Secret delivery (Path C)
 
-Today, `deliver_vault` reads the role's vault.yaml from 1Password via the
-`op` CLI on the operator's laptop and SSH-drops it to `/var/root/vault.yaml`
-on the host. The bootstrap script there is already polling for that path,
-so no host-side changes are needed.
+There is no vault-delivery step. The bootstrap script on the host fetches
+`vault.yaml` itself over mTLS from the broker using its SCEP-issued client cert
+(the rest of this repo provisions that broker + CA). Previously this was a
+1Password `op read` + SSH drop; that `deliver_vault` step and its `op` dependency
+have been removed.
 
-Once the SCEP + broker infrastructure (the rest of this repo) is live,
-`deliver_vault` becomes a no-op: the bootstrap script on the host fetches
-vault.yaml from the broker directly using its SCEP-issued client cert.
-A `--no-vault-drop` flag will skip the 1Password step at that point.
+## Admin password
+
+The DEP macOS Account Setup must create `admin` with a **fixed** bootstrap
+password (do **not** enable "auto-generate unique local admin password"), because
+the `mint` step logs in with it (`REPROVISION_SSH_ADMIN_PASSWORD`, default `admin`)
+to grant the first SecureToken. The `rotate_admin` step then rotates it to a unique
+SimpleMDM-generated password post-bootstrap. SimpleMDM does not expose that rotated
+password via API — view it in the SimpleMDM UI; the operator ssh key is unaffected.
 
 ## Known limitations
 

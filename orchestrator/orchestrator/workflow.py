@@ -31,6 +31,7 @@ class HostContext:
     worker_pool_id: str  # e.g. releng-hardware/gecko-t-osx-1500-m4
     worker_group: str = "mdc1"
     simplemdm_device_id: int | None = None
+    pre_wipe_enrolled_at: str | None = None  # captured by step_wipe; used to detect a *fresh* re-enroll
 
 
 def resolve(hostname: str) -> HostContext:
@@ -92,19 +93,27 @@ def step_drain(ctx: HostContext) -> None:
 def step_wipe(ctx: HostContext) -> None:
     if not ctx.simplemdm_device_id:
         raise RuntimeError(f"{ctx.hostname} not found in SimpleMDM")
+    # Record the current enrolled_at so wait_for_reenroll can detect a *fresh* enrollment
+    # (status alone is unreliable: it stays "enrolled" until the erase actually executes).
+    ctx.pre_wipe_enrolled_at = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {}).get("enrolled_at")
     console.print(f"[bold]wipe[/]: EACS-equivalent obliteration on device {ctx.simplemdm_device_id}")
     simplemdm.wipe(ctx.simplemdm_device_id)
 
 
 def step_wait_for_reenroll(ctx: HostContext) -> None:
     s = get_settings()
-    console.print("[bold]wait_for_reenroll[/]: polling SimpleMDM for post-DEP check-in")
+    # Baseline: the pre-wipe enrolled_at (from step_wipe). If unset (step run standalone),
+    # capture the current value now. We wait for a DIFFERENT enrolled_at + status=enrolled,
+    # so we don't false-return on the pre-wipe enrollment (status lags the erase).
+    baseline = ctx.pre_wipe_enrolled_at
+    if baseline is None:
+        baseline = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {}).get("enrolled_at")
+    console.print(f"[bold]wait_for_reenroll[/]: polling SimpleMDM for a fresh enrollment (was {baseline})")
     deadline = time.monotonic() + s.wipe_max_wait_seconds
     while time.monotonic() < deadline:
-        d = simplemdm.get_device(ctx.simplemdm_device_id)
-        status = d.get("attributes", {}).get("status")
-        if status == "enrolled":
-            console.print("  → enrolled.")
+        a = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {})
+        if a.get("status") == "enrolled" and a.get("enrolled_at") != baseline:
+            console.print(f"  → re-enrolled ({a.get('enrolled_at')}).")
             return
         time.sleep(s.wipe_poll_seconds)
     raise TimeoutError("device did not re-enroll within window")
@@ -120,6 +129,8 @@ def step_mint(ctx: HostContext) -> None:
     it wedges at the BST wait-loop and times out. Idempotent — skips if already ENABLED.
     """
     console.print(f"[bold]mint[/]: ensuring {ctx.fqdn} admin holds a SecureToken")
+    console.print("  → waiting for sshd (relops-ssh pkg lands during convergence)…")
+    ssh.wait_for_sshd(ctx.fqdn)
     if "ENABLED" in ssh.secure_token_status(ctx.fqdn):
         console.print("  → already SecureToken-ENABLED; skipping mint.")
         return
@@ -175,18 +186,40 @@ def step_wait_for_sentinel(ctx: HostContext) -> None:
     raise TimeoutError("bootstrap sentinel did not appear in time")
 
 
+def step_rotate_admin_password(ctx: HostContext) -> None:
+    """
+    Rotate the auto-admin password to a fresh SimpleMDM-generated one, post-bootstrap.
+
+    The bootstrap needs the fixed DEP account-setup password (so the mint can log in);
+    this secures it afterward. Relies on the escrowed BST (MDM resets the password while
+    preserving the SecureToken). The new password lives in the SimpleMDM UI; the operator
+    ssh key keeps working regardless.
+    """
+    if not ctx.simplemdm_device_id:
+        raise RuntimeError(f"{ctx.hostname} not found in SimpleMDM")
+    console.print(f"[bold]rotate_admin[/]: rotating auto-admin password on device {ctx.simplemdm_device_id}")
+    simplemdm.rotate_admin_password(ctx.simplemdm_device_id)
+    console.print("  → rotation requested (202); new password is in the SimpleMDM UI.")
+
+
 def step_unquarantine(ctx: HostContext) -> None:
     console.print(f"[bold]unquarantine[/]: {ctx.hostname}")
     taskcluster.unquarantine(ctx.worker_pool_id, ctx.worker_group, ctx.hostname)
 
 
-def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = False) -> None:
+def reprovision(
+    hostname: str, *, skip_wipe: bool = False, unquarantine: bool = False, rotate_admin: bool = True
+) -> None:
     """Full E2E workflow. skip_wipe lets operators re-run later steps after a wipe.
 
     unquarantine defaults to False: by design a host stays quarantined through wipe +
     reprovision (and the fleet has no un-quarantine key wired yet). Pass unquarantine=True
     to return the host to service at the end — the eventual prod-return flow, once a
     queue:quarantine-scoped credential is available.
+
+    rotate_admin defaults to True: after the worker lands, rotate the auto-admin password
+    off the fixed DEP bootstrap password to a unique SimpleMDM-generated one. Pass
+    rotate_admin=False to leave the bootstrap password in place (e.g. for debugging).
     """
     ctx = resolve(hostname)
     console.print(f"=> reprovisioning {ctx.hostname} (role={ctx.role}, pool={ctx.worker_pool_id})")
@@ -201,6 +234,10 @@ def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = 
     # via mTLS using its SCEP-issued cert. (Was a 1Password op-read + SSH drop.)
     step_trigger_bootstrap_script(ctx)
     step_wait_for_sentinel(ctx)
+    if rotate_admin:
+        # Secure the auto-admin password now that bootstrap (which needed the fixed
+        # password) is done. Safe: MDM uses the escrowed BST, SecureToken is preserved.
+        step_rotate_admin_password(ctx)
     # Default: leave the host quarantined (matches current fleet reality; no un-quarantine
     # key wired). Only return it to service when explicitly asked — the eventual prod flow.
     if unquarantine:

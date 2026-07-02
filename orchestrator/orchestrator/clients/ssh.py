@@ -6,13 +6,28 @@ Thin SSH wrapper. Uses the local ssh binary so the operator's existing ssh-agent
 from __future__ import annotations
 
 import shlex
+import socket
 import subprocess
+import time
 
 from ..config import get_settings
 
 
 def _user_host(hostname: str) -> str:
     return f"{get_settings().ssh_admin_user}@{hostname}"
+
+
+def wait_for_sshd(hostname: str, *, timeout: int = 900, port: int = 22, poll: int = 15) -> None:
+    """Block until sshd is listening on hostname:port (the relops-ssh prestage pkg brings it
+    up a few minutes into DEP convergence). Checks the socket only — auth-independent."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((hostname, port), timeout=5):
+                return
+        except OSError:
+            time.sleep(poll)
+    raise TimeoutError(f"sshd on {hostname}:{port} not reachable within {timeout}s")
 
 
 def password_login(hostname: str) -> None:
