@@ -40,7 +40,6 @@ def resolve(hostname: str) -> HostContext:
     # Worker pool derived from role for now. Roles map 1:1 to pools by convention.
     pool_by_role = {
         "gecko_t_osx_1500_m4": "releng-hardware/gecko-t-osx-1500-m4",
-        "gecko_t_osx_1500_m4_no_sip": "releng-hardware/gecko-t-osx-1500-m4-no-sip",
         "gecko_t_osx_1400_r8": "releng-hardware/gecko-t-osx-1400-r8",
     }
     pool = pool_by_role.get(role)
