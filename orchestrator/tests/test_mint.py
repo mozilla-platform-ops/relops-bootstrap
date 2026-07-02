@@ -74,3 +74,27 @@ def test_escrow_bst_raises_when_not_escrowed():
         run.return_value.stdout = b"profiles: Bootstrap Token escrowed to server: NO"
         with pytest.raises(RuntimeError):
             workflow.step_escrow_bst(_ctx())
+
+
+def test_reprovision_keeps_quarantine_and_mints_before_escrow():
+    """run() must NOT auto-unquarantine, must mint before escrow, and have no vault step."""
+    calls: list[str] = []
+
+    def rec(name):
+        return lambda ctx: calls.append(name)
+
+    with patch("orchestrator.workflow.resolve", return_value=_ctx()), \
+         patch("orchestrator.workflow.step_quarantine", rec("quarantine")), \
+         patch("orchestrator.workflow.step_drain", rec("drain")), \
+         patch("orchestrator.workflow.step_wipe", rec("wipe")), \
+         patch("orchestrator.workflow.step_wait_for_reenroll", rec("reenroll")), \
+         patch("orchestrator.workflow.step_mint", rec("mint")), \
+         patch("orchestrator.workflow.step_escrow_bst", rec("escrow")), \
+         patch("orchestrator.workflow.step_trigger_bootstrap_script", rec("trigger")), \
+         patch("orchestrator.workflow.step_wait_for_sentinel", rec("sentinel")), \
+         patch("orchestrator.workflow.step_unquarantine", rec("unquarantine")):
+        workflow.reprovision("macmini-m4-81")
+
+    assert "unquarantine" not in calls  # quarantine persists by design
+    assert calls.index("mint") < calls.index("escrow")  # mint must precede BST escrow
+    assert not hasattr(workflow, "step_deliver_vault")  # Path C: no 1Password vault drop

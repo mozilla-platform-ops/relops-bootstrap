@@ -196,5 +196,7 @@ def reprovision(hostname: str, *, skip_wipe: bool = False) -> None:
     # via mTLS using its SCEP-issued cert. (Was a 1Password op-read + SSH drop.)
     step_trigger_bootstrap_script(ctx)
     step_wait_for_sentinel(ctx)
-    step_unquarantine(ctx)
-    console.print(f"[bold green]done[/]: {ctx.hostname} reprovisioned")
+    # NB: intentionally NO step_unquarantine here. By design a quarantined host stays
+    # quarantined through wipe + reprovision (the fleet has no un-quarantine capability
+    # wired). Use the `unquarantine` subcommand explicitly if you ever need it.
+    console.print(f"[bold green]done[/]: {ctx.hostname} reprovisioned (still quarantined — unquarantine manually if intended)")
