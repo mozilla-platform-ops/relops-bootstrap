@@ -14,16 +14,22 @@ reprovision run macmini-m4-81
 2. **drain** — wait for the current task to finish
 3. **wipe** — POST /devices/{id}/wipe with `obliteration_behavior=ObliterateWithWarning`
 4. **wait_for_reenroll** — poll SimpleMDM until device status = enrolled
-5. **escrow_bst** — `ssh admin@host sudo profiles install -type bootstraptoken`
-6. **deliver_vault** — `op read` the role's vault.yaml from 1Password → SSH drop to `/var/root/vault.yaml`
-7. **trigger_bootstrap** — SimpleMDM script_jobs API to run the bootstrap script
+5. **mint** — interactive password SSH login to mint the first SecureToken (DEP skips
+   Setup Assistant, so admin has no token until a PAM login; key-based ssh won't do it).
+   Idempotent — skips if already ENABLED.
+6. **escrow_bst** — `sudo profiles install -type bootstraptoken -user admin -password …`
+   (non-interactive; requires the token from step 5)
+7. **trigger_bootstrap** — SimpleMDM script_jobs API to run the bootstrap script.
+   The bootstrap fetches `vault.yaml` itself over mTLS using its SCEP cert (Path C),
+   so there is **no vault-delivery step** (previously a 1Password `op read` + SSH drop).
 8. **wait_for_sentinel** — poll for `/var/log/m4-bootstrap-complete` over SSH
 9. **unquarantine** in Taskcluster
 
 If any step fails, fix the issue and re-run the individual subcommand:
 
 ```bash
-reprovision deliver-vault macmini-m4-81   # re-run just the vault drop
+reprovision mint macmini-m4-81            # re-run just the SecureToken mint
+reprovision escrow-bst macmini-m4-81      # re-run just the BST escrow
 reprovision trigger-bootstrap macmini-m4-81
 reprovision wait-sentinel macmini-m4-81
 reprovision unquarantine macmini-m4-81
