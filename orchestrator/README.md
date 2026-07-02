@@ -24,9 +24,11 @@ reprovision run macmini-m4-81
    so there is **no vault-delivery step** (previously a 1Password `op read` + SSH drop).
 8. **wait_for_sentinel** — poll for `/var/log/m4-bootstrap-complete` over SSH
 
-The host **stays quarantined** through the whole reprovision by design — `run` does
-**not** auto-unquarantine. There is a separate `unquarantine` subcommand for the rare
-case you explicitly want to return a host to service.
+The host **stays quarantined** through the whole reprovision by default — `run` does
+**not** auto-unquarantine unless you pass `--unquarantine`. Returning a host to service
+needs a `queue:quarantine`-scoped credential (not wired fleet-wide yet), so the safe
+default keeps it quarantined. `reprovision run <host> --unquarantine` does the final
+un-quarantine; there's also a standalone `unquarantine` subcommand.
 
 If any step fails, fix the issue and re-run the individual subcommand:
 

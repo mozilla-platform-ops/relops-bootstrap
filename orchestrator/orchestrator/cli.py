@@ -13,13 +13,21 @@ app = typer.Typer(no_args_is_help=True, help="Drive an end-to-end EACS reprovisi
 
 
 @app.command()
-def run(hostname: str = typer.Argument(..., help="Short hostname, e.g. macmini-m4-81")) -> None:
+def run(
+    hostname: str = typer.Argument(..., help="Short hostname, e.g. macmini-m4-81"),
+    unquarantine: bool = typer.Option(
+        False,
+        "--unquarantine",
+        help="Return the host to service at the end. Default off: host stays quarantined "
+        "through reprovision (needs a queue:quarantine-scoped credential).",
+    ),
+) -> None:
     """Full workflow: quarantine -> drain -> wipe -> reenroll -> mint -> BST -> bootstrap.
 
     Vault is fetched by the bootstrap script over mTLS (SCEP), so there is no vault-delivery step.
-    The host stays quarantined throughout (no auto-unquarantine); use `unquarantine` explicitly.
+    By default the host stays quarantined throughout; pass --unquarantine to return it to service.
     """
-    workflow.reprovision(hostname)
+    workflow.reprovision(hostname, unquarantine=unquarantine)
 
 
 @app.command()

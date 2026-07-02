@@ -181,8 +181,14 @@ def step_unquarantine(ctx: HostContext) -> None:
     taskcluster.unquarantine(ctx.worker_pool_id, ctx.worker_group, ctx.hostname)
 
 
-def reprovision(hostname: str, *, skip_wipe: bool = False) -> None:
-    """Full E2E workflow. skip_wipe lets operators re-run later steps after a wipe."""
+def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = False) -> None:
+    """Full E2E workflow. skip_wipe lets operators re-run later steps after a wipe.
+
+    unquarantine defaults to False: by design a host stays quarantined through wipe +
+    reprovision (and the fleet has no un-quarantine key wired yet). Pass unquarantine=True
+    to return the host to service at the end — the eventual prod-return flow, once a
+    queue:quarantine-scoped credential is available.
+    """
     ctx = resolve(hostname)
     console.print(f"=> reprovisioning {ctx.hostname} (role={ctx.role}, pool={ctx.worker_pool_id})")
     step_quarantine(ctx)
@@ -196,7 +202,10 @@ def reprovision(hostname: str, *, skip_wipe: bool = False) -> None:
     # via mTLS using its SCEP-issued cert. (Was a 1Password op-read + SSH drop.)
     step_trigger_bootstrap_script(ctx)
     step_wait_for_sentinel(ctx)
-    # NB: intentionally NO step_unquarantine here. By design a quarantined host stays
-    # quarantined through wipe + reprovision (the fleet has no un-quarantine capability
-    # wired). Use the `unquarantine` subcommand explicitly if you ever need it.
-    console.print(f"[bold green]done[/]: {ctx.hostname} reprovisioned (still quarantined — unquarantine manually if intended)")
+    # Default: leave the host quarantined (matches current fleet reality; no un-quarantine
+    # key wired). Only return it to service when explicitly asked — the eventual prod flow.
+    if unquarantine:
+        step_unquarantine(ctx)
+        console.print(f"[bold green]done[/]: {ctx.hostname} reprovisioned and returned to service")
+    else:
+        console.print(f"[bold green]done[/]: {ctx.hostname} reprovisioned (still quarantined; pass --unquarantine to return to service)")

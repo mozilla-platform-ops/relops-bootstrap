@@ -76,8 +76,8 @@ def test_escrow_bst_raises_when_not_escrowed():
             workflow.step_escrow_bst(_ctx())
 
 
-def test_reprovision_keeps_quarantine_and_mints_before_escrow():
-    """run() must NOT auto-unquarantine, must mint before escrow, and have no vault step."""
+def _run_reprovision_capturing(**kwargs) -> list[str]:
+    """Run reprovision() with every step stubbed; return the ordered list of step names."""
     calls: list[str] = []
 
     def rec(name):
@@ -93,8 +93,19 @@ def test_reprovision_keeps_quarantine_and_mints_before_escrow():
          patch("orchestrator.workflow.step_trigger_bootstrap_script", rec("trigger")), \
          patch("orchestrator.workflow.step_wait_for_sentinel", rec("sentinel")), \
          patch("orchestrator.workflow.step_unquarantine", rec("unquarantine")):
-        workflow.reprovision("macmini-m4-81")
+        workflow.reprovision("macmini-m4-81", **kwargs)
+    return calls
 
-    assert "unquarantine" not in calls  # quarantine persists by design
-    assert calls.index("mint") < calls.index("escrow")  # mint must precede BST escrow
+
+def test_reprovision_default_keeps_quarantine_and_mints_before_escrow():
+    """Default run() must NOT auto-unquarantine, must mint before escrow, no vault step."""
+    calls = _run_reprovision_capturing()
+    assert "unquarantine" not in calls  # quarantine persists by default
+    assert calls.index("mint") < calls.index("escrow")  # mint precedes BST escrow
     assert not hasattr(workflow, "step_deliver_vault")  # Path C: no 1Password vault drop
+
+
+def test_reprovision_unquarantine_flag_returns_to_service():
+    """With unquarantine=True the final step_unquarantine runs (the eventual prod-return flow)."""
+    calls = _run_reprovision_capturing(unquarantine=True)
+    assert calls[-1] == "unquarantine"  # runs, and last
