@@ -76,4 +76,8 @@ def rotate_admin_password(device_id: int) -> None:
     bootstrap password so the mint can log in; this call secures it afterward.
     """
     r = httpx.post(f"{BASE}/devices/{device_id}/rotate_admin_password", auth=_auth(), timeout=30)
-    r.raise_for_status()
+    if r.status_code >= 400:
+        # Surface the API's explanation (raise_for_status hides the body). Common 400 cause:
+        # the device has no SimpleMDM-managed auto-admin to rotate (e.g. "auto-generate
+        # unique local admin password" not enabled for the enrollment).
+        raise RuntimeError(f"rotate_admin_password HTTP {r.status_code}: {r.text.strip() or '<no body>'}")

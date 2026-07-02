@@ -198,8 +198,15 @@ def step_rotate_admin_password(ctx: HostContext) -> None:
     if not ctx.simplemdm_device_id:
         raise RuntimeError(f"{ctx.hostname} not found in SimpleMDM")
     console.print(f"[bold]rotate_admin[/]: rotating auto-admin password on device {ctx.simplemdm_device_id}")
-    simplemdm.rotate_admin_password(ctx.simplemdm_device_id)
-    console.print("  → rotation requested (202); new password is in the SimpleMDM UI.")
+    # Best-effort: the worker is already provisioned by the time we get here, so a rotation
+    # failure must not fail the whole run. Warn loudly and continue. Re-run `rotate-admin`
+    # once the underlying cause is fixed.
+    try:
+        simplemdm.rotate_admin_password(ctx.simplemdm_device_id)
+        console.print("  → rotation requested (202); new password is in the SimpleMDM UI.")
+    except Exception as e:  # noqa: BLE001 — provisioning already succeeded; never crash on the post-step
+        console.print(f"[yellow]  → WARN: admin-password rotation failed: {e}[/]")
+        console.print("[yellow]     Worker is provisioned and quarantined regardless; fix + re-run `rotate-admin`.[/]")
 
 
 def step_unquarantine(ctx: HostContext) -> None:
