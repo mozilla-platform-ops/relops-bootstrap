@@ -13,9 +13,21 @@ app = typer.Typer(no_args_is_help=True, help="Drive an end-to-end EACS reprovisi
 
 
 @app.command()
-def run(hostname: str = typer.Argument(..., help="Short hostname, e.g. macmini-m4-81")) -> None:
-    """Full workflow: quarantine -> drain -> wipe -> reenroll -> BST -> vault -> bootstrap -> unquarantine."""
-    workflow.reprovision(hostname)
+def run(
+    hostname: str = typer.Argument(..., help="Short hostname, e.g. macmini-m4-81"),
+    unquarantine: bool = typer.Option(
+        False,
+        "--unquarantine",
+        help="Return the host to service at the end. Default off: host stays quarantined "
+        "through reprovision (needs a queue:quarantine-scoped credential).",
+    ),
+) -> None:
+    """Full workflow: quarantine -> drain -> wipe -> reenroll -> mint -> BST -> bootstrap.
+
+    Vault is fetched by the bootstrap script over mTLS (SCEP), so there is no vault-delivery step.
+    By default the host stays quarantined throughout; pass --unquarantine to return it to service.
+    """
+    workflow.reprovision(hostname, unquarantine=unquarantine)
 
 
 @app.command()
@@ -45,15 +57,15 @@ def wait_reenroll(hostname: str) -> None:
 
 
 @app.command()
-def escrow_bst(hostname: str) -> None:
-    """SSH in and run `sudo profiles install -type bootstraptoken`."""
-    workflow.step_escrow_bst(workflow.resolve(hostname))
+def mint(hostname: str) -> None:
+    """Mint the admin SecureToken via an interactive password login (idempotent)."""
+    workflow.step_mint(workflow.resolve(hostname))
 
 
 @app.command()
-def deliver_vault(hostname: str) -> None:
-    """Pull role's vault.yaml from 1Password, SSH-drop to /var/root/vault.yaml."""
-    workflow.step_deliver_vault(workflow.resolve(hostname))
+def escrow_bst(hostname: str) -> None:
+    """SSH in and run `sudo profiles install -type bootstraptoken -user admin -password …` (needs mint first)."""
+    workflow.step_escrow_bst(workflow.resolve(hostname))
 
 
 @app.command()

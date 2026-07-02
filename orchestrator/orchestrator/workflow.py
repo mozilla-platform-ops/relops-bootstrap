@@ -9,13 +9,14 @@ once they've fixed whatever was broken.
 
 from __future__ import annotations
 
+import shlex
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from rich.console import Console
 
-from .clients import onepassword, simplemdm, ssh, taskcluster
+from .clients import simplemdm, ssh, taskcluster
 from .config import get_settings
 from .role_map import role_for_hostname
 
@@ -39,7 +40,6 @@ def resolve(hostname: str) -> HostContext:
     # Worker pool derived from role for now. Roles map 1:1 to pools by convention.
     pool_by_role = {
         "gecko_t_osx_1500_m4": "releng-hardware/gecko-t-osx-1500-m4",
-        "gecko_t_osx_1500_m4_no_sip": "releng-hardware/gecko-t-osx-1500-m4-no-sip",
         "gecko_t_osx_1400_r8": "releng-hardware/gecko-t-osx-1400-r8",
     }
     pool = pool_by_role.get(role)
@@ -110,30 +110,48 @@ def step_wait_for_reenroll(ctx: HostContext) -> None:
     raise TimeoutError("device did not re-enroll within window")
 
 
+def step_mint(ctx: HostContext) -> None:
+    """
+    Mint the first SecureToken via an interactive password login.
+
+    Required because DEP skips Setup Assistant on this fleet: admin exists but holds
+    no SecureToken and isn't a volume owner until an interactive (PAM) login. Proven
+    by A/B on m4-81 (2026-07-02): with this login the bootstrap finishes; without it,
+    it wedges at the BST wait-loop and times out. Idempotent — skips if already ENABLED.
+    """
+    console.print(f"[bold]mint[/]: ensuring {ctx.fqdn} admin holds a SecureToken")
+    if "ENABLED" in ssh.secure_token_status(ctx.fqdn):
+        console.print("  → already SecureToken-ENABLED; skipping mint.")
+        return
+    console.print("  → minting via interactive password login…")
+    ssh.password_login(ctx.fqdn)
+    for _ in range(6):
+        if "ENABLED" in ssh.secure_token_status(ctx.fqdn):
+            console.print("  → SecureToken ENABLED.")
+            return
+        time.sleep(5)
+    raise RuntimeError(f"{ctx.fqdn}: admin SecureToken not ENABLED after mint")
+
+
 def step_escrow_bst(ctx: HostContext) -> None:
-    """sudo profiles install -type bootstraptoken — solves Apple Silicon BST custody without VNC."""
-    console.print(f"[bold]escrow_bst[/]: sshing to admin@{ctx.fqdn} to escrow Bootstrap Token")
-    ssh.run(ctx.fqdn, "sudo profiles install -type bootstraptoken")
+    """
+    Escrow the Bootstrap Token so the box is MDM-EACS-able next cycle.
+
+    Runs non-interactively with -user/-password (the bare form prompts for a username
+    and fails). Requires admin to already hold a SecureToken — so step_mint must run
+    first. NB: the bootstrap script skips its own BST-escrow when a token already
+    exists, so on the pre-minted path this step is what actually escrows the BST.
+    """
+    s = get_settings()
+    console.print(f"[bold]escrow_bst[/]: escrowing Bootstrap Token on {ctx.fqdn}")
+    ssh.run(
+        ctx.fqdn,
+        f"sudo profiles install -type bootstraptoken -user {s.ssh_admin_user} -password {shlex.quote(s.ssh_admin_password)}",
+    )
     cp = ssh.run(ctx.fqdn, "sudo profiles status -type bootstraptoken")
     if b"escrowed to server: YES" not in cp.stdout:
         raise RuntimeError(f"BST escrow check failed:\n{cp.stdout.decode()}")
     console.print("  → BST escrowed.")
-
-
-def step_deliver_vault(ctx: HostContext) -> None:
-    """
-    Today: fetch the role's vault.yaml from 1Password, SCP-drop to /var/root/vault.yaml.
-
-    Future: when SCEP + broker infra is live, this becomes a no-op — the bootstrap
-    script on the host fetches vault.yaml from the broker using its SCEP cert.
-    Selectable via a flag on the CLI.
-    """
-    settings = get_settings()
-    reference = f"op://{settings.onepassword_vault}/vault-{ctx.role}/notesPlain"
-    console.print(f"[bold]deliver_vault[/]: reading {reference} from 1Password")
-    content = onepassword.read(reference)
-    console.print(f"[bold]deliver_vault[/]: dropping /var/root/vault.yaml on {ctx.fqdn} ({len(content)} bytes)")
-    ssh.write_file_as_root(ctx.fqdn, "/var/root/vault.yaml", content, mode="0600")
 
 
 def step_trigger_bootstrap_script(ctx: HostContext) -> int:
@@ -162,8 +180,14 @@ def step_unquarantine(ctx: HostContext) -> None:
     taskcluster.unquarantine(ctx.worker_pool_id, ctx.worker_group, ctx.hostname)
 
 
-def reprovision(hostname: str, *, skip_wipe: bool = False) -> None:
-    """Full E2E workflow. skip_wipe lets operators re-run later steps after a wipe."""
+def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = False) -> None:
+    """Full E2E workflow. skip_wipe lets operators re-run later steps after a wipe.
+
+    unquarantine defaults to False: by design a host stays quarantined through wipe +
+    reprovision (and the fleet has no un-quarantine key wired yet). Pass unquarantine=True
+    to return the host to service at the end — the eventual prod-return flow, once a
+    queue:quarantine-scoped credential is available.
+    """
     ctx = resolve(hostname)
     console.print(f"=> reprovisioning {ctx.hostname} (role={ctx.role}, pool={ctx.worker_pool_id})")
     step_quarantine(ctx)
@@ -171,9 +195,16 @@ def reprovision(hostname: str, *, skip_wipe: bool = False) -> None:
     if not skip_wipe:
         step_wipe(ctx)
         step_wait_for_reenroll(ctx)
+    step_mint(ctx)  # mint SecureToken (must precede escrow_bst)
     step_escrow_bst(ctx)
-    step_deliver_vault(ctx)
+    # No vault delivery step: Path C — the bootstrap script fetches vault.yaml itself
+    # via mTLS using its SCEP-issued cert. (Was a 1Password op-read + SSH drop.)
     step_trigger_bootstrap_script(ctx)
     step_wait_for_sentinel(ctx)
-    step_unquarantine(ctx)
-    console.print(f"[bold green]done[/]: {ctx.hostname} reprovisioned")
+    # Default: leave the host quarantined (matches current fleet reality; no un-quarantine
+    # key wired). Only return it to service when explicitly asked — the eventual prod flow.
+    if unquarantine:
+        step_unquarantine(ctx)
+        console.print(f"[bold green]done[/]: {ctx.hostname} reprovisioned and returned to service")
+    else:
+        console.print(f"[bold green]done[/]: {ctx.hostname} reprovisioned (still quarantined; pass --unquarantine to return to service)")

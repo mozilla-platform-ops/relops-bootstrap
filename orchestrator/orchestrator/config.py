@@ -15,13 +15,14 @@ class Settings(BaseSettings):
     # SimpleMDM
     simplemdm_api_key: str = Field(default="")
 
-    # 1Password (where per-role vault.yaml content lives)
-    # The CLI shells out to `op` rather than using the SDK; the operator's
-    # local `op` config provides auth (Service Account token or operator SSO).
-    onepassword_vault: str = Field(default="RelOps Vault")
-
     # SSH to host
     ssh_admin_user: str = Field(default="admin")
+    # Password for the SimpleMDM-managed admin account. Used ONLY for the interactive
+    # password login that mints the first SecureToken (see workflow.step_mint) and for
+    # the non-interactive BST escrow. Key-based ssh handles everything else.
+    # NB: SimpleMDM does not expose the auto-admin password via API, so if you enable
+    # unique-per-device passwords this must be sourced another way (secret store).
+    ssh_admin_password: str = Field(default="admin")
     ssh_command_timeout_seconds: int = Field(default=120)
 
     # Polling cadence

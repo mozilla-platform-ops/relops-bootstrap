@@ -9,7 +9,6 @@ from __future__ import annotations
 
 # Tried in order; first match wins.
 DEFAULT_PATTERNS = (
-    ("macmini-m4-81", "gecko_t_osx_1500_m4_no_sip"),
     ("macmini-m4-", "gecko_t_osx_1500_m4"),
     ("macmini-r8-140-", "gecko_t_osx_1400_r8"),
     ("macmini-r8-", "gecko_t_osx_1400_r8"),
