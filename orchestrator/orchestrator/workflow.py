@@ -215,7 +215,7 @@ def step_unquarantine(ctx: HostContext) -> None:
 
 
 def reprovision(
-    hostname: str, *, skip_wipe: bool = False, unquarantine: bool = False, rotate_admin: bool = True
+    hostname: str, *, skip_wipe: bool = False, unquarantine: bool = False, rotate_admin: bool = False
 ) -> None:
     """Full E2E workflow. skip_wipe lets operators re-run later steps after a wipe.
 
@@ -224,9 +224,12 @@ def reprovision(
     to return the host to service at the end — the eventual prod-return flow, once a
     queue:quarantine-scoped credential is available.
 
-    rotate_admin defaults to True: after the worker lands, rotate the auto-admin password
-    off the fixed DEP bootstrap password to a unique SimpleMDM-generated one. Pass
-    rotate_admin=False to leave the bootstrap password in place (e.g. for debugging).
+    rotate_admin defaults to False: SimpleMDM's rotate_admin_password only works when the
+    enrollment uses "auto-generate unique local admin password", which is incompatible with
+    the fixed bootstrap password the mint needs (and SimpleMDM won't expose the generated
+    password via API). It returns "macOS Auto Admin password can not be rotated" otherwise.
+    Left in place (opt-in) for enrollments that do use a managed auto-admin; the real
+    hardening for fixed-password fleets is a strong DEP password or an on-box reset.
     """
     ctx = resolve(hostname)
     console.print(f"=> reprovisioning {ctx.hostname} (role={ctx.role}, pool={ctx.worker_pool_id})")

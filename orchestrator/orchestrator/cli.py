@@ -22,10 +22,11 @@ def run(
         "through reprovision (needs a queue:quarantine-scoped credential).",
     ),
     rotate_admin: bool = typer.Option(
-        True,
+        False,
         "--rotate-admin/--no-rotate-admin",
-        help="Rotate the auto-admin password off the fixed bootstrap password after landing "
-        "(default on). Use --no-rotate-admin to keep the bootstrap password (e.g. debugging).",
+        help="Rotate the SimpleMDM auto-admin password after landing (default OFF). Only works "
+        "for enrollments using an auto-generated managed admin password — incompatible with the "
+        "fixed bootstrap password the mint needs, so off by default.",
     ),
 ) -> None:
     """Full workflow: quarantine -> drain -> wipe -> reenroll -> mint -> BST -> bootstrap -> rotate.

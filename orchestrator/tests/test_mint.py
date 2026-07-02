@@ -114,17 +114,18 @@ def _run_reprovision_capturing(**kwargs) -> list[str]:
 
 
 def test_reprovision_default_flow():
-    """Default: mint before escrow, rotate after sentinel, NO unquarantine, no vault step."""
+    """Default: mint before escrow, NO rotate, NO unquarantine, no vault step."""
     calls = _run_reprovision_capturing()
     assert "unquarantine" not in calls  # quarantine persists by default
+    assert "rotate" not in calls  # SimpleMDM rotate incompatible with fixed-password mint; off by default
     assert calls.index("mint") < calls.index("escrow")  # mint precedes BST escrow
-    assert calls.index("sentinel") < calls.index("rotate")  # rotate only after the worker lands
     assert not hasattr(workflow, "step_deliver_vault")  # Path C: no 1Password vault drop
 
 
-def test_reprovision_no_rotate_flag():
-    calls = _run_reprovision_capturing(rotate_admin=False)
-    assert "rotate" not in calls
+def test_reprovision_rotate_flag_on():
+    """With rotate_admin=True the rotate step runs, only after the worker lands."""
+    calls = _run_reprovision_capturing(rotate_admin=True)
+    assert calls.index("sentinel") < calls.index("rotate")
 
 
 def test_reprovision_unquarantine_flag_returns_to_service():

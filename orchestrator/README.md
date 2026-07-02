@@ -23,12 +23,12 @@ reprovision run macmini-m4-81
    The bootstrap fetches `vault.yaml` itself over mTLS using its SCEP cert (Path C),
    so there is **no vault-delivery step** (previously a 1Password `op read` + SSH drop).
 8. **wait_for_sentinel** — poll for `/var/log/m4-bootstrap-complete` over SSH
-9. **rotate_admin** — `POST /devices/{id}/rotate_admin_password` (default on): rotate the
-   auto-admin password off the fixed DEP bootstrap password to a unique SimpleMDM-generated
-   one, now that bootstrap (which needed the fixed password) is done. Relies on the escrowed
-   BST, so the SecureToken is preserved; the operator ssh **key** keeps working. Skip with
-   `--no-rotate-admin`. **Note:** the DEP account-setup must keep a *fixed* bootstrap password
-   (don't enable "auto-generate unique local admin password") or the `mint` login can't authenticate.
+9. **rotate_admin** — `POST /devices/{id}/rotate_admin_password` — **off by default** (opt in
+   with `--rotate-admin`). SimpleMDM only rotates when the enrollment uses "auto-generate unique
+   local admin password", which is **incompatible** with the fixed bootstrap password the `mint`
+   step needs (and SimpleMDM won't expose the generated password via API). With a fixed password
+   it returns `"macOS Auto Admin password can not be rotated"`. See **Admin password** below for
+   the real hardening options.
 
 The host **stays quarantined** through the whole reprovision by default — `run` does
 **not** auto-unquarantine unless you pass `--unquarantine`. Returning a host to service
@@ -83,12 +83,22 @@ have been removed.
 
 ## Admin password
 
-The DEP macOS Account Setup must create `admin` with a **fixed** bootstrap
-password (do **not** enable "auto-generate unique local admin password"), because
-the `mint` step logs in with it (`REPROVISION_SSH_ADMIN_PASSWORD`, default `admin`)
-to grant the first SecureToken. The `rotate_admin` step then rotates it to a unique
-SimpleMDM-generated password post-bootstrap. SimpleMDM does not expose that rotated
-password via API — view it in the SimpleMDM UI; the operator ssh key is unaffected.
+The DEP macOS Account Setup must create `admin` with a **fixed** password, because the
+`mint` step logs in with it (`REPROVISION_SSH_ADMIN_PASSWORD`) to grant the first SecureToken.
+
+This makes SimpleMDM's `rotate_admin_password` unusable: it only rotates an *auto-generated
+managed* password, and returns `"macOS Auto Admin password can not be rotated"` for a fixed
+one — and SimpleMDM won't expose an auto-generated password via API for the mint to use. The
+two requirements are mutually exclusive. Hardening options for a fixed-password fleet:
+
+- **Strong fixed password** — set a strong admin password in the DEP account-setup, stored in
+  a secret; point `REPROVISION_SSH_ADMIN_PASSWORD` at it. Simple; shared across the fleet.
+- **On-box per-device rotation** — after bootstrap, `sudo sysadminctl -resetPasswordFor admin
+  -newPassword <generated>` over ssh (admin holds a SecureToken by then), storing the new
+  password per-device in a secret store. Unique per device; SimpleMDM's stored password goes stale.
+
+`rotate_admin` / `--rotate-admin` remains available for enrollments that *do* use a managed
+auto-admin, but is off by default.
 
 ## Known limitations
 
