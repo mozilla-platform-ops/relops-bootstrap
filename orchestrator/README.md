@@ -12,8 +12,13 @@ reprovision run macmini-m4-81
 
 1. **quarantine** in Taskcluster
 2. **drain** — wait for the current task to finish
-3. **wipe** — POST /devices/{id}/wipe with `obliteration_behavior=ObliterateWithWarning`
-4. **wait_for_reenroll** — poll SimpleMDM until device status = enrolled
+3. **wipe** — POST /devices/{id}/wipe with `obliteration_behavior=DoNotObliterate`
+   (**EACS-only**: if Erase All Content & Settings can't run, the erase *fails* rather than
+   doing a full obliterate). `step_wipe` first verifies a **Bootstrap Token is escrowed** —
+   EACS requires it, and wiping a BST-less box would otherwise fail or full-obliterate into a
+   long headless macOS reinstall (see **Prerequisites**).
+4. **wait_for_reenroll** — poll SimpleMDM for a *fresh* `enrolled_at` (status alone is
+   unreliable — it stays `enrolled` until the erase actually executes)
 5. **mint** — interactive password SSH login to mint the first SecureToken (DEP skips
    Setup Assistant, so admin has no token until a PAM login; key-based ssh won't do it).
    Idempotent — skips if already ENABLED.
@@ -39,6 +44,19 @@ reprovision trigger-bootstrap macmini-m4-81
 reprovision wait-sentinel macmini-m4-81
 reprovision unquarantine macmini-m4-81
 ```
+
+## Prerequisites
+
+The target host must:
+
+- Be in a SimpleMDM assignment group that carries the **Dev - SCEP** profile (vault mTLS
+  cert), **Command Line Tools**, the **relops_key_admin** pkg (installs the operator ssh key),
+  the bootstrap script, and a DEP account-setup that creates `admin` with a **fixed** password.
+- Have a **Bootstrap Token escrowed** (`sudo profiles status -type bootstraptoken` →
+  `escrowed to server: YES`). EACS requires it; `step_wipe` aborts without it rather than risk
+  a full obliterate. A normally-provisioned host already has one; a host that never minted a
+  SecureToken (so never escrowed a BST) can't be EACS'd until it does.
+- Be **quarantined** in Taskcluster (it stays quarantined through the whole reprovision).
 
 ## Install
 
@@ -90,10 +108,9 @@ requirements are mutually exclusive, so we harden via a strong fixed DEP passwor
 
 ## Known limitations
 
-- `claimed_task_count()` in `clients/taskcluster.py` is a placeholder. The drain
-  wait currently returns 0 immediately. Operator should manually verify the
-  worker isn't running a task before invoking the full workflow until this is
-  wired up properly.
+- `drain` uses a best-effort heuristic (`is_currently_busy`): it inspects the worker's
+  recent tasks and their run states via the TC queue. A worker between two tasks can briefly
+  look idle; the step requires two consecutive idle polls to mitigate that.
 - Hostname → puppet role mapping uses prefix patterns in `role_map.py`. Edit
   there or load a file via `REPROVISION_ROLE_MAP_PATH` for fleet-wide overrides.
 - Single-worker mode only. A `reprovision batch <pool>` driver for whole-pool
