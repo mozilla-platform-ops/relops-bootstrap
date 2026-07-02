@@ -35,6 +35,28 @@ jobs:
       - name: pytest
         run: pytest -v
 
+  orchestrator:
+    name: orchestrator (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: orchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: orchestrator/pyproject.toml
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: ruff lint
+        run: ruff check .
+      - name: pytest
+        run: pytest -v
+
   terraform:
     name: terraform (fmt + validate)
     runs-on: ubuntu-latest

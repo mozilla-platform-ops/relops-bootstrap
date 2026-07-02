@@ -31,8 +31,15 @@ def get_device(device_id: int) -> dict:
     return r.json()["data"]
 
 
-def wipe(device_id: int, *, obliteration_behavior: str = "ObliterateWithWarning") -> None:
-    """EACS-equivalent on Apple Silicon when obliteration_behavior=ObliterateWithWarning."""
+def wipe(device_id: int, *, obliteration_behavior: str = "DoNotObliterate") -> None:
+    """
+    Erase the device. Default `DoNotObliterate` = EACS-only: if Erase All Content & Settings
+    can't run (e.g. no escrowed Bootstrap Token), the erase FAILS rather than falling back to a
+    full obliterate. Critical for headless minis: `ObliterateWithWarning` on a box without an
+    escrowed BST does a *full* wipe → a long network macOS reinstall the KVM can't even show,
+    and possibly a physical DFU restore. Only pass `ObliterateWithWarning`/`Always` when you
+    deliberately want a full wipe and can physically recover the machine.
+    """
     r = httpx.post(
         f"{BASE}/devices/{device_id}/wipe",
         auth=_auth(),

@@ -31,6 +31,7 @@ class HostContext:
     worker_pool_id: str  # e.g. releng-hardware/gecko-t-osx-1500-m4
     worker_group: str = "mdc1"
     simplemdm_device_id: int | None = None
+    pre_wipe_enrolled_at: str | None = None  # captured by step_wipe; used to detect a *fresh* re-enroll
 
 
 def resolve(hostname: str) -> HostContext:
@@ -92,19 +93,37 @@ def step_drain(ctx: HostContext) -> None:
 def step_wipe(ctx: HostContext) -> None:
     if not ctx.simplemdm_device_id:
         raise RuntimeError(f"{ctx.hostname} not found in SimpleMDM")
-    console.print(f"[bold]wipe[/]: EACS-equivalent obliteration on device {ctx.simplemdm_device_id}")
+    # Guard: EACS needs an escrowed Bootstrap Token. Without it, the erase either fails
+    # (DoNotObliterate) or full-obliterates into a long headless macOS reinstall. Refuse to
+    # wipe a box that can't EACS — verify BST over ssh first (operator key, no password).
+    bst = ssh.run(ctx.fqdn, "sudo profiles status -type bootstraptoken", check=False)
+    if b"escrowed to server: YES" not in bst.stdout:
+        raise RuntimeError(
+            f"{ctx.fqdn}: Bootstrap Token not escrowed — EACS can't run, so a wipe would fail or "
+            f"full-obliterate (headless reinstall). Mint + escrow first (reprovision mint, escrow-bst), "
+            f"or wipe manually via the SimpleMDM UI if a full obliterate is truly intended."
+        )
+    # Record the current enrolled_at so wait_for_reenroll can detect a *fresh* enrollment
+    # (status alone is unreliable: it stays "enrolled" until the erase actually executes).
+    ctx.pre_wipe_enrolled_at = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {}).get("enrolled_at")
+    console.print(f"[bold]wipe[/]: EACS (DoNotObliterate) on device {ctx.simplemdm_device_id}")
     simplemdm.wipe(ctx.simplemdm_device_id)
 
 
 def step_wait_for_reenroll(ctx: HostContext) -> None:
     s = get_settings()
-    console.print("[bold]wait_for_reenroll[/]: polling SimpleMDM for post-DEP check-in")
+    # Baseline: the pre-wipe enrolled_at (from step_wipe). If unset (step run standalone),
+    # capture the current value now. We wait for a DIFFERENT enrolled_at + status=enrolled,
+    # so we don't false-return on the pre-wipe enrollment (status lags the erase).
+    baseline = ctx.pre_wipe_enrolled_at
+    if baseline is None:
+        baseline = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {}).get("enrolled_at")
+    console.print(f"[bold]wait_for_reenroll[/]: polling SimpleMDM for a fresh enrollment (was {baseline})")
     deadline = time.monotonic() + s.wipe_max_wait_seconds
     while time.monotonic() < deadline:
-        d = simplemdm.get_device(ctx.simplemdm_device_id)
-        status = d.get("attributes", {}).get("status")
-        if status == "enrolled":
-            console.print("  → enrolled.")
+        a = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {})
+        if a.get("status") == "enrolled" and a.get("enrolled_at") != baseline:
+            console.print(f"  → re-enrolled ({a.get('enrolled_at')}).")
             return
         time.sleep(s.wipe_poll_seconds)
     raise TimeoutError("device did not re-enroll within window")
@@ -120,6 +139,8 @@ def step_mint(ctx: HostContext) -> None:
     it wedges at the BST wait-loop and times out. Idempotent — skips if already ENABLED.
     """
     console.print(f"[bold]mint[/]: ensuring {ctx.fqdn} admin holds a SecureToken")
+    console.print("  → waiting for sshd (relops-ssh pkg lands during convergence)…")
+    ssh.wait_for_sshd(ctx.fqdn)
     if "ENABLED" in ssh.secure_token_status(ctx.fqdn):
         console.print("  → already SecureToken-ENABLED; skipping mint.")
         return
@@ -187,6 +208,11 @@ def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = 
     reprovision (and the fleet has no un-quarantine key wired yet). Pass unquarantine=True
     to return the host to service at the end — the eventual prod-return flow, once a
     queue:quarantine-scoped credential is available.
+
+    Admin-password hardening is a DEP config concern, not a workflow step: set a strong,
+    random admin password in the SimpleMDM DEP account-setup and point the mint at it via
+    REPROVISION_SSH_ADMIN_PASSWORD. (SimpleMDM's rotate_admin_password can't be used — it
+    requires an auto-generated managed password, which the mint can't read back.)
     """
     ctx = resolve(hostname)
     console.print(f"=> reprovisioning {ctx.hostname} (role={ctx.role}, pool={ctx.worker_pool_id})")

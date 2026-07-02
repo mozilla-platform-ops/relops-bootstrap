@@ -1,7 +1,7 @@
 """
 Tests for orchestrator.clients.taskcluster.is_currently_busy.
 
-Mocks the httpx.get calls because we don't want to hit the real TC API in unit tests.
+Mocks the client functions because we don't want to hit the real TC API in unit tests.
 """
 
 from __future__ import annotations
@@ -104,11 +104,10 @@ def test_multiple_recent_tasks_any_running_returns_true():
 
 def test_404_worker_returns_false():
     """Worker hasn't claimed anything yet — TC returns 404. Treat as not busy."""
-    import httpx
+    from taskcluster.exceptions import TaskclusterRestFailure
 
-    response = httpx.Response(404)
-    request = httpx.Request("GET", "http://test")
-    err = httpx.HTTPStatusError("not found", request=request, response=response)
+    err = TaskclusterRestFailure("not found", None)
+    err.status_code = 404
 
     with patch.object(taskcluster, "get_worker", side_effect=err):
         assert taskcluster.is_currently_busy(WORKER_POOL, WORKER_GROUP, WORKER_ID) is False

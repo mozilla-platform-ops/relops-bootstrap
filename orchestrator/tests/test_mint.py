@@ -1,9 +1,7 @@
 """
-Tests for the SecureToken mint + BST escrow steps.
-
-The mint is the load-bearing bit of Path C automation: DEP skips Setup Assistant,
-so admin holds no SecureToken until an interactive (PAM) password login. These tests
-mock the ssh layer so nothing touches a real host.
+Tests for the SecureToken mint, BST escrow, admin-password rotation, and the
+reprovision() step sequence. The ssh / simplemdm / taskcluster layers are mocked
+so nothing touches a real host or API.
 """
 
 from __future__ import annotations
@@ -25,9 +23,12 @@ def _ctx():
     )
 
 
+# --- mint ---
+
 def test_mint_is_idempotent_when_already_enabled():
     """If admin already holds a SecureToken, we must NOT attempt a password login."""
-    with patch("orchestrator.workflow.ssh.secure_token_status", return_value="ENABLED for user admin"), \
+    with patch("orchestrator.workflow.ssh.wait_for_sshd"), \
+         patch("orchestrator.workflow.ssh.secure_token_status", return_value="ENABLED for user admin"), \
          patch("orchestrator.workflow.ssh.password_login") as login:
         workflow.step_mint(_ctx())
         login.assert_not_called()
@@ -36,7 +37,8 @@ def test_mint_is_idempotent_when_already_enabled():
 def test_mint_logs_in_then_verifies_enabled():
     """DISABLED -> password_login -> then status flips to ENABLED -> success."""
     statuses = iter(["DISABLED for user admin", "ENABLED for user admin"])
-    with patch("orchestrator.workflow.ssh.secure_token_status", side_effect=lambda *_: next(statuses)), \
+    with patch("orchestrator.workflow.ssh.wait_for_sshd"), \
+         patch("orchestrator.workflow.ssh.secure_token_status", side_effect=lambda *_: next(statuses)), \
          patch("orchestrator.workflow.ssh.password_login") as login:
         workflow.step_mint(_ctx())
         login.assert_called_once()
@@ -44,12 +46,15 @@ def test_mint_logs_in_then_verifies_enabled():
 
 def test_mint_raises_if_token_never_enables():
     """If the token never comes up ENABLED after the login, the step must fail loudly."""
-    with patch("orchestrator.workflow.ssh.secure_token_status", return_value="DISABLED for user admin"), \
+    with patch("orchestrator.workflow.ssh.wait_for_sshd"), \
+         patch("orchestrator.workflow.ssh.secure_token_status", return_value="DISABLED for user admin"), \
          patch("orchestrator.workflow.ssh.password_login"), \
-         patch("orchestrator.workflow.time.sleep"):  # don't actually wait through the retries
+         patch("orchestrator.workflow.time.sleep"):  # don't wait through the retries
         with pytest.raises(RuntimeError):
             workflow.step_mint(_ctx())
 
+
+# --- escrow_bst ---
 
 def test_escrow_bst_is_non_interactive():
     """escrow_bst must pass -user/-password (the bare form prompts and fails)."""
@@ -76,6 +81,27 @@ def test_escrow_bst_raises_when_not_escrowed():
             workflow.step_escrow_bst(_ctx())
 
 
+# --- wipe guard ---
+
+def test_wipe_aborts_without_escrowed_bst():
+    """Refuse to wipe a box that can't EACS (no escrowed BST) — else it full-obliterates."""
+    with patch("orchestrator.workflow.ssh.run") as run:
+        run.return_value.stdout = b"profiles: Bootstrap Token escrowed to server: NO"
+        with pytest.raises(RuntimeError):
+            workflow.step_wipe(_ctx())
+
+
+def test_wipe_proceeds_with_escrowed_bst():
+    with patch("orchestrator.workflow.ssh.run") as run, \
+         patch("orchestrator.workflow.simplemdm.get_device", return_value={"attributes": {"enrolled_at": "x"}}), \
+         patch("orchestrator.workflow.simplemdm.wipe") as wipe:
+        run.return_value.stdout = b"profiles: Bootstrap Token escrowed to server: YES"
+        workflow.step_wipe(_ctx())
+        wipe.assert_called_once()
+
+
+# --- reprovision() sequence ---
+
 def _run_reprovision_capturing(**kwargs) -> list[str]:
     """Run reprovision() with every step stubbed; return the ordered list of step names."""
     calls: list[str] = []
@@ -97,15 +123,15 @@ def _run_reprovision_capturing(**kwargs) -> list[str]:
     return calls
 
 
-def test_reprovision_default_keeps_quarantine_and_mints_before_escrow():
-    """Default run() must NOT auto-unquarantine, must mint before escrow, no vault step."""
+def test_reprovision_default_flow():
+    """Default: mint before escrow, NO unquarantine, no vault step."""
     calls = _run_reprovision_capturing()
     assert "unquarantine" not in calls  # quarantine persists by default
     assert calls.index("mint") < calls.index("escrow")  # mint precedes BST escrow
     assert not hasattr(workflow, "step_deliver_vault")  # Path C: no 1Password vault drop
+    assert not hasattr(workflow, "step_rotate_admin_password")  # rotation is a DEP-config concern
 
 
 def test_reprovision_unquarantine_flag_returns_to_service():
-    """With unquarantine=True the final step_unquarantine runs (the eventual prod-return flow)."""
     calls = _run_reprovision_capturing(unquarantine=True)
     assert calls[-1] == "unquarantine"  # runs, and last
