@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from ..config import get_settings
+from ..errors import ReprovisionError
 from ..secrets import ssh_admin_key, ssh_admin_password
 
 
@@ -130,9 +131,9 @@ expect {{
         check=False,
     )
     if cp.returncode == 2:
-        raise RuntimeError(f"password login to {user}@{hostname} denied (wrong ssh_admin_password?)")
+        raise ReprovisionError(f"password login to {user}@{hostname} denied (wrong admin password?)")
     if cp.returncode == 3:
-        raise RuntimeError(f"password login to {user}@{hostname} timed out")
+        raise ReprovisionError(f"password login to {user}@{hostname} timed out — on the VPN?")
     # returncode 0 (or other) — the auth is what mattered; caller verifies the token.
 
 
@@ -148,7 +149,13 @@ def secure_token_status(hostname: str) -> str:
 
 
 def run(hostname: str, command: str, *, stdin: bytes | None = None, check: bool = True) -> subprocess.CompletedProcess:
-    """Run `command` over SSH on hostname. Returns CompletedProcess."""
+    """Run `command` over SSH on hostname. Returns CompletedProcess.
+
+    With check=True, a transport failure (exit 255 — can't connect: off-VPN, host down, key
+    mismatch) or any nonzero exit raises a clean ReprovisionError. The error never echoes
+    `command`, which may embed the admin password. Callers that inspect the result themselves
+    (the wipe guard, sentinel poll) pass check=False and read `returncode`.
+    """
     timeout = get_settings().ssh_command_timeout_seconds
     args = [
         "ssh",
@@ -160,7 +167,17 @@ def run(hostname: str, command: str, *, stdin: bytes | None = None, check: bool 
         _user_host(hostname),
         command,
     ]
-    return subprocess.run(args, input=stdin, capture_output=True, timeout=timeout, check=check)
+    try:
+        cp = subprocess.run(args, input=stdin, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        raise ReprovisionError(f"ssh to {hostname} timed out after {timeout}s — are you on the VPN?") from None
+    if check and cp.returncode != 0:
+        detail = cp.stderr.decode(errors="replace").strip().splitlines()
+        tail = detail[-1] if detail else f"exit {cp.returncode}"
+        if cp.returncode == 255:
+            raise ReprovisionError(f"can't reach {hostname} over ssh — are you on the VPN? (ssh: {tail})")
+        raise ReprovisionError(f"remote command on {hostname} failed (exit {cp.returncode}): {tail}")
+    return cp
 
 
 def write_file_as_root(hostname: str, remote_path: str, content: bytes, mode: str = "0600") -> None:

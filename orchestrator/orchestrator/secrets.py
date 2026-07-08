@@ -23,21 +23,51 @@ import functools
 import subprocess
 
 from .config import get_settings
+from .errors import ReprovisionError
+
+
+class SecretResolutionError(ReprovisionError):
+    """A secret couldn't be fetched — almost always "not signed in" or "not installed"."""
+
+
+def _last_line(text: str) -> str:
+    lines = [ln for ln in (text or "").strip().splitlines() if ln.strip()]
+    return lines[-1] if lines else ""
 
 
 def _op_read(ref: str) -> str:
-    cp = subprocess.run(["op", "read", ref], capture_output=True, text=True, timeout=30, check=True)
+    try:
+        cp = subprocess.run(["op", "read", ref], capture_output=True, text=True, timeout=30, check=True)
+    except FileNotFoundError:
+        raise SecretResolutionError(
+            f"1Password CLI (`op`) isn't installed — `brew install 1password-cli` — needed to read {ref}."
+        ) from None
+    except subprocess.CalledProcessError as e:
+        raise SecretResolutionError(
+            f"couldn't read {ref} from 1Password — run  eval $(op signin)  and retry."
+            + (f"\n    op: {_last_line(e.stderr)}" if _last_line(e.stderr) else "")
+        ) from None
     return cp.stdout.rstrip("\r\n")
 
 
 def _gcloud_secret(secret_id: str, project: str) -> str:
-    cp = subprocess.run(
-        ["gcloud", "secrets", "versions", "access", "latest", "--secret", secret_id, "--project", project],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=True,
-    )
+    try:
+        cp = subprocess.run(
+            ["gcloud", "secrets", "versions", "access", "latest", "--secret", secret_id, "--project", project],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+    except FileNotFoundError:
+        raise SecretResolutionError(
+            f"gcloud isn't installed — needed to read Secret Manager id '{secret_id}'."
+        ) from None
+    except subprocess.CalledProcessError as e:
+        raise SecretResolutionError(
+            f"couldn't read Secret Manager id '{secret_id}' — run  gcloud auth login  and retry."
+            + (f"\n    gcloud: {_last_line(e.stderr)}" if _last_line(e.stderr) else "")
+        ) from None
     return cp.stdout.rstrip("\r\n")
 
 

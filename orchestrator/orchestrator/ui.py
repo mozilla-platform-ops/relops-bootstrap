@@ -98,6 +98,10 @@ def warn(msg: str) -> None:
     console.print(f"  [yellow]▲[/] {msg}")
 
 
+def err(msg: str) -> None:
+    console.print(f"[bold red]✗[/] {msg}")
+
+
 def _mmss(seconds: float) -> str:
     s = int(seconds)
     return f"{s // 60}:{s % 60:02d}"

@@ -81,17 +81,18 @@ def test_escrow_bst_is_non_interactive():
 
 def test_escrow_bst_ssh_error_does_not_leak_password():
     """A failed escrow must raise a clean error — the admin password must never appear."""
-    import subprocess
+    from orchestrator.errors import ReprovisionError
 
     def boom(host, cmd, **_):
-        raise subprocess.CalledProcessError(255, ["ssh", host, cmd])
+        # ssh.run scrubs the command itself; it raises without the password in the message.
+        raise ReprovisionError(f"remote command on {host} failed (exit 1): profiles: error")
 
     with patch("orchestrator.workflow.ssh.run", side_effect=boom), \
          patch("orchestrator.workflow.ssh_admin_password", return_value="s3cr3t-pw"):
-        with pytest.raises(RuntimeError) as ei:
+        with pytest.raises(ReprovisionError) as ei:
             workflow.step_escrow_bst(_ctx())
     assert "s3cr3t-pw" not in str(ei.value)
-    assert ei.value.__suppress_context__  # `from None` — no chained CalledProcessError leaks the cmd
+    assert ei.value.__suppress_context__  # `from None` — no chained exception leaks the cmd
 
 
 def test_escrow_bst_raises_when_not_escrowed():

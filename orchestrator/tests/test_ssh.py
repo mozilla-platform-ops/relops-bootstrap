@@ -10,7 +10,10 @@ import os
 import stat
 from unittest.mock import patch
 
+import pytest
+
 from orchestrator.clients import ssh
+from orchestrator.errors import ReprovisionError
 
 
 def test_run_uses_tool_known_hosts_not_operators():
@@ -52,6 +55,31 @@ def test_admin_identity_file_writes_private_key_0600():
     finally:
         os.remove(path)
         ssh._admin_identity_file.cache_clear()
+
+
+def test_run_255_gives_friendly_vpn_error():
+    class CP:
+        returncode = 255
+        stdout = b""
+        stderr = b"ssh: connect to host ... port 22: Operation timed out"
+
+    with patch("orchestrator.clients.ssh._admin_identity_file", return_value=None), \
+         patch("orchestrator.clients.ssh.subprocess.run", return_value=CP()):
+        with pytest.raises(ReprovisionError) as ei:
+            ssh.run("macmini-m4-80.example.com", "true")  # check=True by default
+    assert "VPN" in str(ei.value)
+
+
+def test_run_check_false_returns_result_without_raising():
+    class CP:
+        returncode = 255
+        stdout = b""
+        stderr = b"nope"
+
+    with patch("orchestrator.clients.ssh._admin_identity_file", return_value=None), \
+         patch("orchestrator.clients.ssh.subprocess.run", return_value=CP()):
+        cp = ssh.run("host", "true", check=False)  # guards inspect returncode themselves
+    assert cp.returncode == 255
 
 
 def test_forget_host_key_scoped_to_tool_file():
