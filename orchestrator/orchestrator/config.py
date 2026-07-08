@@ -7,22 +7,32 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_prefix="REPROVISION_")
 
+    # --- Secrets ---
+    # Each secret resolves as: the direct value below (env var) → its *_ref → error.
+    # A *_ref of "op://Vault/Item/field" is read via the 1Password CLI; anything else is
+    # a GCP Secret Manager secret id read via gcloud. Keep refs in .env; secrets stay in
+    # the vault, fetched at run time (see secrets.py). One-time gcloud/op auth, no exports.
+    gcp_project: str = Field(default="relops-bootstrap")
+
     # Taskcluster
     tc_root_url: str = Field(default="https://firefox-ci-tc.services.mozilla.com")
     tc_client_id: str = Field(default="")
+    tc_client_id_ref: str = Field(default="")
     tc_access_token: str = Field(default="")
+    tc_access_token_ref: str = Field(default="")
 
     # SimpleMDM
     simplemdm_api_key: str = Field(default="")
+    simplemdm_api_key_ref: str = Field(default="simplemdm-api-token")  # Secret Manager id
 
     # SSH to host
     ssh_admin_user: str = Field(default="admin")
-    # Password for the SimpleMDM-managed admin account. Used ONLY for the interactive
-    # password login that mints the first SecureToken (see workflow.step_mint) and for
-    # the non-interactive BST escrow. Key-based ssh handles everything else.
-    # NB: SimpleMDM does not expose the auto-admin password via API, so if you enable
-    # unique-per-device passwords this must be sourced another way (secret store).
-    ssh_admin_password: str = Field(default="admin")
+    # Password for the SimpleMDM-managed admin account — used ONLY for the interactive
+    # password login that mints the first SecureToken (workflow.step_mint) and the
+    # non-interactive BST escrow. Key-based ssh handles everything else. Prefer the *_ref
+    # (e.g. an op:// reference to the fixed DEP admin password) over a raw value.
+    ssh_admin_password: str = Field(default="")
+    ssh_admin_password_ref: str = Field(default="")
     ssh_command_timeout_seconds: int = Field(default=120)
 
     # Polling cadence

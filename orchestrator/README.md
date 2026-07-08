@@ -102,22 +102,30 @@ python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 ```
 
-## Config
+## Config & secrets
 
-All settings come from environment variables prefixed `REPROVISION_`. Drop a
-`.env` file in the working directory or export them.
+All settings are `REPROVISION_*` env vars (or a `.env` in the working dir).
+
+**Secrets are resolved at run time — don't paste them into the shell.** For each
+secret, resolution is: the direct env var → its `_REF` → error. A `_REF` value of
+`op://Vault/Item/field` is read via the **1Password CLI**; anything else is a **GCP
+Secret Manager** secret id read via `gcloud` (reusing your existing `gcloud auth login`).
+Keep the *references* in `.env`; the secrets live in the vault. One-time
+`gcloud auth login` / `op signin` and no secret ever touches your history.
 
 | Var | Required | Purpose |
 |---|---|---|
-| `REPROVISION_SIMPLEMDM_API_KEY` | yes | SimpleMDM API key: device wipe + status |
-| `REPROVISION_TC_CLIENT_ID` | quarantine steps only | TC client with `queue:quarantine-worker:*` scope |
-| `REPROVISION_TC_ACCESS_TOKEN` | quarantine steps only | TC client access token |
+| `REPROVISION_GCP_PROJECT` | no | Secret Manager project (default `relops-bootstrap`) |
+| `REPROVISION_SIMPLEMDM_API_KEY` / `_REF` | yes | SimpleMDM API key. `_REF` defaults to Secret Manager id `simplemdm-api-token`. |
+| `REPROVISION_TC_CLIENT_ID` / `_REF` | quarantine steps only | TC client (`queue:quarantine-worker:*`). Point `_REF` at a Secret Manager id or `op://` ref. |
+| `REPROVISION_TC_ACCESS_TOKEN` / `_REF` | quarantine steps only | TC access token. |
 | `REPROVISION_SSH_ADMIN_USER` | no | Default: `admin` |
-| `REPROVISION_SSH_ADMIN_PASSWORD` | yes (prod) | The DEP account-setup admin password, used for the mint login. Set to your strong DEP password (from a secret); defaults to `admin` only for lab use. |
+| `REPROVISION_SSH_ADMIN_PASSWORD` / `_REF` | yes | The DEP admin password for the mint login. Prefer `_REF` (e.g. `op://RelOps Vault/m4 admin/password`). |
 
-TC credentials are only needed for the `quarantine` / `drain` / `unquarantine`
-steps. The core `wipe → reenroll → mint → escrow → wait-sentinel` sequence
-runs without them.
+Typical setup — put **refs** (not secrets) in `orchestrator/.env` once (see
+`.env.example`), then just `gcloud auth login` / `op signin` each session. TC
+credentials are only needed for the `quarantine` / `drain` / `unquarantine` steps;
+the core `wipe → reenroll → mint → escrow → wait-sentinel` sequence runs without them.
 
 ## Secret delivery (Path C)
 
