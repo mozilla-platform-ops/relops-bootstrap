@@ -182,6 +182,16 @@ pip install -e '.[dev]'
 pytest -q                       # sanity check — should be all green
 ```
 
+Prefer [`uv`](https://docs.astral.sh/uv/)? It's a drop-in — same `.venv`, same `reprovision`:
+```bash
+cd orchestrator
+uv venv --python 3.11 && source .venv/bin/activate   # >=3.11 (3.12/3.13/3.14 also fine)
+uv pip install -e '.[dev]'
+uv run pytest -q
+```
+Or skip the activate and let uv manage it: `uv run reprovision demo`, `uv run pytest -q`.
+(No `uv.lock` is committed, so uv resolves from `pyproject.toml` — pip users are unaffected.)
+
 **3. Sign in to 1Password (one-time per shell session):**
 ```bash
 op signin
