@@ -1,0 +1,33 @@
+#!/bin/bash
+# postinstall — fired by installer after payload is laid down.
+#
+# The pkg payload dropped:
+#   /usr/local/sbin/m4-bootstrap.sh
+#   /Library/LaunchDaemons/com.mozilla.m4-bootstrap-entrypoint.plist
+#
+# Bootstrap the entrypoint LaunchDaemon. RunAtLoad=true → the bootstrap script
+# fires immediately, detached from this installer process. Installer returns
+# right away; the bootstrap runs asynchronously and installs its own
+# reboot-survivable driver LaunchDaemon (com.mozilla.m4-bootstrap) for the
+# ongoing puppet loop.
+
+set -u
+LOG=/var/log/m4-bootstrap-pkg-postinstall.log
+PLIST=/Library/LaunchDaemons/com.mozilla.m4-bootstrap-entrypoint.plist
+
+{
+  echo "=== pkg postinstall $(date) ==="
+
+  # If a previous install left this daemon loaded, remove first — bootstrap is
+  # idempotent (sentinel check at top of script) but re-firing on re-install
+  # is the expected/desired MDM behaviour.
+  /bin/launchctl bootout system/com.mozilla.m4-bootstrap-entrypoint 2>/dev/null || true
+
+  /bin/launchctl bootstrap system "$PLIST" \
+    || /bin/launchctl load -w "$PLIST"
+
+  echo "entrypoint LaunchDaemon loaded; bootstrap running async."
+  echo "watch: /var/log/m4-bootstrap.log"
+} >> "$LOG" 2>&1
+
+exit 0
