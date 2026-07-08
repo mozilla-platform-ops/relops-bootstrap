@@ -9,6 +9,7 @@ import shlex
 import socket
 import subprocess
 import time
+from pathlib import Path
 
 from ..config import get_settings
 from ..secrets import ssh_admin_password
@@ -16,6 +17,34 @@ from ..secrets import ssh_admin_password
 
 def _user_host(hostname: str) -> str:
     return f"{get_settings().ssh_admin_user}@{hostname}"
+
+
+def _tool_known_hosts() -> str:
+    """A known_hosts file owned by this tool, kept out of the operator's ~/.ssh/known_hosts.
+
+    Two reasons the operator's file is the wrong place for reprovision targets:
+      1. EACS regenerates a host's SSH keys every cycle, so a stored key legitimately
+         goes stale and trips StrictHostKeyChecking on the next connect.
+      2. Personal known_hosts are often large/hand-edited; a single malformed line makes
+         `ssh-keygen -R` refuse to touch the whole file (seen in the field).
+    Using our own file means neither can wedge the flow: we accept-new here and clear a
+    host's entry (forget_host_key) when we know its key just rotated.
+    """
+    path = Path.home() / ".config" / "reprovision" / "known_hosts"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
+def forget_host_key(hostname: str) -> None:
+    """Drop hostname from the tool's known_hosts so the next connect accept-new's the current
+    key. Idempotent, and scoped to our own file — the operator's ~/.ssh/known_hosts is never
+    touched. Call this when a host's key has (legitimately) rotated, i.e. around EACS."""
+    subprocess.run(
+        ["ssh-keygen", "-f", _tool_known_hosts(), "-R", hostname],
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
 
 
 def wait_for_sshd(hostname: str, *, timeout: int = 900, port: int = 22, poll: int = 15) -> None:
@@ -94,6 +123,7 @@ def run(hostname: str, command: str, *, stdin: bytes | None = None, check: bool 
         "ssh",
         "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=accept-new",
+        "-o", f"UserKnownHostsFile={_tool_known_hosts()}",
         "-o", "ConnectTimeout=15",
         _user_host(hostname),
         command,

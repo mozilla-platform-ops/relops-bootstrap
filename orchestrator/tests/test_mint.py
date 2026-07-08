@@ -27,7 +27,8 @@ def _ctx():
 
 def test_mint_is_idempotent_when_already_enabled():
     """If admin already holds a SecureToken, we must NOT attempt a password login."""
-    with patch("orchestrator.workflow.ssh.wait_for_sshd"), \
+    with patch("orchestrator.workflow.ssh.forget_host_key"), \
+         patch("orchestrator.workflow.ssh.wait_for_sshd"), \
          patch("orchestrator.workflow.ssh.secure_token_status", return_value="ENABLED for user admin"), \
          patch("orchestrator.workflow.ssh.password_login") as login:
         workflow.step_mint(_ctx())
@@ -37,7 +38,8 @@ def test_mint_is_idempotent_when_already_enabled():
 def test_mint_logs_in_then_verifies_enabled():
     """DISABLED -> password_login -> then status flips to ENABLED -> success."""
     statuses = iter(["DISABLED for user admin", "ENABLED for user admin"])
-    with patch("orchestrator.workflow.ssh.wait_for_sshd"), \
+    with patch("orchestrator.workflow.ssh.forget_host_key"), \
+         patch("orchestrator.workflow.ssh.wait_for_sshd"), \
          patch("orchestrator.workflow.ssh.secure_token_status", side_effect=lambda *_: next(statuses)), \
          patch("orchestrator.workflow.ssh.password_login") as login:
         workflow.step_mint(_ctx())
@@ -46,7 +48,8 @@ def test_mint_logs_in_then_verifies_enabled():
 
 def test_mint_raises_if_token_never_enables():
     """If the token never comes up ENABLED after the login, the step must fail loudly."""
-    with patch("orchestrator.workflow.ssh.wait_for_sshd"), \
+    with patch("orchestrator.workflow.ssh.forget_host_key"), \
+         patch("orchestrator.workflow.ssh.wait_for_sshd"), \
          patch("orchestrator.workflow.ssh.secure_token_status", return_value="DISABLED for user admin"), \
          patch("orchestrator.workflow.ssh.password_login"), \
          patch("orchestrator.workflow.time.sleep"):  # don't wait through the retries
@@ -103,7 +106,8 @@ def test_escrow_bst_raises_when_not_escrowed():
 
 def test_wipe_aborts_without_escrowed_bst():
     """Refuse to wipe a box that can't EACS (no escrowed BST) — else it full-obliterates."""
-    with patch("orchestrator.workflow.ssh.run") as run:
+    with patch("orchestrator.workflow.ssh.forget_host_key"), \
+         patch("orchestrator.workflow.ssh.run") as run:
         run.return_value.returncode = 0  # ssh succeeded; the box genuinely has no BST
         run.return_value.stdout = b"profiles: Bootstrap Token escrowed to server: NO"
         with pytest.raises(RuntimeError, match="not escrowed"):
@@ -112,7 +116,8 @@ def test_wipe_aborts_without_escrowed_bst():
 
 def test_wipe_aborts_when_ssh_check_fails_without_claiming_no_bst():
     """An ssh failure must NOT masquerade as a missing Bootstrap Token, and must not wipe."""
-    with patch("orchestrator.workflow.ssh.run") as run, \
+    with patch("orchestrator.workflow.ssh.forget_host_key"), \
+         patch("orchestrator.workflow.ssh.run") as run, \
          patch("orchestrator.workflow.simplemdm.wipe") as wipe:
         run.return_value.returncode = 255  # e.g. first-connection host key / VPN down
         run.return_value.stdout = b""
@@ -122,8 +127,21 @@ def test_wipe_aborts_when_ssh_check_fails_without_claiming_no_bst():
         wipe.assert_not_called()
 
 
+def test_wipe_forgets_stale_host_key_before_verifying():
+    """EACS rotates the host key; step_wipe must clear the stale entry before the ssh check."""
+    with patch("orchestrator.workflow.ssh.forget_host_key") as forget, \
+         patch("orchestrator.workflow.ssh.run") as run, \
+         patch("orchestrator.workflow.simplemdm.get_device", return_value={"attributes": {"enrolled_at": "x"}}), \
+         patch("orchestrator.workflow.simplemdm.wipe"):
+        run.return_value.returncode = 0
+        run.return_value.stdout = b"profiles: Bootstrap Token escrowed to server: YES"
+        workflow.step_wipe(_ctx())
+        forget.assert_called_once_with(_ctx().fqdn)
+
+
 def test_wipe_proceeds_with_escrowed_bst():
-    with patch("orchestrator.workflow.ssh.run") as run, \
+    with patch("orchestrator.workflow.ssh.forget_host_key"), \
+         patch("orchestrator.workflow.ssh.run") as run, \
          patch("orchestrator.workflow.simplemdm.get_device", return_value={"attributes": {"enrolled_at": "x"}}), \
          patch("orchestrator.workflow.simplemdm.wipe") as wipe:
         run.return_value.returncode = 0
