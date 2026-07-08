@@ -65,6 +65,14 @@ def simplemdm_api_key() -> str:
 
 
 @functools.lru_cache(maxsize=None)
+def ssh_admin_key() -> str:
+    """The admin account's private key, or '' if not configured (then ssh falls back to the
+    agent / default identities). Optional — unlike the password, no hard error when unset."""
+    s = get_settings()
+    return _resolve(s.ssh_admin_key, s.ssh_admin_key_ref, s.gcp_project)
+
+
+@functools.lru_cache(maxsize=None)
 def tc_credentials() -> tuple[str, str]:
     s = get_settings()
     return (

@@ -5,14 +5,18 @@ Thin SSH wrapper. Uses the local ssh binary so the operator's existing ssh-agent
 
 from __future__ import annotations
 
+import atexit
+import functools
+import os
 import shlex
 import socket
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
 from ..config import get_settings
-from ..secrets import ssh_admin_password
+from ..secrets import ssh_admin_key, ssh_admin_password
 
 
 def _user_host(hostname: str) -> str:
@@ -33,6 +37,33 @@ def _tool_known_hosts() -> str:
     path = Path.home() / ".config" / "reprovision" / "known_hosts"
     path.parent.mkdir(parents=True, exist_ok=True)
     return str(path)
+
+
+@functools.lru_cache(maxsize=None)
+def _admin_identity_file() -> str | None:
+    """Materialize the vault-fetched admin private key to a 0600 temp file for `ssh -i`.
+
+    Returns None when no admin key is configured — ssh then falls back to the agent / default
+    identities (the pre-existing behavior, so operators who already have the key on disk keep
+    working). Cached: written once per process, removed at exit.
+    """
+    key = ssh_admin_key()
+    if not key:
+        return None
+    fd, path = tempfile.mkstemp(prefix="reprovision-admin-", suffix=".key")
+    os.write(fd, key.encode() if key.endswith("\n") else (key + "\n").encode())
+    os.close(fd)
+    os.chmod(path, 0o600)  # ssh refuses a group/world-readable private key
+    atexit.register(lambda: os.path.exists(path) and os.remove(path))
+    return path
+
+
+def _identity_opts() -> list[str]:
+    """`ssh -i <fetched key>` (+ IdentitiesOnly so the agent's keys don't shadow it), or []."""
+    path = _admin_identity_file()
+    if not path:
+        return []
+    return ["-o", "IdentitiesOnly=yes", "-i", path]
 
 
 def forget_host_key(hostname: str) -> None:
@@ -125,6 +156,7 @@ def run(hostname: str, command: str, *, stdin: bytes | None = None, check: bool 
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", f"UserKnownHostsFile={_tool_known_hosts()}",
         "-o", "ConnectTimeout=15",
+        *_identity_opts(),
         _user_host(hostname),
         command,
     ]
