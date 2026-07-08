@@ -131,6 +131,7 @@ touch config to *override* a default (see `.env.example`).
 | `REPROVISION_TC_CLIENT_ID` / `_REF` | quarantine steps only | `op://RelOps/Taskcluster Quarantine/username` |
 | `REPROVISION_TC_ACCESS_TOKEN` / `_REF` | quarantine steps only | `op://RelOps/Taskcluster Quarantine/password` |
 | `REPROVISION_SSH_ADMIN_PASSWORD` / `_REF` | yes | `op://RelOps/DEP Provisioned Mac Admin Account SimpleMDM SSH/password` |
+| `REPROVISION_SSH_ADMIN_KEY` / `_REF` | no | Admin private key for `admin@` ssh (an `op://` SSH-key ref). Empty → ssh-agent / `~/.ssh` identities. |
 | `REPROVISION_SSH_ADMIN_USER` | no | `admin` |
 | `REPROVISION_GCP_PROJECT` | no | `relops-bootstrap` (only if a `_REF` is a Secret Manager id) |
 

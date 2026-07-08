@@ -33,6 +33,12 @@ class Settings(BaseSettings):
 
     # SSH to host
     ssh_admin_user: str = Field(default="admin")
+    # Operator private key for the admin account — the counterpart to the public key that
+    # relops_key_admin installs on every worker. Resolved at run time and used via `ssh -i`
+    # (written to a 0600 temp file), so any operator with vault access drives admin@ without
+    # placing a key on disk. Empty → fall back to the ssh-agent / default identities.
+    ssh_admin_key: str = Field(default="")
+    ssh_admin_key_ref: str = Field(default="")
     # Password for the SimpleMDM-managed admin account — used ONLY for the interactive
     # password login that mints the first SecureToken (workflow.step_mint) and the
     # non-interactive BST escrow. Key-based ssh handles everything else. Prefer the *_ref
