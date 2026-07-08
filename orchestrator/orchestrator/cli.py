@@ -74,5 +74,13 @@ def wait_sentinel(hostname: str) -> None:
     workflow.step_wait_for_sentinel(workflow.resolve(hostname))
 
 
+@app.command()
+def demo() -> None:
+    """Play a safe, no-host replay of the full flow — for live demos (touches nothing)."""
+    from . import demo as _demo
+
+    _demo.run_demo()
+
+
 if __name__ == "__main__":
     app()

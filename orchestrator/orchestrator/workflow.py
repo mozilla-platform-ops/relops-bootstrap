@@ -15,14 +15,11 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from rich.console import Console
-
+from . import ui
 from .clients import simplemdm, ssh, taskcluster
 from .config import get_settings
 from .role_map import role_for_hostname
 from .secrets import ssh_admin_password
-
-console = Console()
 
 
 @dataclass
@@ -67,29 +64,38 @@ def resolve(hostname: str) -> HostContext:
 
 def step_quarantine(ctx: HostContext) -> None:
     until = (datetime.now(timezone.utc) + timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    console.print(f"[bold]quarantine[/]: {ctx.hostname} until {until}")
+    ui.step("QUARANTINE", "tell Taskcluster to stop scheduling tasks on this worker")
+    ui.wire(f"PUT queue/v1 quarantineWorker {ctx.worker_pool_id}/{ctx.worker_group}/{ctx.hostname}")
     taskcluster.quarantine(ctx.worker_pool_id, ctx.worker_group, ctx.hostname, until)
+    ui.ok(f"quarantined until {until[:10]}")
 
 
 def step_drain(ctx: HostContext) -> None:
     s = get_settings()
-    console.print(f"[bold]drain[/]: waiting for {ctx.hostname} to finish its current task")
+    ui.step("DRAIN", "let the worker finish its in-flight task (2 consecutive idle polls)")
+    ui.wire(f"queue.getWorker {ctx.hostname} → inspect recentTasks run states")
     deadline = time.monotonic() + s.drain_max_wait_seconds
     consecutive_idle = 0
-    while time.monotonic() < deadline:
-        busy = taskcluster.is_currently_busy(ctx.worker_pool_id, ctx.worker_group, ctx.hostname)
-        if not busy:
-            consecutive_idle += 1
-            # Require 2 consecutive idle polls so we don't race a worker that's
-            # between two tasks (recentTasks shows the completed one; the new one
-            # hasn't propagated yet).
-            if consecutive_idle >= 2:
-                console.print("  → drained.")
-                return
-        else:
-            consecutive_idle = 0
-        time.sleep(s.drain_poll_seconds)
-    raise TimeoutError(f"drain wait exceeded {s.drain_max_wait_seconds}s")
+    drained = False
+    with ui.waiting("checking for an active task") as tick:
+        while time.monotonic() < deadline:
+            busy = taskcluster.is_currently_busy(ctx.worker_pool_id, ctx.worker_group, ctx.hostname)
+            if not busy:
+                consecutive_idle += 1
+                # Require 2 consecutive idle polls so we don't race a worker that's
+                # between two tasks (recentTasks shows the completed one; the new one
+                # hasn't propagated yet).
+                tick(f"idle {consecutive_idle}/2 — confirming")
+                if consecutive_idle >= 2:
+                    drained = True
+                    break
+            else:
+                consecutive_idle = 0
+                tick("worker busy — waiting for the task to finish")
+            time.sleep(s.drain_poll_seconds)
+    if not drained:
+        raise TimeoutError(f"drain wait exceeded {s.drain_max_wait_seconds}s")
+    ui.ok("drained — no task in flight")
 
 
 def step_wipe(ctx: HostContext) -> None:
@@ -97,10 +103,12 @@ def step_wipe(ctx: HostContext) -> None:
         raise RuntimeError(f"{ctx.hostname} not found in SimpleMDM")
     # A prior EACS may have rotated this host's SSH key; clear any stale entry from the tool's
     # known_hosts so the verify connection accept-new's the current key instead of failing.
+    ui.step("WIPE · EACS", "Erase All Content & Settings — DoNotObliterate (fails safe, never obliterates)")
     ssh.forget_host_key(ctx.fqdn)
     # Guard: EACS needs an escrowed Bootstrap Token. Without it, the erase either fails
     # (DoNotObliterate) or full-obliterates into a long headless macOS reinstall. Refuse to
     # wipe a box that can't EACS — verify BST over ssh first (operator key, no password).
+    ui.wire(f"ssh admin@{ctx.hostname} sudo profiles status -type bootstraptoken")
     bst = ssh.run(ctx.fqdn, "sudo profiles status -type bootstraptoken", check=False)
     # Distinguish "couldn't verify over ssh" from "genuinely not escrowed" — otherwise an
     # ssh failure (VPN down, first-connection host key, missing operator key) masquerades as
@@ -117,11 +125,13 @@ def step_wipe(ctx: HostContext) -> None:
             f"full-obliterate (headless reinstall). Mint + escrow first (reprovision mint, escrow-bst), "
             f"or wipe manually via the SimpleMDM UI if a full obliterate is truly intended."
         )
+    ui.ok("Bootstrap Token escrowed — EACS can run")
     # Record the current enrolled_at so wait_for_reenroll can detect a *fresh* enrollment
     # (status alone is unreliable: it stays "enrolled" until the erase actually executes).
     ctx.pre_wipe_enrolled_at = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {}).get("enrolled_at")
-    console.print(f"[bold]wipe[/]: EACS (DoNotObliterate) on device {ctx.simplemdm_device_id}")
+    ui.wire(f"SimpleMDM POST /devices/{ctx.simplemdm_device_id}/wipe  obliteration_behavior=DoNotObliterate")
     simplemdm.wipe(ctx.simplemdm_device_id)
+    ui.ok("erase command accepted by SimpleMDM")
 
 
 def step_wait_for_reenroll(ctx: HostContext) -> None:
@@ -132,15 +142,42 @@ def step_wait_for_reenroll(ctx: HostContext) -> None:
     baseline = ctx.pre_wipe_enrolled_at
     if baseline is None:
         baseline = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {}).get("enrolled_at")
-    console.print(f"[bold]wait_for_reenroll[/]: polling SimpleMDM for a fresh enrollment (was {baseline})")
+    ui.step("RE-ENROLL", "erase → reboot → DEP re-enrollment · typically ~5 min")
+    ui.wire(f"SimpleMDM GET /devices/{ctx.simplemdm_device_id}  (poll enrolled_at ≠ {baseline})")
     deadline = time.monotonic() + s.wipe_max_wait_seconds
-    while time.monotonic() < deadline:
-        a = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {})
-        if a.get("status") == "enrolled" and a.get("enrolled_at") != baseline:
-            console.print(f"  → re-enrolled ({a.get('enrolled_at')}).")
-            return
-        time.sleep(s.wipe_poll_seconds)
-    raise TimeoutError("device did not re-enroll within window")
+    start = time.monotonic()
+    next_poll = 0.0
+    reenrolled = False
+    a: dict = {}
+    with ui.waiting("waiting for a fresh enrollment", eta_seconds=300) as tick:
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            if now >= next_poll:
+                next_poll = now + s.wipe_poll_seconds
+                a = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {})
+                if a.get("status") == "enrolled" and a.get("enrolled_at") != baseline:
+                    reenrolled = True
+                    break
+            tick(_reenroll_phase(now - start))
+            time.sleep(1)
+    if not reenrolled:
+        raise TimeoutError("device did not re-enroll within window")
+    ui.ok(f"re-enrolled — fresh enrolled_at {a.get('enrolled_at')}")
+
+
+# Expected phases of the ~5-min EACS→DEP window, keyed to elapsed seconds. Not literal
+# device state (we only poll enrolled_at) — a truthful "typical timeline" so the wait reads
+# as progress, not a hang.
+def _reenroll_phase(elapsed: float) -> str:
+    for cutoff, label in (
+        (60, "erasing volume (EACS)"),
+        (120, "rebooting into Setup Assistant"),
+        (210, "DEP check-in with SimpleMDM"),
+        (300, "installing SCEP + CLT profiles"),
+    ):
+        if elapsed < cutoff:
+            return f"{label} …"
+    return "finishing enrollment …"
 
 
 def step_mint(ctx: HostContext) -> None:
@@ -152,23 +189,28 @@ def step_mint(ctx: HostContext) -> None:
     by A/B on m4-81 (2026-07-02): with this login the bootstrap finishes; without it,
     it wedges at the BST wait-loop and times out. Idempotent — skips if already ENABLED.
     """
-    console.print(f"[bold]mint[/]: ensuring {ctx.fqdn} admin holds a SecureToken")
+    ui.step("MINT SECURETOKEN", "DEP skips Setup Assistant, so admin has no token until an interactive login")
     # The box just re-enrolled post-EACS with a fresh host key; forget the old one so the
     # SecureToken status check (which uses ssh.run) doesn't fail on a key mismatch.
     ssh.forget_host_key(ctx.fqdn)
-    console.print("  → waiting for sshd (relops-ssh pkg lands during convergence)…")
-    ssh.wait_for_sshd(ctx.fqdn)
+    with ui.waiting("waiting for sshd (relops-ssh pkg lands during convergence)"):
+        ssh.wait_for_sshd(ctx.fqdn)
     if "ENABLED" in ssh.secure_token_status(ctx.fqdn):
-        console.print("  → already SecureToken-ENABLED; skipping mint.")
+        ui.ok("admin already holds a SecureToken — skipping mint")
         return
-    console.print("  → minting via interactive password login…")
+    ui.wire(f"expect: ssh admin@{ctx.hostname} (keyboard-interactive PAM login → grants first SecureToken)")
     ssh.password_login(ctx.fqdn)
-    for _ in range(6):
-        if "ENABLED" in ssh.secure_token_status(ctx.fqdn):
-            console.print("  → SecureToken ENABLED.")
-            return
-        time.sleep(5)
-    raise RuntimeError(f"{ctx.fqdn}: admin SecureToken not ENABLED after mint")
+    enabled = False
+    with ui.waiting("verifying the SecureToken came up ENABLED") as tick:
+        for i in range(6):
+            if "ENABLED" in ssh.secure_token_status(ctx.fqdn):
+                enabled = True
+                break
+            tick(f"not yet — retry {i + 1}/6")
+            time.sleep(5)
+    if not enabled:
+        raise RuntimeError(f"{ctx.fqdn}: admin SecureToken not ENABLED after mint")
+    ui.ok("admin SecureToken ENABLED")
 
 
 def step_escrow_bst(ctx: HostContext) -> None:
@@ -181,7 +223,8 @@ def step_escrow_bst(ctx: HostContext) -> None:
     exists, so on the pre-minted path this step is what actually escrows the BST.
     """
     s = get_settings()
-    console.print(f"[bold]escrow_bst[/]: escrowing Bootstrap Token on {ctx.fqdn}")
+    ui.step("ESCROW BOOTSTRAP TOKEN", "escrow the BST so this box is EACS-able next cycle")
+    ui.wire(f"ssh admin@{ctx.hostname} sudo profiles install -type bootstraptoken -user {s.ssh_admin_user} -password ••••••")
     install_cmd = (
         f"sudo profiles install -type bootstraptoken "
         f"-user {s.ssh_admin_user} -password {shlex.quote(ssh_admin_password())}"
@@ -197,24 +240,32 @@ def step_escrow_bst(ctx: HostContext) -> None:
     cp = ssh.run(ctx.fqdn, "sudo profiles status -type bootstraptoken")
     if b"escrowed to server: YES" not in cp.stdout:
         raise RuntimeError(f"BST escrow check failed:\n{cp.stdout.decode()}")
-    console.print("  → BST escrowed.")
+    ui.ok("Bootstrap Token escrowed to server")
 
 
 def step_wait_for_sentinel(ctx: HostContext) -> None:
     s = get_settings()
-    console.print(f"[bold]wait_for_sentinel[/]: polling {ctx.fqdn} for /var/log/m4-bootstrap-complete")
+    ui.step("BOOTSTRAP", "signed PKG fetches vault over mTLS (Path C) → puppet → registers in Taskcluster")
+    ui.wire(f"ssh admin@{ctx.hostname} test -f /var/log/m4-bootstrap-complete  (poll)")
     deadline = time.monotonic() + s.bootstrap_max_wait_seconds
-    while time.monotonic() < deadline:
-        if ssh.file_exists(ctx.fqdn, "/var/log/m4-bootstrap-complete"):
-            console.print("  → sentinel present.")
-            return
-        time.sleep(s.bootstrap_poll_seconds)
-    raise TimeoutError("bootstrap sentinel did not appear in time")
+    found = False
+    with ui.waiting("waiting for the bootstrap sentinel") as tick:
+        while time.monotonic() < deadline:
+            if ssh.file_exists(ctx.fqdn, "/var/log/m4-bootstrap-complete"):
+                found = True
+                break
+            tick("puppet converging on the freshly-enrolled host")
+            time.sleep(s.bootstrap_poll_seconds)
+    if not found:
+        raise TimeoutError("bootstrap sentinel did not appear in time")
+    ui.ok("bootstrap complete — /var/log/m4-bootstrap-complete present")
 
 
 def step_unquarantine(ctx: HostContext) -> None:
-    console.print(f"[bold]unquarantine[/]: {ctx.hostname}")
+    ui.step("UNQUARANTINE", "return the worker to service")
+    ui.wire(f"PUT queue/v1 quarantineWorker {ctx.hostname}  (quarantineUntil → past)")
     taskcluster.unquarantine(ctx.worker_pool_id, ctx.worker_group, ctx.hostname)
+    ui.ok("returned to service")
 
 
 def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = False) -> None:
@@ -231,7 +282,8 @@ def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = 
     requires an auto-generated managed password, which the mint can't read back.)
     """
     ctx = resolve(hostname)
-    console.print(f"=> reprovisioning {ctx.hostname} (role={ctx.role}, pool={ctx.worker_pool_id})")
+    started = time.monotonic()
+    ui.banner(ctx.hostname, ctx.role, ctx.worker_pool_id)
     step_quarantine(ctx)
     step_drain(ctx)
     if not skip_wipe:
@@ -249,6 +301,4 @@ def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = 
     # key wired). Only return it to service when explicitly asked — the eventual prod flow.
     if unquarantine:
         step_unquarantine(ctx)
-        console.print(f"[bold green]done[/]: {ctx.hostname} reprovisioned and returned to service")
-    else:
-        console.print(f"[bold green]done[/]: {ctx.hostname} reprovisioned (still quarantined; pass --unquarantine to return to service)")
+    ui.summary(ctx.hostname, time.monotonic() - started, quarantined=not unquarantine)
