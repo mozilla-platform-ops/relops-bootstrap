@@ -40,7 +40,7 @@ async def healthz() -> str:
 @app.get("/_debug/headers")
 async def debug_headers(request: Request) -> dict:
     """Dump the request headers the broker actually receives. Used to verify
-    LB-forwarded mTLS headers during bring-up. Remove after Path C is proven."""
+    LB-forwarded mTLS headers during bring-up. Remove after the mTLS vault fetch is proven."""
     return {k: v for k, v in request.headers.items()}
 
 
