@@ -127,7 +127,7 @@ history**. Copy `.env.example` → `.env` and fill in the refs.
 | Var | Required | Purpose |
 |---|---|---|
 | `REPROVISION_GCP_PROJECT` | no | Secret Manager project (default `relops-bootstrap`) |
-| `REPROVISION_SIMPLEMDM_API_KEY` / `_REF` | yes | SimpleMDM API key. `_REF` defaults to Secret Manager id `simplemdm-api-token`. |
+| `REPROVISION_SIMPLEMDM_API_KEY` / `_REF` | yes | SimpleMDM API key. Point `_REF` at an `op://` ref (no gcloud) or a Secret Manager id. |
 | `REPROVISION_TC_CLIENT_ID` / `_REF` | quarantine steps only | TC client (`queue:quarantine-worker:*`). `_REF` = Secret Manager id or `op://`. |
 | `REPROVISION_TC_ACCESS_TOKEN` / `_REF` | quarantine steps only | TC access token. |
 | `REPROVISION_SSH_ADMIN_USER` | no | Default: `admin` |
@@ -183,11 +183,13 @@ pytest -q                       # sanity check — should be all green
 cp .env.example .env            # then edit .env — see "Secrets" below
 ```
 
-**4. Authenticate to your vault (one-time per shell session):**
+**4. Sign in to 1Password (one-time per shell session):**
 ```bash
-op signin                       # if any _REF is an op:// (1Password) ref
-gcloud auth login               # if any _REF is a GCP Secret Manager id
+op signin
 ```
+Operator secrets default to 1Password (`op://`) refs, so that's the only auth you need —
+**`gcloud` is not required.** (GCP Secret Manager is supported as an *alternative* backend;
+only if you point a `_REF` at a Secret Manager id do you also run `gcloud auth login`.)
 > First time on a new machine, the 1Password CLI needs the account added once:
 > `op account add --address mozilla.1password.com --email <you>@mozilla.com`, then
 > `eval $(op signin)`. Or enable **1Password app → Settings → Developer → Integrate with
