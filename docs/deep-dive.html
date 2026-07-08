@@ -1282,11 +1282,13 @@ san = leaf.extensions.get_extension_for_oid(<span class="field">SUBJECT_ALTERNAT
   SimpleMDM dashboard. The device wipes. DEP re-enrollment kicks in.
   SimpleMDM pushes the assigned profiles, including
   <code>Dev - SCEP</code>. <code>mdmclient</code> enrolls a fresh cert
-  into the System keychain. The SimpleMDM bootstrap script-job (which we
-  drafted in
-  <code>scripts/simplemdm-m4-no-sip-bootstrap.sh</code>) runs as root.
-  It auto-grants the SecureToken to the admin user via the Bootstrap
-  Token (covered briefly below), then runs
+  into the System keychain. The operator mints the first SecureToken via
+  one interactive ssh login (DEP skips Setup Assistant, so admin holds no
+  token until a PAM login — a script or PKG cannot grant the <em>first</em>
+  SecureToken), and the Bootstrap Token is escrowed alongside it. The
+  bootstrap — a signed PKG (managed install) built from
+  <code>scripts/simplemdm-m4-no-sip-bootstrap.sh</code> that lands during
+  DEP convergence and runs as root — then runs
   <code>CURL_SSL_BACKEND=securetransport curl --cert "&lt;CN&gt;" ...</code>
   to fetch <code>/var/root/vault.yaml</code>. It clones the appropriate
   ronin_puppet branch, installs a reboot-survivable
@@ -1331,7 +1333,7 @@ san = leaf.extensions.get_extension_for_oid(<span class="field">SUBJECT_ALTERNAT
   <thead><tr><th>Symptom</th><th>What's broken</th><th>How to debug</th></tr></thead>
   <tbody>
     <tr>
-      <td>Bootstrap script-job logs <code>fetch_vault_yaml_via_mtls: HTTP 401</code></td>
+      <td>Bootstrap (PKG) logs <code>fetch_vault_yaml_via_mtls: HTTP 401</code></td>
       <td>The cert isn't in the keychain (macOS), or the cert chain didn't validate at the LB</td>
       <td>SSH to worker; <code>security find-identity -v</code>; <code>openssl x509 -in &lt;cert&gt; -noout -text</code> to confirm SAN URI shape</td>
     </tr>
