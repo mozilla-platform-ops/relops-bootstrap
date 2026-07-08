@@ -95,6 +95,9 @@ def step_drain(ctx: HostContext) -> None:
 def step_wipe(ctx: HostContext) -> None:
     if not ctx.simplemdm_device_id:
         raise RuntimeError(f"{ctx.hostname} not found in SimpleMDM")
+    # A prior EACS may have rotated this host's SSH key; clear any stale entry from the tool's
+    # known_hosts so the verify connection accept-new's the current key instead of failing.
+    ssh.forget_host_key(ctx.fqdn)
     # Guard: EACS needs an escrowed Bootstrap Token. Without it, the erase either fails
     # (DoNotObliterate) or full-obliterates into a long headless macOS reinstall. Refuse to
     # wipe a box that can't EACS — verify BST over ssh first (operator key, no password).
@@ -150,6 +153,9 @@ def step_mint(ctx: HostContext) -> None:
     it wedges at the BST wait-loop and times out. Idempotent — skips if already ENABLED.
     """
     console.print(f"[bold]mint[/]: ensuring {ctx.fqdn} admin holds a SecureToken")
+    # The box just re-enrolled post-EACS with a fresh host key; forget the old one so the
+    # SecureToken status check (which uses ssh.run) doesn't fail on a key mismatch.
+    ssh.forget_host_key(ctx.fqdn)
     console.print("  → waiting for sshd (relops-ssh pkg lands during convergence)…")
     ssh.wait_for_sshd(ctx.fqdn)
     if "ENABLED" in ssh.secure_token_status(ctx.fqdn):
