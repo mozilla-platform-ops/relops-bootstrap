@@ -114,24 +114,28 @@ of `op://Vault/Item/field` is read via the **1Password CLI**; anything else is t
 **GCP Secret Manager** secret id and read via `gcloud` (reusing your existing login).
 
 ```
-.env holds REFERENCES:                        the secret lives in the vault:
-  REPROVISION_SSH_ADMIN_PASSWORD_REF=          op://RelOps Vault/m4 admin/password
+baked-in REFERENCE (a shared pointer):        the secret lives in the vault:
+  ssh_admin_password_ref =                     op://RelOps/DEP …SSH/password
         │                                              │
         └────────── secrets.ssh_admin_password() ──────┘  ← op read, at run time
 ```
 
-You keep the *references* in `.env`; the secrets stay in 1Password / Secret Manager. One
-`op signin` (or `gcloud auth login`) per session and **no secret ever lands in your shell
-history**. Copy `.env.example` → `.env` and fill in the refs.
+The *references* are shared, non-secret pointers into the team `RelOps` 1Password vault and
+ship as config defaults — the secrets themselves stay in the vault, gated by vault access.
+One `op signin` per session and **no secret ever lands in your shell history**. You only
+touch config to *override* a default (see `.env.example`).
 
-| Var | Required | Purpose |
+| Var | Required | Default |
 |---|---|---|
-| `REPROVISION_GCP_PROJECT` | no | Secret Manager project (default `relops-bootstrap`) |
-| `REPROVISION_SIMPLEMDM_API_KEY` / `_REF` | yes | SimpleMDM API key. Point `_REF` at an `op://` ref (no gcloud) or a Secret Manager id. |
-| `REPROVISION_TC_CLIENT_ID` / `_REF` | quarantine steps only | TC client (`queue:quarantine-worker:*`). `_REF` = Secret Manager id or `op://`. |
-| `REPROVISION_TC_ACCESS_TOKEN` / `_REF` | quarantine steps only | TC access token. |
-| `REPROVISION_SSH_ADMIN_USER` | no | Default: `admin` |
-| `REPROVISION_SSH_ADMIN_PASSWORD` / `_REF` | yes | DEP admin password for the mint login. Prefer `_REF`, e.g. `op://RelOps Vault/m4 admin/password`. |
+| `REPROVISION_SIMPLEMDM_API_KEY` / `_REF` | yes | `op://RelOps/SimpleMDM API admin/password` |
+| `REPROVISION_TC_CLIENT_ID` / `_REF` | quarantine steps only | `op://RelOps/Taskcluster Quarantine/username` |
+| `REPROVISION_TC_ACCESS_TOKEN` / `_REF` | quarantine steps only | `op://RelOps/Taskcluster Quarantine/password` |
+| `REPROVISION_SSH_ADMIN_PASSWORD` / `_REF` | yes | `op://RelOps/DEP Provisioned Mac Admin Account SimpleMDM SSH/password` |
+| `REPROVISION_SSH_ADMIN_USER` | no | `admin` |
+| `REPROVISION_GCP_PROJECT` | no | `relops-bootstrap` (only if a `_REF` is a Secret Manager id) |
+
+Any `_REF` can instead be a **GCP Secret Manager** secret id (then `gcloud auth login`); a
+direct `REPROVISION_*` value always wins over its `_REF`.
 
 > TC credentials are **only** needed for `quarantine` / `drain` / `unquarantine`. The core
 > `wipe → reenroll → mint → escrow → wait-sentinel` sequence runs without them.
@@ -178,24 +182,21 @@ pip install -e '.[dev]'
 pytest -q                       # sanity check — should be all green
 ```
 
-**3. Configure references** (not secrets):
-```bash
-cp .env.example .env            # then edit .env — see "Secrets" below
-```
-
-**4. Sign in to 1Password (one-time per shell session):**
+**3. Sign in to 1Password (one-time per shell session):**
 ```bash
 op signin
 ```
-Operator secrets default to 1Password (`op://`) refs, so that's the only auth you need —
-**`gcloud` is not required.** (GCP Secret Manager is supported as an *alternative* backend;
-only if you point a `_REF` at a Secret Manager id do you also run `gcloud auth login`.)
+No config needed — the secret *references* (shared `op://` pointers into the team `RelOps`
+1Password vault) are baked into the defaults, so `op signin` is the whole auth story and
+**`gcloud` is not required.** (Only create a `.env` from `.env.example` to *override* a
+default — a different vault, or GCP Secret Manager as the backend, which then needs
+`gcloud auth login`.)
 > First time on a new machine, the 1Password CLI needs the account added once:
 > `op account add --address mozilla.1password.com --email <you>@mozilla.com`, then
 > `eval $(op signin)`. Or enable **1Password app → Settings → Developer → Integrate with
 > 1Password CLI**.
 
-**5. Verify all secrets resolve** before touching a host:
+**4. Verify all secrets resolve** before touching a host:
 ```bash
 python -c "from orchestrator import secrets; print('admin pw:', len(secrets.ssh_admin_password()), 'chars')"
 ```
