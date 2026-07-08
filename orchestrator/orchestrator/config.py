@@ -14,18 +14,22 @@ class Settings(BaseSettings):
     # the vault, fetched at run time (see secrets.py). One-time gcloud/op auth, no exports.
     gcp_project: str = Field(default="relops-bootstrap")
 
+    # The *_ref defaults below are shared, NON-secret pointers into the team "RelOps"
+    # 1Password vault — the actual secrets stay in the vault, gated by vault access. Anyone
+    # with the same permissions gets a zero-config setup: just `op signin`, no .env needed.
+    # Override via env / .env only if your vault or item names differ.
+
     # Taskcluster
     tc_root_url: str = Field(default="https://firefox-ci-tc.services.mozilla.com")
     tc_client_id: str = Field(default="")
-    tc_client_id_ref: str = Field(default="")
+    tc_client_id_ref: str = Field(default="op://RelOps/Taskcluster Quarantine/username")
     tc_access_token: str = Field(default="")
-    tc_access_token_ref: str = Field(default="")
+    tc_access_token_ref: str = Field(default="op://RelOps/Taskcluster Quarantine/password")
 
     # SimpleMDM
     simplemdm_api_key: str = Field(default="")
-    # No default backend — point this at an op:// ref (preferred; no gcloud needed) or a
-    # GCP Secret Manager id. Left empty so the operator flow never *requires* gcloud auth.
-    simplemdm_api_key_ref: str = Field(default="")
+    # Shared op:// ref (no gcloud). Override with a Secret Manager id if you prefer that backend.
+    simplemdm_api_key_ref: str = Field(default="op://RelOps/SimpleMDM API admin/password")
 
     # SSH to host
     ssh_admin_user: str = Field(default="admin")
@@ -34,7 +38,9 @@ class Settings(BaseSettings):
     # non-interactive BST escrow. Key-based ssh handles everything else. Prefer the *_ref
     # (e.g. an op:// reference to the fixed DEP admin password) over a raw value.
     ssh_admin_password: str = Field(default="")
-    ssh_admin_password_ref: str = Field(default="")
+    ssh_admin_password_ref: str = Field(
+        default="op://RelOps/DEP Provisioned Mac Admin Account SimpleMDM SSH/password"
+    )
     ssh_command_timeout_seconds: int = Field(default=120)
 
     # Polling cadence
