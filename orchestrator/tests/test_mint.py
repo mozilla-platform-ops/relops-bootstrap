@@ -177,7 +177,7 @@ def test_reprovision_default_flow():
     calls = _run_reprovision_capturing()
     assert "unquarantine" not in calls  # quarantine persists by default
     assert calls.index("mint") < calls.index("escrow")  # mint precedes BST escrow
-    assert not hasattr(workflow, "step_deliver_vault")  # Path C: no 1Password vault drop
+    assert not hasattr(workflow, "step_deliver_vault")  # no 1Password vault drop (bootstrap self-fetches over mTLS)
     assert not hasattr(workflow, "step_rotate_admin_password")  # rotation is a DEP-config concern
 
 

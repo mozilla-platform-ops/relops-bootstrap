@@ -46,8 +46,8 @@ needs a human at the keyboard: **minting the first SecureToken**.
   └───────┬───────┘
           ▼
   ┌───────────────┐   (no step — signed PKG does it)
-  │  bootstrap    │   managed-install PKG fetches vault.yaml over mTLS (SCEP,
-  │   Path C      │   Path C), runs puppet, registers in Taskcluster
+  │  bootstrap    │   managed-install PKG fetches vault.yaml over mTLS using its
+  │  (mTLS/SCEP)  │   SCEP cert, runs puppet, registers in Taskcluster
   └───────┬───────┘
           ▼
   ┌───────────────┐   SSH
@@ -60,8 +60,7 @@ needs a human at the keyboard: **minting the first SecureToken**.
 The **bootstrap itself is not a workflow step** — it's a **signed PKG** (managed install)
 scoped to the SimpleMDM group. Once `admin` logs in (the mint), the managed PKGs start
 installing and the bootstrap runs on its own. It fetches `vault.yaml` over mTLS using its
-SCEP-issued client cert (**Path C**), so there's no vault-delivery step and no `op read` +
-SSH-drop anymore.
+SCEP-issued client cert, so there's no vault-delivery step and no `op read` + SSH-drop anymore.
 
 ---
 
@@ -226,7 +225,7 @@ password (`"macOS Auto Admin password can not be rotated"` for a fixed one), and
 won't expose an auto-generated password via API for the mint to read. The two requirements
 are mutually exclusive, so we harden via a strong fixed DEP password instead.
 
-## Secret delivery (Path C)
+## Secret delivery
 
 There is no vault-delivery step. The bootstrap PKG on the host fetches `vault.yaml` itself
 over mTLS from the broker using its SCEP-issued client cert (the rest of this repo provisions

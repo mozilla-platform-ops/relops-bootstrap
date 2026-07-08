@@ -245,7 +245,7 @@ def step_escrow_bst(ctx: HostContext) -> None:
 
 def step_wait_for_sentinel(ctx: HostContext) -> None:
     s = get_settings()
-    ui.step("BOOTSTRAP", "signed PKG fetches vault over mTLS (Path C) → puppet → registers in Taskcluster")
+    ui.step("BOOTSTRAP", "signed PKG fetches vault over mTLS → puppet → registers in Taskcluster")
     ui.wire(f"ssh admin@{ctx.hostname} test -f /var/log/m4-bootstrap-complete  (poll)")
     deadline = time.monotonic() + s.bootstrap_max_wait_seconds
     found = False
@@ -292,7 +292,7 @@ def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = 
     step_mint(ctx)  # mint SecureToken (must precede escrow_bst)
     step_escrow_bst(ctx)
     # No vault-delivery and no bootstrap-trigger steps:
-    #  - vault: the bootstrap fetches vault.yaml itself over mTLS (SCEP) — Path C.
+    #  - vault: the bootstrap fetches vault.yaml itself over mTLS using its SCEP cert.
     #  - bootstrap: it's delivered as a signed PKG (managed install) that lands during DEP
     #    convergence once admin logs in (the mint), so nothing needs to trigger it. We just
     #    wait for the sentinel it writes.

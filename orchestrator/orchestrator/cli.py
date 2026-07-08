@@ -75,11 +75,13 @@ def wait_sentinel(hostname: str) -> None:
 
 
 @app.command()
-def demo() -> None:
+def demo(
+    host: str = typer.Option("macmini-m4-88", "--host", help="Hostname to show on screen during the demo."),
+) -> None:
     """Play a safe, no-host replay of the full flow — for live demos (touches nothing)."""
     from . import demo as _demo
 
-    _demo.run_demo()
+    _demo.run_demo(host)
 
 
 if __name__ == "__main__":
