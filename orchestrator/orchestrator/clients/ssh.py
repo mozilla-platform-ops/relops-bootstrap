@@ -11,6 +11,7 @@ import subprocess
 import time
 
 from ..config import get_settings
+from ..secrets import ssh_admin_password
 
 
 def _user_host(hostname: str) -> str:
@@ -43,8 +44,8 @@ def password_login(hostname: str) -> None:
     unreliable against macOS keyboard-interactive. The authentication itself mints
     the token; the remote command (`true`) is irrelevant.
     """
-    s = get_settings()
-    user = s.ssh_admin_user
+    user = get_settings().ssh_admin_user
+    password = ssh_admin_password()
     script = f"""
 set timeout 45
 log_user 0
@@ -55,7 +56,7 @@ spawn ssh -F /dev/null \\
   -o NumberOfPasswordPrompts=1 -o ConnectTimeout=20 \\
   {user}@{hostname} true
 expect {{
-  -re "(P|p)assword:" {{ send -- "{s.ssh_admin_password}\\r"; exp_continue }}
+  -re "(P|p)assword:" {{ send -- "{password}\\r"; exp_continue }}
   -re "(denied|failed|Authentication)" {{ exit 2 }}
   timeout {{ exit 3 }}
   eof
@@ -65,7 +66,7 @@ expect {{
         ["expect", "-"],
         input=script.encode(),
         capture_output=True,
-        timeout=s.ssh_command_timeout_seconds,
+        timeout=get_settings().ssh_command_timeout_seconds,
         check=False,
     )
     if cp.returncode == 2:

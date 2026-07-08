@@ -6,13 +6,13 @@ from __future__ import annotations
 
 import httpx
 
-from ..config import get_settings
+from ..secrets import simplemdm_api_key
 
 BASE = "https://a.simplemdm.com/api/v1"
 
 
 def _auth() -> httpx.BasicAuth:
-    return httpx.BasicAuth(get_settings().simplemdm_api_key, "")
+    return httpx.BasicAuth(simplemdm_api_key(), "")
 
 
 def find_device_by_name(name: str) -> dict | None:

@@ -10,6 +10,7 @@ import taskcluster
 from taskcluster.exceptions import TaskclusterRestFailure
 
 from ..config import get_settings
+from ..secrets import tc_credentials
 
 # States that mean the worker is still actively handling the task. Anything in
 # {completed, failed, exception} means the task is done from the worker's POV.
@@ -17,10 +18,10 @@ ACTIVE_RUN_STATES = {"pending", "running", "claimed"}
 
 
 def _queue() -> "taskcluster.Queue":
-    s = get_settings()
-    opts: dict = {"rootUrl": s.tc_root_url}
-    if s.tc_client_id and s.tc_access_token:
-        opts["credentials"] = {"clientId": s.tc_client_id, "accessToken": s.tc_access_token}
+    opts: dict = {"rootUrl": get_settings().tc_root_url}
+    client_id, access_token = tc_credentials()
+    if client_id and access_token:
+        opts["credentials"] = {"clientId": client_id, "accessToken": access_token}
     return taskcluster.Queue(opts)
 
 
