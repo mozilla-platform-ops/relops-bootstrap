@@ -19,10 +19,13 @@ session to type `vault.yaml` into. Every secret read is logged with the
 requesting cert's serial number — *"who pulled what, when"* is a one-liner
 in Cloud Audit Logs.
 
-**Status:** Validated end-to-end on m4-81 (2026-06-25) — fresh EACS → DEP
-enroll → SimpleMDM profiles → SCEP cert in keychain → bootstrap script
-auto-fetches vault.yaml → puppet bootstrap → worker registered in Taskcluster,
-zero operator touches beyond the initial EACS click.
+**Status:** Validated end-to-end on m4-80 + m4-81 (2026-07) — EACS → DEP enroll →
+SimpleMDM profiles + signed **bootstrap PKG** → SCEP cert in keychain → operator mints
+the SecureToken (one interactive ssh login) → bootstrap PKG fetches vault.yaml → puppet →
+worker in Taskcluster. Driven by the `orchestrator/` CLI (`reprovision`). The one required
+human step per host is the **SecureToken mint** — DEP skips Setup Assistant, so admin holds
+no token until a PAM (password) login; everything else is hands-off. (The bootstrap is now a
+signed PKG that lands during DEP convergence — no GCP/script-job trigger.)
 
 ---
 
@@ -32,12 +35,13 @@ zero operator touches beyond the initial EACS click.
                  ┌─────────────────────────────────────────────────┐
                  │   host (m4 Mac Mini, fresh out of DEP)          │
                  │                                                 │
-                 │   1. Setup Assistant → admin user                │
-                 │   2. SimpleMDM script-job grants BST →           │
-                 │      SecureToken on admin                        │
+                 │   1. DEP enroll (Setup Assistant skipped) →      │
+                 │      managed admin (fixed DEP password)          │
+                 │   2. Operator mints the first SecureToken via    │
+                 │      one interactive ssh login; BST escrowed     │
                  │   3. SCEP profile → mdmclient → keypair +        │
                  │      cert in System keychain                     │
-                 │   4. Bootstrap script:                           │
+                 │   4. Signed bootstrap PKG (managed install):     │
                  │      CURL_SSL_BACKEND=securetransport \          │
                  │      curl --cert "<CN>" https://forge/secret/X   │
                  │      (TLS handshake signs via OS network stack,  │
@@ -120,7 +124,7 @@ silently drops URI SANs with URL-encoded chars (e.g. `Mac%20mini`).
 │   └── Dockerfile, pyproject.toml
 │
 ├── orchestrator/                 🧰  Operator CLI (`reprovision`)
-│   └── ... TC + SimpleMDM + 1P clients + workflow steps
+│   └── ... TC (Hawk) + SimpleMDM clients + workflow steps (quarantine→wipe→mint→escrow→wait)
 │
 ├── mdm/                          📱  SimpleMDM artifacts
 │   ├── scep-relops.mobileconfig.template
@@ -130,7 +134,8 @@ silently drops URI SANs with URL-encoded chars (e.g. `Mac%20mini`).
 ├── scripts/                      🛠️  Operator helpers + worker bootstrap
 │   ├── bootstrap-step-ca.sh                  ─ idempotent step-ca init
 │   ├── render-scep-mobileconfig.sh           ─ render SCEP profile for SimpleMDM upload
-│   ├── simplemdm-m4-no-sip-bootstrap.sh      ─ ⭐ DROP-IN body for SimpleMDM script-job
+│   ├── simplemdm-m4-no-sip-bootstrap.sh      ─ ⭐ bootstrap script — now shipped as a signed PKG (managed install)
+│   ├── mint-securetoken.sh                    ─ automate the SecureToken mint (+ BST escrow) over ssh
 │   ├── simplemdm-vault-fetch-snippet.sh      ─ just the fetch block, for splicing
 │   ├── relops-bootstrap.sh                   ─ LaunchDaemon variant for periodic refresh
 │   ├── install-on-worker.sh                  ─ operator-laptop installer
@@ -146,8 +151,9 @@ silently drops URI SANs with URL-encoded chars (e.g. `Mac%20mini`).
 
 ## 🧭 Bringing it up
 
-One-time operator steps. After this, the whole worker-provisioning flow is
-"EACS the host + paste the bootstrap script into SimpleMDM."
+One-time operator steps. After this, provisioning a worker is driven by the
+`orchestrator/` CLI (`reprovision`) — see [`orchestrator/README.md`](orchestrator/README.md)
+for the **fresh vs reprovision** golden paths. The bootstrap ships as a signed PKG.
 
 ### 1️⃣  Create the GCP project + state bucket
 
@@ -216,16 +222,22 @@ step-ca root embedded + SCEP enrollment payload. Upload to SimpleMDM as a
 Custom Configuration Profile, assign to the device group whose hosts you
 want to provision via the broker.
 
-### 7️⃣  Paste the bootstrap script into SimpleMDM
+### 7️⃣  Ship the bootstrap as a signed PKG
 
-`scripts/simplemdm-m4-no-sip-bootstrap.sh` is the drop-in body for the
-SimpleMDM Script Job that runs on each device at enrollment time. It:
+`scripts/simplemdm-m4-no-sip-bootstrap.sh` is packaged as a **signed PKG** (managed
+install) assigned to the device group, so it lands during DEP convergence and runs on its
+own — no SimpleMDM script-job, no GCP trigger. It:
 
-1. Auto-grants SecureToken to admin via Bootstrap Token escrow
+1. Waits for admin to hold a SecureToken — the operator mints it via **one interactive ssh
+   login** (DEP skips Setup Assistant, so admin has no token until a PAM login; a script
+   can't grant the *first* SecureToken). BST escrow happens alongside the mint.
 2. Discovers the SCEP identity in the keychain by issuer DN
 3. Fetches the role-scoped `vault.yaml` from the broker via SecureTransport curl
 4. Clones ronin_puppet, sets up ssh-to-localhost, installs the m4-bootstrap-driver
    LaunchDaemon (which loops `run-puppet.sh` until the safari semaphores fire)
+
+The mint + BST escrow are driven operator-side by `reprovision mint` / `reprovision
+escrow-bst` (or the standalone `scripts/mint-securetoken.sh`).
 
 ---
 
@@ -270,9 +282,11 @@ strict checks all green.
   or retry the GitHub App connection. Manual `gcloud builds submit` works.
 - 🔭 **Widen `trusted_source_cidrs`** beyond `63.245.209.101/32` if other
   Mozilla NAT IPs need access (other datacenters, VPN egress, etc.).
-- 📦 **SimpleMDM Custom App delivery** — for a future "true zero-touch"
-  posture where the LaunchDaemon refresh path (`relops-bootstrap.sh`) is
-  installed automatically rather than baked into the script-job.
+- ✅ **Bootstrap via signed PKG** — DONE (2026-07): the bootstrap is a signed PKG
+  (managed install) that lands at DEP convergence instead of a triggered script-job.
+- 🔑 **Streamline operator creds** — `reprovision` still needs SimpleMDM / TC / admin-pw
+  env vars pasted per session. Move to runtime fetch (Secret Manager / 1Password) and/or a
+  Hangar IAP-gated action. The TC `quarantine-worker` token also needs periodic re-issue.
 
 ---
 

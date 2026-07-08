@@ -326,10 +326,10 @@
       broker hands back the matching secret on demand.
     </p>
     <p style="font-size: 14.5px;">
-      <strong>Provisioning</strong> — EACS a Mac mini, walk away. SimpleMDM pushes
-      profiles, the bootstrap script-job fetches vault.yaml itself, puppet
-      provisions, worker registers in Taskcluster. Zero operator touches beyond
-      the EACS click.
+      <strong>Provisioning</strong> — EACS a Mac mini. SimpleMDM pushes profiles + the
+      signed bootstrap PKG; the operator mints the SecureToken via one ssh login (DEP skips
+      Setup Assistant), then the bootstrap fetches vault.yaml, puppet provisions, and the
+      worker registers in Taskcluster. One interactive step; the rest is hands-off.
     </p>
     <p style="font-size: 14.5px;">
       <strong>Re-provisioning</strong> — Same flow. Worker dies, replace hardware,
@@ -384,9 +384,9 @@
     <text x="56" y="349" class="label">OS network stack only</text>
     <text x="56" y="361" class="label-small">(nehelper, configd, IKEv2…)</text>
 
-    <!-- Script-job fetch -->
+    <!-- Bootstrap PKG fetch -->
     <rect x="40" y="385" width="280" height="155" rx="8" fill="rgba(255,142,60,0.20)" stroke="none"/>
-    <text x="56" y="410" class="label-bold">③ Bootstrap Script-job</text>
+    <text x="56" y="410" class="label-bold">③ Bootstrap PKG</text>
     <text x="56" y="432" class="label-small mono" style="font-size:10.5px;">CURL_SSL_BACKEND=securetransport \</text>
     <text x="56" y="448" class="label-small mono" style="font-size:10.5px;">  curl --cert "&lt;CN&gt;" \</text>
     <text x="56" y="464" class="label-small mono" style="font-size:10.5px;">  forge.relops.mozilla.com \</text>
@@ -590,7 +590,7 @@
     </tr>
     <tr>
       <td><strong>Run-puppet trigger</strong></td>
-      <td>SimpleMDM script-job installs <code>com.mozilla.m4-bootstrap</code> LaunchDaemon → loops run-puppet via ssh-to-localhost until safari semaphores fire</td>
+      <td>signed bootstrap PKG installs <code>com.mozilla.m4-bootstrap</code> LaunchDaemon → loops run-puppet via ssh-to-localhost until safari semaphores fire</td>
       <td><code>bootstrap_linux.sh</code> runs <code>puppet apply</code> directly in line</td>
     </tr>
     <tr>
@@ -753,8 +753,8 @@
 <div class="status-row">
   <span style="font-size:18px;">🍎</span>
   <div>
-    <strong>macOS m4 — proven end-to-end on m4-81</strong>
-    <div class="dim" style="font-size:13px;">Fresh EACS → DEP enroll → SimpleMDM profiles → SCEP cert in keychain → script-job fetches vault.yaml → puppet bootstrap → worker registered in Taskcluster, autonomously.</div>
+    <strong>macOS m4 — proven end-to-end on m4-80 + m4-81</strong>
+    <div class="dim" style="font-size:13px;">EACS → DEP enroll → SimpleMDM profiles + signed bootstrap PKG → SCEP cert in keychain → operator mints SecureToken (one ssh login) → bootstrap fetches vault.yaml → puppet → worker registered in Taskcluster.</div>
   </div>
   <span class="pill done">Live</span>
 </div>
@@ -795,7 +795,7 @@
   <h3>Want to dig in, contribute, or roll a role onto this?</h3>
   <p>
     Everything is open source inside Mozilla — the broker code, the terraform,
-    the operator-side helpers, the SimpleMDM script-job. Per-role rollout (r8,
+    the operator-side helpers, the signed bootstrap PKG. Per-role rollout (r8,
     staging, catalina, the rest of the Linux roles) is mechanical follow-up
     work; happy to pair on it if you've got a role you want to migrate.
   </p>
