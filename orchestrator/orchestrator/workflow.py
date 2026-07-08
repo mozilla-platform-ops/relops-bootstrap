@@ -10,6 +10,7 @@ once they've fixed whatever was broken.
 from __future__ import annotations
 
 import shlex
+import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,7 @@ from rich.console import Console
 from .clients import simplemdm, ssh, taskcluster
 from .config import get_settings
 from .role_map import role_for_hostname
+from .secrets import ssh_admin_password
 
 console = Console()
 
@@ -165,10 +167,18 @@ def step_escrow_bst(ctx: HostContext) -> None:
     """
     s = get_settings()
     console.print(f"[bold]escrow_bst[/]: escrowing Bootstrap Token on {ctx.fqdn}")
-    ssh.run(
-        ctx.fqdn,
-        f"sudo profiles install -type bootstraptoken -user {s.ssh_admin_user} -password {shlex.quote(s.ssh_admin_password)}",
+    install_cmd = (
+        f"sudo profiles install -type bootstraptoken "
+        f"-user {s.ssh_admin_user} -password {shlex.quote(ssh_admin_password())}"
     )
+    try:
+        ssh.run(ctx.fqdn, install_cmd)
+    except subprocess.CalledProcessError as e:
+        # install_cmd embeds the admin password — never let it surface in a traceback.
+        raise RuntimeError(
+            f"BST escrow failed on {ctx.fqdn} (ssh exit {e.returncode}). "
+            "Check VPN/reachability and that admin holds a SecureToken (run `mint` first)."
+        ) from None
     cp = ssh.run(ctx.fqdn, "sudo profiles status -type bootstraptoken")
     if b"escrowed to server: YES" not in cp.stdout:
         raise RuntimeError(f"BST escrow check failed:\n{cp.stdout.decode()}")

@@ -66,16 +66,34 @@ def test_escrow_bst_is_non_interactive():
             stdout = b"profiles: Bootstrap Token escrowed to server: YES"
         return CP()
 
-    with patch("orchestrator.workflow.ssh.run", side_effect=fake_run):
+    with patch("orchestrator.workflow.ssh.run", side_effect=fake_run), \
+         patch("orchestrator.workflow.ssh_admin_password", return_value="s3cr3t-pw"):
         workflow.step_escrow_bst(_ctx())
     install = next(c for c in cmds if "profiles install" in c)
     assert "-type bootstraptoken" in install
     assert "-user admin" in install
     assert "-password" in install
+    assert "s3cr3t-pw" in install  # the resolved password is passed, not an empty string
+
+
+def test_escrow_bst_ssh_error_does_not_leak_password():
+    """A failed escrow must raise a clean error — the admin password must never appear."""
+    import subprocess
+
+    def boom(host, cmd, **_):
+        raise subprocess.CalledProcessError(255, ["ssh", host, cmd])
+
+    with patch("orchestrator.workflow.ssh.run", side_effect=boom), \
+         patch("orchestrator.workflow.ssh_admin_password", return_value="s3cr3t-pw"):
+        with pytest.raises(RuntimeError) as ei:
+            workflow.step_escrow_bst(_ctx())
+    assert "s3cr3t-pw" not in str(ei.value)
+    assert ei.value.__suppress_context__  # `from None` — no chained CalledProcessError leaks the cmd
 
 
 def test_escrow_bst_raises_when_not_escrowed():
-    with patch("orchestrator.workflow.ssh.run") as run:
+    with patch("orchestrator.workflow.ssh.run") as run, \
+         patch("orchestrator.workflow.ssh_admin_password", return_value="s3cr3t-pw"):
         run.return_value.stdout = b"profiles: Bootstrap Token escrowed to server: NO"
         with pytest.raises(RuntimeError):
             workflow.step_escrow_bst(_ctx())

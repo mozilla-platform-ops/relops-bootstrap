@@ -55,7 +55,13 @@ def _resolve(direct: str, ref: str, project: str) -> str:
 @functools.lru_cache(maxsize=None)
 def simplemdm_api_key() -> str:
     s = get_settings()
-    return _resolve(s.simplemdm_api_key, s.simplemdm_api_key_ref, s.gcp_project)
+    key = _resolve(s.simplemdm_api_key, s.simplemdm_api_key_ref, s.gcp_project)
+    if not key:
+        raise RuntimeError(
+            "No SimpleMDM API key: set REPROVISION_SIMPLEMDM_API_KEY, or "
+            "REPROVISION_SIMPLEMDM_API_KEY_REF (an op:// ref or a Secret Manager id)."
+        )
+    return key
 
 
 @functools.lru_cache(maxsize=None)

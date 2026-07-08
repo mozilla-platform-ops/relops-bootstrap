@@ -23,7 +23,9 @@ class Settings(BaseSettings):
 
     # SimpleMDM
     simplemdm_api_key: str = Field(default="")
-    simplemdm_api_key_ref: str = Field(default="simplemdm-api-token")  # Secret Manager id
+    # No default backend — point this at an op:// ref (preferred; no gcloud needed) or a
+    # GCP Secret Manager id. Left empty so the operator flow never *requires* gcloud auth.
+    simplemdm_api_key_ref: str = Field(default="")
 
     # SSH to host
     ssh_admin_user: str = Field(default="admin")

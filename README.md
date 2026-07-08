@@ -125,6 +125,17 @@ silently drops URI SANs with URL-encoded chars (e.g. `Mac%20mini`).
 │
 ├── orchestrator/                 🧰  Operator CLI (`reprovision`)
 │   └── ... TC (Hawk) + SimpleMDM clients + workflow steps (quarantine→wipe→mint→escrow→wait)
+│                                   see orchestrator/README.md for the pipeline + golden paths
+│
+├── pkg/                          📦  Signed bootstrap PKG builder (current delivery)
+│   ├── build.sh                  ─ builds + Developer-ID-signs the component pkg (43AQ936H96)
+│   ├── payload/                  ─ /usr/local/sbin/m4-bootstrap.sh + entrypoint LaunchDaemon
+│   └── scripts/postinstall       ─ kicks the entrypoint on install
+│
+├── provisioner/                  ⏰  GCP cron auto-trigger — six default-deny guards
+│   └── app/                      ─ Cloud Run: Scheduler tick → guard checks → SimpleMDM
+│                                   script-job. The earlier delivery path; the signed PKG
+│                                   (pkg/) now lands the bootstrap at DEP convergence instead.
 │
 ├── mdm/                          📱  SimpleMDM artifacts
 │   ├── scep-relops.mobileconfig.template
@@ -143,6 +154,7 @@ silently drops URI SANs with URL-encoded chars (e.g. `Mac%20mini`).
 │   ├── INSTALL-on-worker.md                  ─ install guide + threat-model table
 │   └── fetch-vault-mtls.swift                ─ historical URLSession variant (dead end)
 │
+├── docs/                         📖  rendered walkthrough (index.html + deep-dive.html)
 ├── .github/workflows/test.yml    ✅  CI: pytest + terraform fmt/validate
 └── cloudbuild.yaml               🚀  build + push + deploy broker on commit
 ```

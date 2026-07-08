@@ -59,3 +59,11 @@ def test_ssh_admin_password_raises_when_unresolved():
         with pytest.raises(RuntimeError):
             secrets.ssh_admin_password()
     secrets.ssh_admin_password.cache_clear()
+
+
+def test_simplemdm_api_key_raises_when_unresolved():
+    secrets.simplemdm_api_key.cache_clear()
+    with patch("orchestrator.secrets._resolve", return_value=""):
+        with pytest.raises(RuntimeError):
+            secrets.simplemdm_api_key()
+    secrets.simplemdm_api_key.cache_clear()
