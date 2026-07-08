@@ -132,6 +132,7 @@ def test_wipe_forgets_stale_host_key_before_verifying():
     """EACS rotates the host key; step_wipe must clear the stale entry before the ssh check."""
     with patch("orchestrator.workflow.ssh.forget_host_key") as forget, \
          patch("orchestrator.workflow.ssh.run") as run, \
+         patch("orchestrator.workflow.taskcluster.is_currently_busy", return_value=False), \
          patch("orchestrator.workflow.simplemdm.get_device", return_value={"attributes": {"enrolled_at": "x"}}), \
          patch("orchestrator.workflow.simplemdm.wipe"):
         run.return_value.returncode = 0
@@ -140,9 +141,24 @@ def test_wipe_forgets_stale_host_key_before_verifying():
         forget.assert_called_once_with(_ctx().fqdn)
 
 
+def test_wipe_aborts_when_worker_busy():
+    """Never EACS a worker that's mid-task, even with an escrowed BST."""
+    from orchestrator.errors import ReprovisionError
+    with patch("orchestrator.workflow.ssh.forget_host_key"), \
+         patch("orchestrator.workflow.ssh.run") as run, \
+         patch("orchestrator.workflow.taskcluster.is_currently_busy", return_value=True), \
+         patch("orchestrator.workflow.simplemdm.wipe") as wipe:
+        run.return_value.returncode = 0
+        run.return_value.stdout = b"profiles: Bootstrap Token escrowed to server: YES"
+        with pytest.raises(ReprovisionError, match="still running a task"):
+            workflow.step_wipe(_ctx())
+        wipe.assert_not_called()
+
+
 def test_wipe_proceeds_with_escrowed_bst():
     with patch("orchestrator.workflow.ssh.forget_host_key"), \
          patch("orchestrator.workflow.ssh.run") as run, \
+         patch("orchestrator.workflow.taskcluster.is_currently_busy", return_value=False), \
          patch("orchestrator.workflow.simplemdm.get_device", return_value={"attributes": {"enrolled_at": "x"}}), \
          patch("orchestrator.workflow.simplemdm.wipe") as wipe:
         run.return_value.returncode = 0
