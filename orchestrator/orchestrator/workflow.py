@@ -99,6 +99,15 @@ def step_wipe(ctx: HostContext) -> None:
     # (DoNotObliterate) or full-obliterates into a long headless macOS reinstall. Refuse to
     # wipe a box that can't EACS — verify BST over ssh first (operator key, no password).
     bst = ssh.run(ctx.fqdn, "sudo profiles status -type bootstraptoken", check=False)
+    # Distinguish "couldn't verify over ssh" from "genuinely not escrowed" — otherwise an
+    # ssh failure (VPN down, first-connection host key, missing operator key) masquerades as
+    # a missing Bootstrap Token and sends the operator down the wrong path.
+    if bst.returncode != 0:
+        raise RuntimeError(
+            f"{ctx.fqdn}: couldn't verify the Bootstrap Token over ssh (exit {bst.returncode}) — "
+            f"NOT wiping. Check VPN + SSH access to the host first.\n"
+            f"{bst.stderr.decode(errors='replace').strip()}"
+        )
     if b"escrowed to server: YES" not in bst.stdout:
         raise RuntimeError(
             f"{ctx.fqdn}: Bootstrap Token not escrowed — EACS can't run, so a wipe would fail or "
