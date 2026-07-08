@@ -14,7 +14,8 @@ from orchestrator.clients import ssh
 
 
 def test_run_uses_tool_known_hosts_not_operators():
-    with patch("orchestrator.clients.ssh.subprocess.run") as m:
+    with patch("orchestrator.clients.ssh._admin_identity_file", return_value=None), \
+         patch("orchestrator.clients.ssh.subprocess.run") as m:
         ssh.run("macmini-m4-80.example.com", "true", check=False)
         argv = m.call_args[0][0]
     joined = " ".join(argv)
