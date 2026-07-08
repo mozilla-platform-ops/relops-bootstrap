@@ -12,9 +12,12 @@ from taskcluster.exceptions import TaskclusterRestFailure
 from ..config import get_settings
 from ..secrets import tc_credentials
 
-# States that mean the worker is still actively handling the task. Anything in
-# {completed, failed, exception} means the task is done from the worker's POV.
-ACTIVE_RUN_STATES = {"pending", "running", "claimed"}
+# A run is DONE only in these states; anything else (running / pending / unscheduled) means
+# the worker is still on the task. Modelled on the proven android-tools safe_runner
+# (worker_health.status.get_hosts_running_jobs), which calls a host busy whenever a recent
+# task's state isn't terminal. Checking the complement (rather than an allow-list) avoids
+# missing states like "unscheduled".
+TERMINAL_RUN_STATES = {"completed", "failed", "exception"}
 
 
 def _queue() -> "taskcluster.Queue":
@@ -97,7 +100,7 @@ def is_currently_busy(
         # Find the LATEST run that was on this worker (most recent runId first).
         for run in reversed(status.get("runs", [])):
             if run.get("workerId") == worker_id and run.get("workerGroup") == worker_group:
-                if run.get("state") in ACTIVE_RUN_STATES:
+                if run.get("state") not in TERMINAL_RUN_STATES:
                     return True
                 # Latest run on this worker is done; check the next task.
                 break
