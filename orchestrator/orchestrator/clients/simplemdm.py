@@ -52,21 +52,5 @@ def wipe(device_id: int, *, obliteration_behavior: str = "DoNotObliterate") -> N
     r.raise_for_status()
 
 
-def trigger_script(script_id: int, device_id: int) -> int:
-    """
-    Trigger a script-job for one device. Returns the job id so the caller can poll.
-    """
-    r = httpx.post(
-        f"{BASE}/script_jobs",
-        auth=_auth(),
-        data={"script_id": script_id, "device_ids": str(device_id)},
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()["data"]["id"]
-
-
-def get_script_job(job_id: int) -> dict:
-    r = httpx.get(f"{BASE}/script_jobs/{job_id}", auth=_auth(), timeout=30)
-    r.raise_for_status()
-    return r.json()["data"]
+# NB: no script_jobs client. The bootstrap used to be triggered as a SimpleMDM script-job;
+# it's now delivered as a signed PKG (managed install) that lands during DEP convergence.

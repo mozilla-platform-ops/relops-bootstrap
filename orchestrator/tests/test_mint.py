@@ -116,7 +116,6 @@ def _run_reprovision_capturing(**kwargs) -> list[str]:
          patch("orchestrator.workflow.step_wait_for_reenroll", rec("reenroll")), \
          patch("orchestrator.workflow.step_mint", rec("mint")), \
          patch("orchestrator.workflow.step_escrow_bst", rec("escrow")), \
-         patch("orchestrator.workflow.step_trigger_bootstrap_script", rec("trigger")), \
          patch("orchestrator.workflow.step_wait_for_sentinel", rec("sentinel")), \
          patch("orchestrator.workflow.step_unquarantine", rec("unquarantine")):
         workflow.reprovision("macmini-m4-81", **kwargs)

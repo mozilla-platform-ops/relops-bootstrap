@@ -175,15 +175,6 @@ def step_escrow_bst(ctx: HostContext) -> None:
     console.print("  → BST escrowed.")
 
 
-def step_trigger_bootstrap_script(ctx: HostContext) -> int:
-    s = get_settings()
-    if not s.bootstrap_script_id:
-        raise RuntimeError("REPROVISION_BOOTSTRAP_SCRIPT_ID is not set")
-    console.print(f"[bold]trigger_bootstrap[/]: SimpleMDM script {s.bootstrap_script_id}")
-    job_id = simplemdm.trigger_script(s.bootstrap_script_id, ctx.simplemdm_device_id)
-    return job_id
-
-
 def step_wait_for_sentinel(ctx: HostContext) -> None:
     s = get_settings()
     console.print(f"[bold]wait_for_sentinel[/]: polling {ctx.fqdn} for /var/log/m4-bootstrap-complete")
@@ -223,9 +214,11 @@ def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = 
         step_wait_for_reenroll(ctx)
     step_mint(ctx)  # mint SecureToken (must precede escrow_bst)
     step_escrow_bst(ctx)
-    # No vault delivery step: Path C — the bootstrap script fetches vault.yaml itself
-    # via mTLS using its SCEP-issued cert. (Was a 1Password op-read + SSH drop.)
-    step_trigger_bootstrap_script(ctx)
+    # No vault-delivery and no bootstrap-trigger steps:
+    #  - vault: the bootstrap fetches vault.yaml itself over mTLS (SCEP) — Path C.
+    #  - bootstrap: it's delivered as a signed PKG (managed install) that lands during DEP
+    #    convergence once admin logs in (the mint), so nothing needs to trigger it. We just
+    #    wait for the sentinel it writes.
     step_wait_for_sentinel(ctx)
     # Default: leave the host quarantined (matches current fleet reality; no un-quarantine
     # key wired). Only return it to service when explicitly asked — the eventual prod flow.

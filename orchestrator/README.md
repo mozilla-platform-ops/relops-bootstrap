@@ -24,10 +24,13 @@ reprovision run macmini-m4-81
    Idempotent — skips if already ENABLED.
 6. **escrow_bst** — `sudo profiles install -type bootstraptoken -user admin -password …`
    (non-interactive; requires the token from step 5)
-7. **trigger_bootstrap** — SimpleMDM script_jobs API to run the bootstrap script.
-   The bootstrap fetches `vault.yaml` itself over mTLS using its SCEP cert (Path C),
-   so there is **no vault-delivery step** (previously a 1Password `op read` + SSH drop).
-8. **wait_for_sentinel** — poll for `/var/log/m4-bootstrap-complete` over SSH
+7. **wait_for_sentinel** — poll for `/var/log/m4-bootstrap-complete` over SSH
+
+> **The bootstrap itself is not a workflow step.** It's a **signed PKG** (managed install)
+> assigned to the group that lands during DEP convergence — once admin logs in (the mint) the
+> managed pkgs start installing — and runs on its own. It fetches `vault.yaml` over mTLS using
+> its SCEP cert (Path C), so there's no vault-delivery step either. (Previously the bootstrap
+> was a triggered SimpleMDM *script-job* + the vault came from a 1Password `op read` — both gone.)
 
 The host **stays quarantined** through the whole reprovision by default — `run` does
 **not** auto-unquarantine unless you pass `--unquarantine`. Returning a host to service
@@ -40,10 +43,42 @@ If any step fails, fix the issue and re-run the individual subcommand:
 ```bash
 reprovision mint macmini-m4-81            # re-run just the SecureToken mint
 reprovision escrow-bst macmini-m4-81      # re-run just the BST escrow
-reprovision trigger-bootstrap macmini-m4-81
 reprovision wait-sentinel macmini-m4-81
 reprovision unquarantine macmini-m4-81
 ```
+
+## Two flows: fresh vs reprovision
+
+Both share the same core — **mint → escrow BST → signed-PKG bootstrap → sentinel**. They
+differ only at the front. `reprovision run` is the *reprovision* driver; a fresh machine uses
+the individual steps (no EACS).
+
+### Reprovision an existing host → back to prod  *(what `run` does; proven on m4-80/m4-81)*
+
+Preconditions: host already in the SimpleMDM group (SCEP / CLT / `relops_key_admin` / bootstrap
+PKG / DEP fixed-pw), **BST escrowed** (`sudo profiles status -type bootstraptoken` → `YES`),
+quarantined.
+
+```bash
+reprovision run macmini-m4-XX
+# = quarantine → drain → wipe (EACS) → wait_for_reenroll → mint → escrow_bst → wait_for_sentinel
+```
+
+Stays quarantined. If TC creds are unavailable, run the steps from `wipe` onward — the box is
+already quarantined, so `quarantine`/`drain` are skippable.
+
+### Provision a fresh host → prod
+
+No EACS (factory-clean). Standard DEP front-end, then the same core:
+
+1. **Assign** the machine (by serial) to DEP/ADE **and** the SimpleMDM group.
+2. **Power on** → DEP enrolls (Setup Assistant skipped) → profiles/pkgs begin.
+3. `reprovision mint macmini-m4-XX` — mints the *first* SecureToken + triggers pkg delivery.
+4. `reprovision escrow-bst macmini-m4-XX` — establishes BST custody (so it's EACS-able later).
+5. The signed **bootstrap PKG** runs → SCEP vault → puppet → sentinel;
+   confirm with `reprovision wait-sentinel macmini-m4-XX`.
+6. Quarantine during bring-up; **un-quarantine into service** when validated (needs a
+   `queue:quarantine`-scoped credential).
 
 ## Prerequisites
 
@@ -51,7 +86,8 @@ The target host must:
 
 - Be in a SimpleMDM assignment group that carries the **Dev - SCEP** profile (vault mTLS
   cert), **Command Line Tools**, the **relops_key_admin** pkg (installs the operator ssh key),
-  the bootstrap script, and a DEP account-setup that creates `admin` with a **fixed** password.
+  the **bootstrap PKG** (signed managed install), and a DEP account-setup that creates `admin`
+  with a **fixed** password.
 - Have a **Bootstrap Token escrowed** (`sudo profiles status -type bootstraptoken` →
   `escrowed to server: YES`). EACS requires it; `step_wipe` aborts without it rather than risk
   a full obliterate. A normally-provisioned host already has one; a host that never minted a
@@ -73,15 +109,14 @@ All settings come from environment variables prefixed `REPROVISION_`. Drop a
 
 | Var | Required | Purpose |
 |---|---|---|
-| `REPROVISION_SIMPLEMDM_API_KEY` | yes | SimpleMDM API key: device wipe + script_jobs |
-| `REPROVISION_BOOTSTRAP_SCRIPT_ID` | yes | Numeric SimpleMDM script id for the bootstrap script |
+| `REPROVISION_SIMPLEMDM_API_KEY` | yes | SimpleMDM API key: device wipe + status |
 | `REPROVISION_TC_CLIENT_ID` | quarantine steps only | TC client with `queue:quarantine-worker:*` scope |
 | `REPROVISION_TC_ACCESS_TOKEN` | quarantine steps only | TC client access token |
 | `REPROVISION_SSH_ADMIN_USER` | no | Default: `admin` |
 | `REPROVISION_SSH_ADMIN_PASSWORD` | yes (prod) | The DEP account-setup admin password, used for the mint login. Set to your strong DEP password (from a secret); defaults to `admin` only for lab use. |
 
 TC credentials are only needed for the `quarantine` / `drain` / `unquarantine`
-steps. The core `wipe → reenroll → mint → escrow → bootstrap` sequence
+steps. The core `wipe → reenroll → mint → escrow → wait-sentinel` sequence
 runs without them.
 
 ## Secret delivery (Path C)

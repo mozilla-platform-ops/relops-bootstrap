@@ -33,11 +33,8 @@ class Settings(BaseSettings):
     bootstrap_poll_seconds: int = Field(default=30)
     bootstrap_max_wait_seconds: int = Field(default=3600)
 
-    # Secret bootstrap script ID in SimpleMDM
-    bootstrap_script_id: int = Field(
-        default=0,
-        description="SimpleMDM script ID to run on the device post-DEP. Find via the SimpleMDM API or web UI.",
-    )
+    # (The bootstrap is delivered as a signed PKG / managed install, not a triggered
+    # script-job, so there's no bootstrap_script_id anymore.)
 
     # Hostname -> puppet role mapping
     # Loaded from a per-fleet JSON/YAML file outside this code so it can be edited
