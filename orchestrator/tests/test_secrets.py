@@ -53,6 +53,23 @@ def test_gcloud_secret_invokes_gcloud_and_strips_newline():
         assert "--secret" in argv and "sid" in argv and "proj" in argv
 
 
+def test_op_read_not_signed_in_gives_friendly_error():
+    import subprocess
+
+    err = subprocess.CalledProcessError(1, ["op", "read"], stderr="[ERROR] you are not currently signed in")
+    with patch("orchestrator.secrets.subprocess.run", side_effect=err):
+        with pytest.raises(secrets.SecretResolutionError) as ei:
+            secrets._op_read("op://V/I/f")
+    assert "op signin" in str(ei.value)  # tells the operator the one-command fix
+
+
+def test_op_read_not_installed_gives_friendly_error():
+    with patch("orchestrator.secrets.subprocess.run", side_effect=FileNotFoundError):
+        with pytest.raises(secrets.SecretResolutionError) as ei:
+            secrets._op_read("op://V/I/f")
+    assert "install" in str(ei.value).lower()
+
+
 def test_ssh_admin_password_raises_when_unresolved():
     secrets.ssh_admin_password.cache_clear()
     with patch("orchestrator.secrets._resolve", return_value=""):

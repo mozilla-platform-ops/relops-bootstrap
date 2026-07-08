@@ -10,7 +10,6 @@ once they've fixed whatever was broken.
 from __future__ import annotations
 
 import shlex
-import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -18,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from . import ui
 from .clients import simplemdm, ssh, taskcluster
 from .config import get_settings
+from .errors import ReprovisionError
 from .role_map import role_for_hostname
 from .secrets import ssh_admin_password
 
@@ -100,7 +100,7 @@ def step_drain(ctx: HostContext) -> None:
 
 def step_wipe(ctx: HostContext) -> None:
     if not ctx.simplemdm_device_id:
-        raise RuntimeError(f"{ctx.hostname} not found in SimpleMDM")
+        raise ReprovisionError(f"{ctx.hostname} not found in SimpleMDM")
     # A prior EACS may have rotated this host's SSH key; clear any stale entry from the tool's
     # known_hosts so the verify connection accept-new's the current key instead of failing.
     ui.step("WIPE · EACS", "Erase All Content & Settings — DoNotObliterate (fails safe, never obliterates)")
@@ -114,13 +114,13 @@ def step_wipe(ctx: HostContext) -> None:
     # ssh failure (VPN down, first-connection host key, missing operator key) masquerades as
     # a missing Bootstrap Token and sends the operator down the wrong path.
     if bst.returncode != 0:
-        raise RuntimeError(
+        raise ReprovisionError(
             f"{ctx.fqdn}: couldn't verify the Bootstrap Token over ssh (exit {bst.returncode}) — "
             f"NOT wiping. Check VPN + SSH access to the host first.\n"
             f"{bst.stderr.decode(errors='replace').strip()}"
         )
     if b"escrowed to server: YES" not in bst.stdout:
-        raise RuntimeError(
+        raise ReprovisionError(
             f"{ctx.fqdn}: Bootstrap Token not escrowed — EACS can't run, so a wipe would fail or "
             f"full-obliterate (headless reinstall). Mint + escrow first (reprovision mint, escrow-bst), "
             f"or wipe manually via the SimpleMDM UI if a full obliterate is truly intended."
@@ -209,7 +209,7 @@ def step_mint(ctx: HostContext) -> None:
             tick(f"not yet — retry {i + 1}/6")
             time.sleep(5)
     if not enabled:
-        raise RuntimeError(f"{ctx.fqdn}: admin SecureToken not ENABLED after mint")
+        raise ReprovisionError(f"{ctx.fqdn}: admin SecureToken not ENABLED after mint")
     ui.ok("admin SecureToken ENABLED")
 
 
@@ -231,15 +231,12 @@ def step_escrow_bst(ctx: HostContext) -> None:
     )
     try:
         ssh.run(ctx.fqdn, install_cmd)
-    except subprocess.CalledProcessError as e:
-        # install_cmd embeds the admin password — never let it surface in a traceback.
-        raise RuntimeError(
-            f"BST escrow failed on {ctx.fqdn} (ssh exit {e.returncode}). "
-            "Check VPN/reachability and that admin holds a SecureToken (run `mint` first)."
-        ) from None
+    except ReprovisionError as e:
+        # ssh.run already scrubs the command (which embeds the password); add a mint hint.
+        raise ReprovisionError(f"{e}\n    (has admin minted a SecureToken? run `reprovision mint` first)") from None
     cp = ssh.run(ctx.fqdn, "sudo profiles status -type bootstraptoken")
     if b"escrowed to server: YES" not in cp.stdout:
-        raise RuntimeError(f"BST escrow check failed:\n{cp.stdout.decode()}")
+        raise ReprovisionError(f"BST escrow check failed:\n{cp.stdout.decode()}")
     ui.ok("Bootstrap Token escrowed to server")
 
 
