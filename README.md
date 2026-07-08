@@ -277,7 +277,7 @@ escrow-bst` (or the standalone `scripts/mint-securetoken.sh`).
 | `https://forge.relops.mozilla.com` | vault-broker (path `/secret/{role}`) AND step-ca (`/scep/*`), HTTPS LB-fronted with Google-managed server cert + mTLS for `/secret/*` |
 | Cloud Run direct URL | broker, for debug-only (no LB-forwarded mTLS headers; broker returns 401) |
 
-Path C status (m4 role): proven end-to-end. The validating call from a
+Vault fetch status (m4 role): proven end-to-end. The validating call from a
 real EACS'd m4 returns the full role-scoped vault.yaml with the broker's
 strict checks all green.
 
