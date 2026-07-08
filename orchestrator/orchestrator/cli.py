@@ -68,10 +68,6 @@ def escrow_bst(hostname: str) -> None:
     workflow.step_escrow_bst(workflow.resolve(hostname))
 
 
-@app.command()
-def trigger_bootstrap(hostname: str) -> None:
-    workflow.step_trigger_bootstrap_script(workflow.resolve(hostname))
-
 
 @app.command()
 def wait_sentinel(hostname: str) -> None:
