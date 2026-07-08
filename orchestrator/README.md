@@ -47,6 +47,39 @@ reprovision wait-sentinel macmini-m4-81
 reprovision unquarantine macmini-m4-81
 ```
 
+## Two flows: fresh vs reprovision
+
+Both share the same core — **mint → escrow BST → signed-PKG bootstrap → sentinel**. They
+differ only at the front. `reprovision run` is the *reprovision* driver; a fresh machine uses
+the individual steps (no EACS).
+
+### Reprovision an existing host → back to prod  *(what `run` does; proven on m4-80/m4-81)*
+
+Preconditions: host already in the SimpleMDM group (SCEP / CLT / `relops_key_admin` / bootstrap
+PKG / DEP fixed-pw), **BST escrowed** (`sudo profiles status -type bootstraptoken` → `YES`),
+quarantined.
+
+```bash
+reprovision run macmini-m4-XX
+# = quarantine → drain → wipe (EACS) → wait_for_reenroll → mint → escrow_bst → wait_for_sentinel
+```
+
+Stays quarantined. If TC creds are unavailable, run the steps from `wipe` onward — the box is
+already quarantined, so `quarantine`/`drain` are skippable.
+
+### Provision a fresh host → prod
+
+No EACS (factory-clean). Standard DEP front-end, then the same core:
+
+1. **Assign** the machine (by serial) to DEP/ADE **and** the SimpleMDM group.
+2. **Power on** → DEP enrolls (Setup Assistant skipped) → profiles/pkgs begin.
+3. `reprovision mint macmini-m4-XX` — mints the *first* SecureToken + triggers pkg delivery.
+4. `reprovision escrow-bst macmini-m4-XX` — establishes BST custody (so it's EACS-able later).
+5. The signed **bootstrap PKG** runs → SCEP vault → puppet → sentinel;
+   confirm with `reprovision wait-sentinel macmini-m4-XX`.
+6. Quarantine during bring-up; **un-quarantine into service** when validated (needs a
+   `queue:quarantine`-scoped credential).
+
 ## Prerequisites
 
 The target host must:
