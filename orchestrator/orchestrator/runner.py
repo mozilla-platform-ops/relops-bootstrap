@@ -84,12 +84,39 @@ def _event(client: httpx.Client, cfg: Config, job_id: int, message: str) -> None
 
 
 def _complete(client: httpx.Client, cfg: Config, job_id: int, success: bool, detail: str) -> None:
-    client.post(
-        f"{cfg.api}/reprovision/runner/jobs/{job_id}/complete",
-        headers=cfg.headers,
-        json={"success": success, "detail": detail[:500]},
-        timeout=30,
-    )
+    # A dropped completion wedges the host: the job stays "open" in Hangar and no
+    # new reprovision can be enqueued for it. So — unlike _event — this retries
+    # with backoff and checks the response, rather than silently succeeding on a
+    # transient blip. Hangar also has a stale-job reaper as a backstop.
+    last: Exception | None = None
+    for attempt in range(5):
+        try:
+            r = client.post(
+                f"{cfg.api}/reprovision/runner/jobs/{job_id}/complete",
+                headers=cfg.headers,
+                json={"success": success, "detail": detail[:500]},
+                timeout=30,
+            )
+            r.raise_for_status()
+            return
+        except httpx.HTTPError as e:
+            last = e
+            time.sleep(min(2 ** attempt, 30))
+    print(f"WARNING: could not report completion of job {job_id} after retries: {last}")
+
+
+def _reprovision_cmd(host: str) -> list[str]:
+    """The `reprovision` CLI to run, resolved next to *this* runner's interpreter.
+
+    The runner and the CLI are installed in the same venv, so the CLI lives beside
+    sys.executable. Resolving it explicitly means it works whether or not the venv
+    is "activated" on PATH — e.g. when launched by a LaunchDaemon or over
+    `ssh host exec .venv/bin/reprovision-runner`, where PATH has no venv/bin. Falls
+    back to a bare PATH lookup for editable/dev installs.
+    """
+    sibling = os.path.join(os.path.dirname(sys.executable), "reprovision")
+    exe = sibling if os.path.exists(sibling) else "reprovision"
+    return [exe, "run", host]
 
 
 def _run_job(client: httpx.Client, cfg: Config, job: dict) -> None:
@@ -97,7 +124,7 @@ def _run_job(client: httpx.Client, cfg: Config, job: dict) -> None:
     _event(client, cfg, job_id, f"runner {cfg.runner_id} starting: reprovision run {host}")
     try:
         proc = subprocess.Popen(
-            ["reprovision", "run", host],
+            _reprovision_cmd(host),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
