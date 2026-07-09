@@ -64,6 +64,23 @@ SCEP-issued client cert, so there's no vault-delivery step and no `op read` + SS
 
 ---
 
+## Runner — driven from Hangar (one-click, no terminal)
+
+`reprovision` also runs unattended behind the [hangar](https://github.com/mozilla-platform-ops/hangar)
+dashboard's one-click **Reprovision** button. Hangar (Cloud Run) can't reach MDC1, so it only
+*queues* a job; a small **on-network runner** (`reprovision-runner`, this package) polls Hangar
+over **mTLS — outbound only, no inbound to the datacenter** — claims the job, runs `reprovision run`,
+and streams every stdout line back as a job event that renders live in the Hangar cockpit.
+
+The runner is **Puppet-managed** (ronin_puppet role `gecko_t_osx_1500_m4_reprovision_runner`): a
+LaunchDaemon runs it, its creds come from the host's `vault.yaml`, and its mTLS cert is step-ca-issued.
+It's the only component that holds SSH/admin creds — Hangar holds none. Proven in prod: a Hangar
+click reprovisioned `macmini-m4-80` via the managed runner on `macmini-m4-81`.
+
+```bash
+reprovision-runner            # HANGAR_API_URL + RUNNER_CLIENT_CERT/KEY (mTLS) or REPROVISION_RUNNER_TOKEN
+```
+
 ## Two golden paths
 
 Both share the same core — **mint → escrow BST → signed-PKG bootstrap → sentinel**. They
