@@ -92,12 +92,26 @@ def _complete(client: httpx.Client, cfg: Config, job_id: int, success: bool, det
     )
 
 
+def _reprovision_cmd(host: str) -> list[str]:
+    """The `reprovision` CLI to run, resolved next to *this* runner's interpreter.
+
+    The runner and the CLI are installed in the same venv, so the CLI lives beside
+    sys.executable. Resolving it explicitly means it works whether or not the venv
+    is "activated" on PATH — e.g. when launched by a LaunchDaemon or over
+    `ssh host exec .venv/bin/reprovision-runner`, where PATH has no venv/bin. Falls
+    back to a bare PATH lookup for editable/dev installs.
+    """
+    sibling = os.path.join(os.path.dirname(sys.executable), "reprovision")
+    exe = sibling if os.path.exists(sibling) else "reprovision"
+    return [exe, "run", host]
+
+
 def _run_job(client: httpx.Client, cfg: Config, job: dict) -> None:
     job_id, host = job["id"], job["short"]
     _event(client, cfg, job_id, f"runner {cfg.runner_id} starting: reprovision run {host}")
     try:
         proc = subprocess.Popen(
-            ["reprovision", "run", host],
+            _reprovision_cmd(host),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

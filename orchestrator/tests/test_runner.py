@@ -45,6 +45,23 @@ def test_complete_posts_outcome():
     assert client.post.call_args.kwargs["json"]["success"] is True
 
 
+def test_reprovision_cmd_prefers_sibling_of_interpreter(tmp_path):
+    # A `reprovision` next to sys.executable is used even when PATH lacks the venv.
+    import sys
+
+    sibling = tmp_path / "reprovision"
+    sibling.write_text("#!/bin/sh\n")
+    with patch.object(sys, "executable", str(tmp_path / "python")):
+        assert runner._reprovision_cmd("macmini-m4-80") == [str(sibling), "run", "macmini-m4-80"]
+
+
+def test_reprovision_cmd_falls_back_to_path_lookup():
+    import sys
+
+    with patch.object(sys, "executable", "/nonexistent/dir/python"):
+        assert runner._reprovision_cmd("macmini-m4-80") == ["reprovision", "run", "macmini-m4-80"]
+
+
 def test_run_job_reports_failure_when_cli_missing():
     # subprocess is mocked so the real `reprovision` CLI is never invoked.
     client = MagicMock()
