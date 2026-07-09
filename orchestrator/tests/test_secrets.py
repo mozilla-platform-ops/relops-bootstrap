@@ -63,6 +63,21 @@ def test_op_read_not_signed_in_gives_friendly_error():
     assert "op signin" in str(ei.value)  # tells the operator the one-command fix
 
 
+def test_op_read_forbidden_points_at_vault_access_not_signin():
+    import subprocess
+
+    err = subprocess.CalledProcessError(
+        1, ["op", "read"],
+        stderr="[ERROR] ... (403) (Forbidden), You aren't authorized to access this resource.",
+    )
+    with patch("orchestrator.secrets.subprocess.run", side_effect=err):
+        with pytest.raises(secrets.SecretResolutionError) as ei:
+            secrets._op_read("op://RelOps/SimpleMDM API admin/password")
+    msg = str(ei.value)
+    assert "authorized" in msg.lower() and "RelOps" in msg  # names the vault to get access to
+    assert "op signin" not in msg  # don't misdirect an authorization problem to re-signin
+
+
 def test_op_read_not_installed_gives_friendly_error():
     with patch("orchestrator.secrets.subprocess.run", side_effect=FileNotFoundError):
         with pytest.raises(secrets.SecretResolutionError) as ei:

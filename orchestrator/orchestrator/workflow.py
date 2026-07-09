@@ -19,7 +19,7 @@ from .clients import simplemdm, ssh, taskcluster
 from .config import get_settings
 from .errors import ReprovisionError
 from .role_map import role_for_hostname
-from .secrets import ssh_admin_password
+from .secrets import simplemdm_api_key, ssh_admin_key, ssh_admin_password, tc_credentials
 
 
 @dataclass
@@ -57,6 +57,40 @@ def resolve(hostname: str) -> HostContext:
         worker_pool_id=pool,
         simplemdm_device_id=device_id,
     )
+
+
+def check() -> None:
+    """Read-only preflight: confirm every credential resolves from the vault. No host, no API
+    writes, no changes — safe to run anytime (onboarding a coworker, before a demo). Reports one
+    line per credential and exits non-zero if any required one fails."""
+    ui.step("CHECK", "resolving credentials from the RelOps vault (read-only)")
+    problems = 0
+
+    def _try(label: str, getter, *, required: bool = True) -> None:
+        nonlocal problems
+        try:
+            val = getter()
+        except ReprovisionError as e:
+            ui.err(f"{label}: {e}")
+            problems += 1
+            return
+        if val:
+            ui.ok(f"{label} — resolves")
+        elif required:
+            ui.err(f"{label}: not configured (empty)")
+            problems += 1
+        else:
+            ui.warn(f"{label}: not configured (optional — only needed for quarantine/drain)")
+
+    _try("admin password", ssh_admin_password)
+    _try("admin SSH key", ssh_admin_key)
+    _try("SimpleMDM API key", simplemdm_api_key)
+    _try("Taskcluster clientId", lambda: tc_credentials()[0], required=False)
+    _try("Taskcluster token", lambda: tc_credentials()[1], required=False)
+
+    if problems:
+        raise ReprovisionError(f"{problems} credential(s) didn't resolve — see the ✗ line(s) above")
+    ui.ok("all credentials resolve — you're good to go")
 
 
 # --- workflow steps ---
