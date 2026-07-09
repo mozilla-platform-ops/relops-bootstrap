@@ -10,6 +10,8 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.4",
     "taskcluster>=101",
+    "asyncvnc>=1.1",  # hangar-screen-agent: VNC frame grab with Apple auth
+    "pillow>=10",     # encode grabbed frames to JPEG
 ]
 
 [project.optional-dependencies]
@@ -22,6 +24,7 @@ dev = [
 [project.scripts]
 reprovision = "orchestrator.cli:app"
 reprovision-runner = "orchestrator.runner:main"
+hangar-screen-agent = "orchestrator.screen_agent:main"
 
 [build-system]
 requires = ["setuptools>=68"]
