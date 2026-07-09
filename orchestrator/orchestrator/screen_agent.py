@@ -62,14 +62,16 @@ async def _grab(fqdn: str, password: str) -> bytes:
 
 
 def _pending(client: httpx.Client, cfg: Config) -> list[str]:
-    r = client.get(f"{cfg.api}/screen/requests", headers=cfg.headers, timeout=30)
+    r = client.get(f"{cfg.api}/screen/agent/requests", headers=cfg.headers, timeout=30)
     r.raise_for_status()
     return r.json().get("hosts", [])
 
 
 def _push(client: httpx.Client, cfg: Config, fqdn: str, jpeg: bytes) -> None:
+    # /screen/agent/* is routed to the mTLS backend; host is a query param so the path stays fixed.
     r = client.post(
-        f"{cfg.api}/screen/{fqdn}/frame",
+        f"{cfg.api}/screen/agent/frame",
+        params={"host": fqdn},
         headers={**cfg.headers, "Content-Type": "image/jpeg"},
         content=jpeg,
         timeout=30,

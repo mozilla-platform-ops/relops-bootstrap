@@ -22,13 +22,14 @@ def test_pending_returns_watched_hosts():
     client = MagicMock()
     client.get.return_value.json.return_value = {"hosts": ["macmini-m4-80.test"]}
     assert screen_agent._pending(client, _Cfg()) == ["macmini-m4-80.test"]
-    assert client.get.call_args[0][0].endswith("/screen/requests")
+    assert client.get.call_args[0][0].endswith("/screen/agent/requests")
 
 
-def test_push_posts_jpeg_body_with_content_type():
+def test_push_posts_jpeg_body_with_host_param():
     client = MagicMock()
     screen_agent._push(client, _Cfg(), "macmini-m4-80.test", b"\xff\xd8jpeg")
-    assert client.post.call_args[0][0].endswith("/screen/macmini-m4-80.test/frame")
+    assert client.post.call_args[0][0].endswith("/screen/agent/frame")
+    assert client.post.call_args.kwargs["params"] == {"host": "macmini-m4-80.test"}
     assert client.post.call_args.kwargs["headers"]["Content-Type"] == "image/jpeg"
     assert client.post.call_args.kwargs["content"] == b"\xff\xd8jpeg"
 
