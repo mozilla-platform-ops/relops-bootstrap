@@ -293,8 +293,12 @@ def step_escrow_bst(ctx: HostContext) -> None:
 
 def step_wait_for_sentinel(ctx: HostContext) -> None:
     s = get_settings()
-    ui.step("BOOTSTRAP", "signed PKG fetches vault over mTLS → puppet → registers in Taskcluster")
-    ui.wire(f"ssh admin@{ctx.hostname} test -f /var/log/m4-bootstrap-complete  (poll)")
+    ui.step("BOOTSTRAP", "the freshly-enrolled host provisions itself — zero operator SSH from here")
+    ui.wire("signed bootstrap PKG (managed install) lands via SimpleMDM during DEP convergence")
+    ui.wire("→ host fetches its vault.yaml over mTLS from the forge LB (step-ca SCEP client cert)")
+    ui.wire(f"→ puppet apply: role {ctx.role} — generic-worker, users, TCC perms, launch daemons")
+    ui.wire("→ generic-worker self-registers with Taskcluster (Hawk) and starts claiming work")
+    ui.wire(f"ssh admin@{ctx.hostname} test -f /var/log/m4-bootstrap-complete  (poll for the sentinel it writes)")
     deadline = time.monotonic() + s.bootstrap_max_wait_seconds
     found = False
     with ui.waiting("waiting for the bootstrap sentinel") as tick:
@@ -332,6 +336,16 @@ def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = 
     ctx = resolve(hostname)
     started = time.monotonic()
     ui.banner(ctx.hostname, ctx.role, ctx.worker_pool_id)
+
+    # Show the whole pipeline up front so it never reads as a single opaque action.
+    phases = ["QUARANTINE", "DRAIN"]
+    if not skip_wipe:
+        phases += ["WIPE", "RE-ENROLL"]
+    phases += ["MINT", "ESCROW BST", "BOOTSTRAP"]
+    if unquarantine:
+        phases += ["UNQUARANTINE"]
+    ui.flow(phases)
+
     step_quarantine(ctx)
     step_drain(ctx)
     if not skip_wipe:
