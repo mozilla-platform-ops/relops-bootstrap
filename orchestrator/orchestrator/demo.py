@@ -27,6 +27,7 @@ def run_demo(host: str = HOST) -> None:
     from .workflow import _reenroll_phase  # reuse the real phase labels
 
     ui.banner(host, ROLE, POOL)
+    ui.flow(["QUARANTINE", "DRAIN", "WIPE", "RE-ENROLL", "MINT", "ESCROW BST", "BOOTSTRAP"])
 
     ui.step("QUARANTINE", "tell Taskcluster to stop scheduling tasks on this worker")
     ui.wire(f"PUT queue/v1 quarantineWorker {POOL}/mdc1/{host}")
@@ -73,8 +74,12 @@ def run_demo(host: str = HOST) -> None:
     time.sleep(1.1)
     ui.ok("Bootstrap Token escrowed to server")
 
-    ui.step("BOOTSTRAP", "signed PKG fetches vault over mTLS → puppet → registers in Taskcluster")
-    ui.wire(f"ssh admin@{host} test -f /var/log/m4-bootstrap-complete  (poll)")
+    ui.step("BOOTSTRAP", "the freshly-enrolled host provisions itself — zero operator SSH from here")
+    ui.wire("signed bootstrap PKG (managed install) lands via SimpleMDM during DEP convergence")
+    ui.wire("→ host fetches its vault.yaml over mTLS from the forge LB (step-ca SCEP client cert)")
+    ui.wire(f"→ puppet apply: role {ROLE} — generic-worker, users, TCC perms, launch daemons")
+    ui.wire("→ generic-worker self-registers with Taskcluster (Hawk) and starts claiming work")
+    ui.wire(f"ssh admin@{host} test -f /var/log/m4-bootstrap-complete  (poll for the sentinel it writes)")
     with ui.waiting("waiting for the bootstrap sentinel") as tick:
         for msg in (
             "SCEP cert in keychain → curl --cert vault-broker (mTLS)",

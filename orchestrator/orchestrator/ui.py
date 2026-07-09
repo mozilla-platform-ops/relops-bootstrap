@@ -60,6 +60,29 @@ _APPLE = [
 
 _step_color = itertools.cycle(PALETTE)
 _current_color = PALETTE[0]
+_step_n = 0
+_total_steps = 0
+
+
+def flow(phases: list[str]) -> None:
+    """Print the whole pipeline up front — so an audience sees every phase *before* it runs,
+    not one opaque 'reprovisioning…' — and arm [n/N] numbering on step(). Cosmetic only.
+
+    Also resets the step counter + color cycle, so a long-lived runner that drives many
+    reprovisions has each one start fresh at phase 1 / the green stripe.
+    """
+    global _step_n, _total_steps, _step_color
+    _step_n = 0
+    _total_steps = len(phases)
+    _step_color = itertools.cycle(PALETTE)
+    rendered = " [dim]→[/] ".join(
+        f"[{PALETTE[i % len(PALETTE)]}]{p}[/]" for i, p in enumerate(phases)
+    )
+    console.print(f"  [dim]orchestration ·[/] {rendered}")
+    console.print(
+        f"  [dim]{_total_steps} phases · Taskcluster · SimpleMDM (EACS) · SSH/PAM · mTLS vault · Puppet[/]"
+    )
+    console.print()
 
 
 def banner(hostname: str, role: str, pool: str) -> None:
@@ -73,10 +96,15 @@ def banner(hostname: str, role: str, pool: str) -> None:
 
 
 def step(name: str, desc: str = "") -> None:
-    """A rainbow section header; each call advances to the next Apple stripe color."""
-    global _current_color
+    """A rainbow section header; each call advances to the next Apple stripe color.
+
+    When flow() armed a total, the header is numbered `▸ [n/N] NAME` so every line reads
+    as one phase of a known-length pipeline — not a standalone action."""
+    global _current_color, _step_n
     _current_color = next(_step_color)
-    console.print(f"[bold {_current_color}]▸ {name}[/]")
+    _step_n += 1
+    label = f"[{_step_n}/{_total_steps}] {name}" if _total_steps else name
+    console.print(f"[bold {_current_color}]▸ {label}[/]")
     if desc:
         console.print(f"  [dim]{desc}[/]")
 
@@ -150,4 +178,8 @@ def summary(hostname: str, elapsed_seconds: float, *, quarantined: bool) -> None
     state = "still quarantined" if quarantined else "returned to service"
     console.print()
     console.print(f"  {stripes}  [bold green]{hostname} reprovisioned[/] [dim]in {_mmss(elapsed_seconds)} · {state}[/]")
+    console.print(
+        "  [dim]end-to-end: quarantine → drain → EACS wipe → DEP re-enroll → SecureToken →"
+        " Bootstrap Token → self-provision (mTLS vault · puppet · Taskcluster)[/]"
+    )
     console.print()
