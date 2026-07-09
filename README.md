@@ -27,6 +27,15 @@ human step per host is the **SecureToken mint** — DEP skips Setup Assistant, s
 no token until a PAM (password) login; everything else is hands-off. (The bootstrap is now a
 signed PKG that lands during DEP convergence — no GCP/script-job trigger.)
 
+**Now one-click from Hangar (2026-07).** The whole reprovision is a button in the
+[hangar](https://github.com/mozilla-platform-ops/hangar) fleet dashboard. Hangar (Cloud Run)
+can't reach MDC1, so it only *queues* a job; a **Puppet-managed on-network runner** claims it
+over **mTLS** (outbound only), runs `reprovision`, and streams every phase back into a live
+cockpit. The runner is fully declarative — ronin_puppet role `gecko_t_osx_1500_m4_reprovision_runner`
+(Python + this repo's `orchestrator` under a LaunchDaemon, creds from the host's `vault.yaml`).
+**Proven end-to-end in prod:** a Hangar click reprovisioned `macmini-m4-80` via the managed
+runner on `macmini-m4-81`. The operator no longer even needs a terminal.
+
 ---
 
 ## 🏗️ Architecture
@@ -296,9 +305,15 @@ strict checks all green.
   Mozilla NAT IPs need access (other datacenters, VPN egress, etc.).
 - ✅ **Bootstrap via signed PKG** — DONE (2026-07): the bootstrap is a signed PKG
   (managed install) that lands at DEP convergence instead of a triggered script-job.
-- 🔑 **Streamline operator creds** — `reprovision` still needs SimpleMDM / TC / admin-pw
-  env vars pasted per session. Move to runtime fetch (Secret Manager / 1Password) and/or a
-  Hangar IAP-gated action. The TC `quarantine-worker` token also needs periodic re-issue.
+- ✅ **Hangar-driven, one-click reprovision** — DONE (2026-07): a button in the
+  [hangar](https://github.com/mozilla-platform-ops/hangar) dashboard queues a job that a
+  Puppet-managed on-network runner claims over mTLS and runs. `reprovision` runtime-fetches
+  its SimpleMDM / TC / admin creds (Secret Manager / 1Password / host `vault.yaml`) — no
+  per-session pasting.
+- 🔑 **Runner cert renewal** — the on-network runner uses a step-ca client cert; step-ca isn't
+  reachable from MDC1 yet, so it's refreshed manually. Expose step-ca to MDC1 (like the forge
+  LB) to enable `step ca renew --daemon` auto-rotation. TC `quarantine-worker` token still
+  needs periodic re-issue.
 
 ---
 
