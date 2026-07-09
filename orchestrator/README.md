@@ -174,25 +174,30 @@ the same SimpleMDM / Taskcluster / vault permissions can run this.
 **1. Be on the VPN.** Targets are `*.test.releng.mdc1.mozilla.com`, reachable only over the
 Mozilla VPN. (An `ssh` **exit 255** almost always means you're off-VPN.)
 
-**2. Install:**
+**2. Get the code.** From wherever you keep checkouts (this is the *only* `cd`):
 ```bash
-cd orchestrator
+git clone git@github.com:mozilla-platform-ops/relops-bootstrap.git
+cd relops-bootstrap/orchestrator
+```
+> Already have the repo? Instead of the two lines above, jump to it from anywhere inside your
+> checkout with `cd "$(git rev-parse --show-toplevel)/orchestrator"` (never double-`cd`s).
+
+**3. Install** — pip:
+```bash
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 pytest -q                       # sanity check — should be all green
 ```
-
-Prefer [`uv`](https://docs.astral.sh/uv/)? It's a drop-in — same `.venv`, same `reprovision`:
+…or [`uv`](https://docs.astral.sh/uv/) (drop-in — same `.venv`, same `reprovision`):
 ```bash
-cd orchestrator
 uv venv --python 3.11 && source .venv/bin/activate   # >=3.11 (3.12/3.13/3.14 also fine)
 uv pip install -e '.[dev]'
 uv run pytest -q
 ```
-Or skip the activate and let uv manage it: `uv run reprovision demo`, `uv run pytest -q`.
-(No `uv.lock` is committed, so uv resolves from `pyproject.toml` — pip users are unaffected.)
+(No `uv.lock` is committed, so uv resolves from `pyproject.toml` — pip users are unaffected.
+With uv you can also skip the activate: `uv run reprovision …`.)
 
-**3. Sign in to 1Password (one-time per shell session):**
+**4. Sign in to 1Password (one-time per shell session):**
 ```bash
 op signin
 ```
@@ -206,7 +211,7 @@ default — a different vault, or GCP Secret Manager as the backend, which then 
 > `eval $(op signin)`. Or enable **1Password app → Settings → Developer → Integrate with
 > 1Password CLI**.
 
-**4. Verify your access** before touching a host (read-only — confirms every credential resolves
+**5. Verify your access** before touching a host (read-only — confirms every credential resolves
 from the vault, makes no changes):
 ```bash
 reprovision check
