@@ -21,6 +21,7 @@ dev = [
 
 [project.scripts]
 reprovision = "orchestrator.cli:app"
+reprovision-runner = "orchestrator.runner:main"
 
 [build-system]
 requires = ["setuptools>=68"]
