@@ -84,12 +84,25 @@ def _event(client: httpx.Client, cfg: Config, job_id: int, message: str) -> None
 
 
 def _complete(client: httpx.Client, cfg: Config, job_id: int, success: bool, detail: str) -> None:
-    client.post(
-        f"{cfg.api}/reprovision/runner/jobs/{job_id}/complete",
-        headers=cfg.headers,
-        json={"success": success, "detail": detail[:500]},
-        timeout=30,
-    )
+    # A dropped completion wedges the host: the job stays "open" in Hangar and no
+    # new reprovision can be enqueued for it. So — unlike _event — this retries
+    # with backoff and checks the response, rather than silently succeeding on a
+    # transient blip. Hangar also has a stale-job reaper as a backstop.
+    last: Exception | None = None
+    for attempt in range(5):
+        try:
+            r = client.post(
+                f"{cfg.api}/reprovision/runner/jobs/{job_id}/complete",
+                headers=cfg.headers,
+                json={"success": success, "detail": detail[:500]},
+                timeout=30,
+            )
+            r.raise_for_status()
+            return
+        except httpx.HTTPError as e:
+            last = e
+            time.sleep(min(2 ** attempt, 30))
+    print(f"WARNING: could not report completion of job {job_id} after retries: {last}")
 
 
 def _reprovision_cmd(host: str) -> list[str]:

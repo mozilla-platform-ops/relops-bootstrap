@@ -62,6 +62,24 @@ def test_reprovision_cmd_falls_back_to_path_lookup():
         assert runner._reprovision_cmd("macmini-m4-80") == ["reprovision", "run", "macmini-m4-80"]
 
 
+def test_complete_retries_until_success():
+    client = MagicMock()
+    ok = MagicMock()
+    client.post.side_effect = [httpx.HTTPError("boom"), ok]
+    with patch("orchestrator.runner.time.sleep"):
+        runner._complete(client, _Cfg(), 5, True, "done")
+    assert client.post.call_count == 2
+    ok.raise_for_status.assert_called_once()
+
+
+def test_complete_gives_up_without_raising_after_retries():
+    client = MagicMock()
+    client.post.side_effect = httpx.HTTPError("boom")
+    with patch("orchestrator.runner.time.sleep"):
+        runner._complete(client, _Cfg(), 5, False, "x")  # must not raise — best-effort backstop is Hangar's reaper
+    assert client.post.call_count == 5
+
+
 def test_run_job_reports_failure_when_cli_missing():
     # subprocess is mocked so the real `reprovision` CLI is never invoked.
     client = MagicMock()
