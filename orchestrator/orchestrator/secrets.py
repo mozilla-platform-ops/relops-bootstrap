@@ -35,6 +35,12 @@ def _last_line(text: str) -> str:
     return lines[-1] if lines else ""
 
 
+def _vault_of(ref: str) -> str:
+    """Vault segment of an op://<vault>/<item>/<field> ref, for a helpful error."""
+    parts = ref.split("/")
+    return parts[2] if ref.startswith("op://") and len(parts) > 2 else "the"
+
+
 def _op_read(ref: str) -> str:
     try:
         cp = subprocess.run(["op", "read", ref], capture_output=True, text=True, timeout=30, check=True)
@@ -43,9 +49,19 @@ def _op_read(ref: str) -> str:
             f"1Password CLI (`op`) isn't installed — `brew install 1password-cli` — needed to read {ref}."
         ) from None
     except subprocess.CalledProcessError as e:
+        detail = _last_line(e.stderr)
+        low = detail.lower()
+        # A 403 means signed in but not authorized — re-signin won't help; you need vault access.
+        if "403" in low or "forbidden" in low or "authorized" in low:
+            hint = (
+                f"you're signed in, but your 1Password account isn't authorized for this item — "
+                f"ask a RelOps admin to add you to the '{_vault_of(ref)}' vault"
+            )
+        else:  # 401 / "not currently signed in" / etc.
+            hint = "run  eval $(op signin)  and retry"
         raise SecretResolutionError(
-            f"couldn't read {ref} from 1Password — run  eval $(op signin)  and retry."
-            + (f"\n    op: {_last_line(e.stderr)}" if _last_line(e.stderr) else "")
+            f"couldn't read {ref} from 1Password — {hint}."
+            + (f"\n    op: {detail}" if detail else "")
         ) from None
     return cp.stdout.rstrip("\r\n")
 
@@ -64,9 +80,15 @@ def _gcloud_secret(secret_id: str, project: str) -> str:
             f"gcloud isn't installed — needed to read Secret Manager id '{secret_id}'."
         ) from None
     except subprocess.CalledProcessError as e:
+        detail = _last_line(e.stderr)
+        low = detail.lower()
+        if "permission" in low or "403" in low or "forbidden" in low or "denied" in low:
+            hint = f"your account lacks access to secret '{secret_id}' in project '{project}' — ask for IAM access"
+        else:
+            hint = "run  gcloud auth login  and retry"
         raise SecretResolutionError(
-            f"couldn't read Secret Manager id '{secret_id}' — run  gcloud auth login  and retry."
-            + (f"\n    gcloud: {_last_line(e.stderr)}" if _last_line(e.stderr) else "")
+            f"couldn't read Secret Manager id '{secret_id}' — {hint}."
+            + (f"\n    gcloud: {detail}" if detail else "")
         ) from None
     return cp.stdout.rstrip("\r\n")
 

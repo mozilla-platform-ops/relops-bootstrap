@@ -80,6 +80,12 @@ def wait_sentinel(hostname: str) -> None:
 
 
 @_app.command()
+def check() -> None:
+    """Read-only preflight — confirm every credential resolves from the vault (no changes)."""
+    workflow.check()
+
+
+@_app.command()
 def demo(
     host: str = typer.Option("macmini-m4-88", "--host", help="Hostname to show on screen during the demo."),
 ) -> None:

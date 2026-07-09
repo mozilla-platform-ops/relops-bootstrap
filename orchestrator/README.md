@@ -206,10 +206,13 @@ default — a different vault, or GCP Secret Manager as the backend, which then 
 > `eval $(op signin)`. Or enable **1Password app → Settings → Developer → Integrate with
 > 1Password CLI**.
 
-**4. Verify all secrets resolve** before touching a host:
+**4. Verify your access** before touching a host (read-only — confirms every credential resolves
+from the vault, makes no changes):
 ```bash
-python -c "from orchestrator import secrets; print('admin pw:', len(secrets.ssh_admin_password()), 'chars')"
+reprovision check
 ```
+Each line shows `✓` or a plain fix-it message. A `403 / not authorized` means you're signed in but
+your 1Password account isn't in the **`RelOps`** vault yet — ask a RelOps admin to add you.
 
 ---
 
