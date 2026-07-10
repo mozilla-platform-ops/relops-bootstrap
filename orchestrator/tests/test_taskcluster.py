@@ -28,6 +28,7 @@ def _worker_record(recent_tasks: list[dict]) -> dict:
 
 def _task_status_running_on_this_worker() -> dict:
     return {
+        "state": "running",
         "runs": [
             {
                 "runId": 0,
@@ -35,12 +36,13 @@ def _task_status_running_on_this_worker() -> dict:
                 "workerId": WORKER_ID,
                 "workerGroup": WORKER_GROUP,
             }
-        ]
+        ],
     }
 
 
 def _task_status_completed() -> dict:
     return {
+        "state": "completed",
         "runs": [
             {
                 "runId": 0,
@@ -48,12 +50,13 @@ def _task_status_completed() -> dict:
                 "workerId": WORKER_ID,
                 "workerGroup": WORKER_GROUP,
             }
-        ]
+        ],
     }
 
 
 def _task_status_running_on_other_worker() -> dict:
     return {
+        "state": "running",
         "runs": [
             {
                 "runId": 0,
@@ -61,8 +64,30 @@ def _task_status_running_on_other_worker() -> dict:
                 "workerId": "macmini-m4-99",
                 "workerGroup": WORKER_GROUP,
             }
-        ]
+        ],
     }
+
+
+def _task_status_running_this_worker_group_unset() -> dict:
+    """Regression for the 2026-07-10 incident: a live run on THIS worker whose workerGroup
+    hasn't been populated yet (claim window). The old (workerId AND workerGroup) match
+    false-negatived this → the worker read as idle → EACS mid-task."""
+    return {
+        "state": "running",
+        "runs": [
+            {
+                "runId": 0,
+                "state": "running",
+                "workerId": WORKER_ID,
+                # workerGroup deliberately absent
+            }
+        ],
+    }
+
+
+def _task_status_pending_no_runs() -> dict:
+    """Task assigned to this worker but no run yet (claim window) — treat as busy (safe)."""
+    return {"state": "pending", "runs": []}
 
 
 def test_idle_worker_returns_false():
@@ -87,6 +112,22 @@ def test_recent_task_now_running_on_other_worker_returns_false():
     with patch.object(taskcluster, "get_worker", return_value=_worker_record([{"taskId": "T1", "runId": 0}])):
         with patch.object(taskcluster, "get_task_status", return_value=_task_status_running_on_other_worker()):
             assert taskcluster.is_currently_busy(WORKER_POOL, WORKER_GROUP, WORKER_ID) is False
+
+
+def test_running_on_this_worker_with_unpopulated_group_returns_true():
+    """Regression (incident 2026-07-10): a live run on this worker with workerGroup not yet set
+    must read as BUSY. The old (workerId AND workerGroup) match returned False here and a
+    reprovision wiped the worker mid-task."""
+    with patch.object(taskcluster, "get_worker", return_value=_worker_record([{"taskId": "T1", "runId": 0}])):
+        with patch.object(taskcluster, "get_task_status", return_value=_task_status_running_this_worker_group_unset()):
+            assert taskcluster.is_currently_busy(WORKER_POOL, WORKER_GROUP, WORKER_ID) is True
+
+
+def test_pending_task_no_runs_returns_true():
+    """A non-terminal task assigned to this worker with no run yet (claim window) → busy (safe)."""
+    with patch.object(taskcluster, "get_worker", return_value=_worker_record([{"taskId": "T1", "runId": 0}])):
+        with patch.object(taskcluster, "get_task_status", return_value=_task_status_pending_no_runs()):
+            assert taskcluster.is_currently_busy(WORKER_POOL, WORKER_GROUP, WORKER_ID) is True
 
 
 def test_multiple_recent_tasks_any_running_returns_true():
