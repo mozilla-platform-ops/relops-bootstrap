@@ -18,6 +18,7 @@ from . import ui
 from .clients import simplemdm, ssh, taskcluster
 from .config import get_settings
 from .errors import ReprovisionError
+from .hostnames import validate_short
 from .role_map import role_for_hostname
 from .secrets import simplemdm_api_key, ssh_admin_key, ssh_admin_password, tc_credentials
 
@@ -35,6 +36,10 @@ class HostContext:
 
 def resolve(hostname: str) -> HostContext:
     """Look up everything we need about a host from its short name."""
+    # Validate before the name reaches SSH / expect / SimpleMDM / VNC. Every CLI
+    # subcommand and the runner flow funnel through resolve(), so this one gate
+    # constrains the whole orchestrator to well-formed fleet hostnames.
+    hostname = validate_short(hostname)
     role = role_for_hostname(hostname)
 
     # Worker pool derived from role for now. Roles map 1:1 to pools by convention.

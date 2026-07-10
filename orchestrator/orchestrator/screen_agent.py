@@ -25,6 +25,7 @@ import time
 
 import httpx
 
+from .hostnames import validate_fqdn
 from .runner import Config
 
 VNC_PORT = 5900
@@ -94,6 +95,10 @@ def main() -> None:
                 continue
             for fqdn in hosts:
                 try:
+                    # The admin VNC password is handed to whatever host we connect to,
+                    # so never connect to a host the control plane names without
+                    # confirming it's an in-fleet worker on the fixed MDC1 domain.
+                    fqdn = validate_fqdn(fqdn)
                     jpeg = asyncio.run(_grab(fqdn, password))
                     _push(client, cfg, fqdn, jpeg)
                     print(f"pushed {fqdn} ({len(jpeg)} bytes)")

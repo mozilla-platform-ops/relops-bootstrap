@@ -34,6 +34,8 @@ import time
 
 import httpx
 
+from .hostnames import validate_short
+
 
 class Config:
     def __init__(self) -> None:
@@ -121,6 +123,14 @@ def _reprovision_cmd(host: str) -> list[str]:
 
 def _run_job(client: httpx.Client, cfg: Config, job: dict) -> None:
     job_id, host = job["id"], job["short"]
+    # Never trust the control plane's hostname blindly — validate before it reaches
+    # the CLI (and, through it, SSH/expect/SimpleMDM). A malformed name fails the job
+    # cleanly instead of shelling out. The CLI re-validates in resolve() too.
+    try:
+        host = validate_short(host)
+    except ValueError as e:
+        _complete(client, cfg, job_id, False, f"rejected: {e}")
+        return
     _event(client, cfg, job_id, f"runner {cfg.runner_id} starting: reprovision run {host}")
     try:
         proc = subprocess.Popen(
