@@ -165,23 +165,27 @@ def step_wipe(ctx: HostContext) -> None:
             f"or wipe manually via the SimpleMDM UI if a full obliterate is truly intended."
         )
     ui.ok("Bootstrap Token escrowed — EACS can run")
-    # Belt-and-suspenders against wiping a busy worker. Quarantine only stops NEW task claims —
-    # a task claimed just before quarantine keeps running. `drain` waits that out in the full
-    # run, but re-verify right here so a direct `wipe` (or a drain heuristic miss) can never
-    # erase a worker mid-task. Best-effort: if TC can't be reached (no creds / Bad mac token),
-    # warn and proceed — the operator running `wipe` directly owns that call.
+    # Final gate against wiping a busy worker. Quarantine only stops NEW task claims — a task
+    # claimed just before quarantine keeps running. `drain` waits that out in the full run, but
+    # re-verify right here so a direct `wipe` (or a drain miss) can never erase a worker mid-task.
+    # FAIL CLOSED: a destructive EACS must require positive proof of idle. If we can't confirm
+    # (TC unreachable / bad creds) OR the worker is busy, ABORT — never wipe on uncertainty.
+    # (Previously this failed OPEN — warn + proceed — which let a running worker get wiped.)
     ui.wire(f"queue.getWorker {ctx.hostname} → confirm no task in flight")
     try:
         busy = taskcluster.is_currently_busy(ctx.worker_pool_id, ctx.worker_group, ctx.hostname)
-    except Exception as e:  # noqa: BLE001 — any TC/auth failure → can't verify, so warn not abort
-        ui.warn(f"couldn't confirm idle via Taskcluster ({e}) — proceeding; make sure the worker is drained")
-    else:
-        if busy:
-            raise ReprovisionError(
-                f"{ctx.hostname} is still running a task — NOT wiping. Quarantine + drain first "
-                f"(`reprovision quarantine`, `reprovision drain`) or wait for the task to finish."
-            )
-        ui.ok("no task in flight")
+    except Exception as e:  # noqa: BLE001 — any TC/auth failure → can't verify idle → refuse to wipe
+        raise ReprovisionError(
+            f"{ctx.hostname}: couldn't confirm the worker is idle via Taskcluster ({e}) — refusing "
+            f"to wipe. A reprovision must never EACS a worker that might be running a task. Fix TC "
+            f"access (clientId/token) and retry, or wipe manually once you've confirmed it's drained."
+        ) from e
+    if busy:
+        raise ReprovisionError(
+            f"{ctx.hostname} is still running a task — NOT wiping. Quarantine + drain first "
+            f"(`reprovision quarantine`, `reprovision drain`) or wait for the task to finish."
+        )
+    ui.ok("no task in flight")
     # Record the current enrolled_at so wait_for_reenroll can detect a *fresh* enrollment
     # (status alone is unreliable: it stays "enrolled" until the erase actually executes).
     ctx.pre_wipe_enrolled_at = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {}).get("enrolled_at")

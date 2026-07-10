@@ -76,8 +76,16 @@ def is_currently_busy(
     task that doesn't show up in `recentTasks` immediately, but the previously-
     claimed task's status will still be `running` until the worker reports back.
 
-    Returns False if the worker has no recent tasks or every recent task on this
-    worker is in a terminal state.
+    Returns False if the worker has no recent tasks or every recent task is in a
+    terminal state (or is definitively running on a *different* worker).
+
+    Detection gates on the TASK-level state (like safe_runner) and attributes the
+    task to this worker by **workerId only** — NOT the old (workerId AND workerGroup)
+    per-run match. During the claim window Taskcluster can report a run as running
+    before its workerGroup field is populated, so the stricter match false-negatived a
+    live task and a reprovision EACS'd a worker mid-task (incident 2026-07-10). We bias
+    to false-POSITIVE (drain/wait longer) over false-NEGATIVE (wipe mid-task), the safe
+    direction for a destructive action.
     """
     try:
         worker = get_worker(worker_pool_id, worker_group, worker_id)
@@ -97,12 +105,19 @@ def is_currently_busy(
         except TaskclusterRestFailure:
             continue
 
-        # Find the LATEST run that was on this worker (most recent runId first).
-        for run in reversed(status.get("runs", [])):
-            if run.get("workerId") == worker_id and run.get("workerGroup") == worker_group:
-                if run.get("state") not in TERMINAL_RUN_STATES:
-                    return True
-                # Latest run on this worker is done; check the next task.
-                break
+        # Task finished (completed/failed/exception) → it isn't holding this worker.
+        if status.get("state") in TERMINAL_RUN_STATES:
+            continue
+
+        # Non-terminal task (unscheduled/pending/running). Treat it as OURS (busy)
+        # unless its latest run is definitively on a *different* worker — e.g. the task
+        # was retried elsewhere. workerId alone identifies the physical box; a missing
+        # workerId (claim window, or no run yet) counts as ours → busy (safe default).
+        runs = status.get("runs") or []
+        latest_worker_id = runs[-1].get("workerId") if runs else None
+        if latest_worker_id and latest_worker_id != worker_id:
+            continue
+
+        return True
 
     return False

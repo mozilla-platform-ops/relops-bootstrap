@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from orchestrator import workflow
+from orchestrator.errors import ReprovisionError
 
 
 def _ctx():
@@ -201,3 +202,19 @@ def test_reprovision_default_flow():
 def test_reprovision_unquarantine_flag_returns_to_service():
     calls = _run_reprovision_capturing(unquarantine=True)
     assert calls[-1] == "unquarantine"  # runs, and last
+
+
+
+def test_wipe_aborts_when_idle_cannot_be_confirmed():
+    """Fail CLOSED: if Taskcluster can't confirm idle (e.g. bad creds / 'Bad mac'), refuse to
+    wipe — must NOT warn-and-proceed. This was the 2026-07-10 incident path (a running worker
+    got EACS'd because the idle check failed open)."""
+    with patch("orchestrator.workflow.ssh.forget_host_key"), \
+         patch("orchestrator.workflow.ssh.run") as run, \
+         patch("orchestrator.workflow.taskcluster.is_currently_busy", side_effect=RuntimeError("Bad mac")), \
+         patch("orchestrator.workflow.simplemdm.wipe") as wipe:
+        run.return_value.returncode = 0
+        run.return_value.stdout = b"profiles: Bootstrap Token escrowed to server: YES"
+        with pytest.raises(ReprovisionError):
+            workflow.step_wipe(_ctx())
+        wipe.assert_not_called()
