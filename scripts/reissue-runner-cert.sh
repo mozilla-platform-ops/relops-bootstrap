@@ -23,24 +23,34 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOST="${1:-macmini-m4-81}"
+RAW="${1:-macmini-m4-81}"
 NOT_AFTER="${2:-23h}"
 SSH_USER="${REPROVISION_SSH_USER:-admin}"
-TARGET="${SSH_USER}@${HOST}"
 
-CRT_LOCAL="/tmp/runner-${HOST}.bundle.crt"
-KEY_LOCAL="/tmp/runner-${HOST}.key"
+# The cert CN/SPIFFE uses the SHORT name; SSH needs the FQDN (short names don't
+# resolve off the worker network). Accept either form as the argument.
+SHORT="${RAW%%.*}"
+if [[ "$RAW" == *.* ]]; then
+  SSH_HOST="$RAW"
+else
+  SSH_HOST="${SHORT}.test.releng.mdc1.mozilla.com"
+fi
+SSH_HOST="${REPROVISION_SSH_HOST:-$SSH_HOST}"   # override if you use an ssh_config alias
+TARGET="${SSH_USER}@${SSH_HOST}"
+
+CRT_LOCAL="/tmp/runner-${SHORT}.bundle.crt"
+KEY_LOCAL="/tmp/runner-${SHORT}.key"
 
 say() { printf '\n\033[1;36m▸ %s\033[0m\n' "$*"; }
 
 # ── 1. mint ───────────────────────────────────────────────────────────────────
-say "1/4  minting a fresh ${NOT_AFTER} cert for ${HOST} from step-ca"
-NOT_AFTER="$NOT_AFTER" "$HERE/mint-runner-cert.sh" "$HOST" "$NOT_AFTER" >/dev/null
+say "1/4  minting a fresh ${NOT_AFTER} cert for ${SHORT} from step-ca"
+NOT_AFTER="$NOT_AFTER" "$HERE/mint-runner-cert.sh" "$SHORT" "$NOT_AFTER" >/dev/null
 [[ -s "$CRT_LOCAL" && -s "$KEY_LOCAL" ]] || { echo "mint did not produce $CRT_LOCAL / $KEY_LOCAL" >&2; exit 1; }
 echo "   minted → $CRT_LOCAL (+ key)"
 
 # ── 2. stage the cert on the host, then inject it into vault.yaml ──────────────
-say "2/4  installing the cert into ${HOST}:/var/root/vault.yaml (backup + validated)"
+say "2/4  installing the cert into ${SSH_HOST}:/var/root/vault.yaml (backup + validated)"
 REMOTE_TMP="/tmp/reissue-runner-cert.$$"
 ssh "$TARGET" "mkdir -p '$REMOTE_TMP' && chmod 700 '$REMOTE_TMP'"
 # shellcheck disable=SC2064
@@ -87,7 +97,7 @@ echo "   vault.yaml updated (backup: \$VAULT.bak-\$STAMP)"
 REMOTE
 
 # ── 3. run puppet (pulls latest runner code + installs cert + restarts runner) ─
-say "3/4  running puppet on ${HOST} (pulls latest code, installs cert, restarts runner)"
+say "3/4  running puppet on ${SSH_HOST} (pulls latest code, installs cert, restarts runner)"
 ssh "$TARGET" "sudo /usr/local/bin/run-puppet.sh" 2>&1 | tail -20
 
 # ── 4. show the runner reconnecting ───────────────────────────────────────────
