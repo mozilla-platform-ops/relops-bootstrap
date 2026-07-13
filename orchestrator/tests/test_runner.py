@@ -101,3 +101,26 @@ def test_run_job_streams_lines_and_completes_success():
         runner._run_job(client, _Cfg(), {"id": 3, "short": "macmini-m4-80"})
     assert complete.call_args[0][3] is True          # success
     assert event.call_count >= 2                      # streamed the non-blank stdout lines
+
+
+# --- concurrent runner: the guard wrapper always reports a terminal outcome ---
+
+def test_run_job_guarded_reports_failure_on_crash():
+    """If _run_job raises, the guard must still _complete the job (else it stays 'open'
+    forever and wedges the host + the concurrent pool slot)."""
+    client = MagicMock()
+    with patch("orchestrator.runner._run_job", side_effect=RuntimeError("boom")), \
+         patch("orchestrator.runner._complete") as complete:
+        runner._run_job_guarded(client, _Cfg(), {"id": 7, "short": "macmini-m4-111"})
+    complete.assert_called_once()
+    args = complete.call_args.args
+    assert args[2] == 7 and args[3] is False  # job_id, success=False
+
+
+def test_max_concurrent_defaults_and_reads_env(monkeypatch):
+    monkeypatch.setenv("HANGAR_API_URL", "http://hangar/api")
+    monkeypatch.setenv("REPROVISION_RUNNER_TOKEN", "t")
+    monkeypatch.delenv("RUNNER_MAX_CONCURRENT", raising=False)
+    assert runner.Config().max_concurrent == 3  # default = staging pool size
+    monkeypatch.setenv("RUNNER_MAX_CONCURRENT", "5")
+    assert runner.Config().max_concurrent == 5
