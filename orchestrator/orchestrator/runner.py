@@ -33,6 +33,7 @@ import sys
 import time
 
 import httpx
+from concurrent.futures import ThreadPoolExecutor
 
 from .hostnames import validate_short
 
@@ -44,6 +45,10 @@ class Config:
         self.client_cert = os.environ.get("RUNNER_CLIENT_CERT", "")
         self.client_key = os.environ.get("RUNNER_CLIENT_KEY", "")
         self.poll = int(os.environ.get("RUNNER_POLL_SECONDS", "10"))
+        # How many reprovisions run concurrently. Each is I/O-bound (waiting on reboots /
+        # re-enrollment / SSH), so a small pool lets a whole pool of workers reprovision "at
+        # once" rather than serially. Default 3 (the 1500 staging pool size); raise via env.
+        self.max_concurrent = max(1, int(os.environ.get("RUNNER_MAX_CONCURRENT", "3")))
         self.runner_id = os.environ.get("RUNNER_ID", socket.gethostname())
         if not self.api:
             sys.exit("set HANGAR_API_URL")
@@ -156,26 +161,41 @@ def _run_job(client: httpx.Client, cfg: Config, job: dict) -> None:
     _complete(client, cfg, job_id, rc == 0, detail)
 
 
+def _run_job_guarded(client: httpx.Client, cfg: Config, job: dict) -> None:
+    """Run a job and ALWAYS report a terminal outcome, so one job's crash never wedges the
+    host (its ReprovisionJob would stay 'open' forever) or the concurrent pool."""
+    try:
+        _run_job(client, cfg, job)
+    except Exception as e:  # noqa: BLE001 — always report a terminal outcome for the job
+        _complete(client, cfg, job["id"], False, f"runner error: {e}")
+
+
 def main() -> None:
     cfg = Config()
     auth = "mTLS cert" if cfg.client_cert else "shared token"
-    print(f"reprovision-runner [{cfg.runner_id}] → {cfg.api} (auth: {auth}, poll {cfg.poll}s)")
-    with httpx.Client(**cfg.client_kwargs) as client:
+    print(
+        f"reprovision-runner [{cfg.runner_id}] → {cfg.api} "
+        f"(auth: {auth}, poll {cfg.poll}s, max_concurrent {cfg.max_concurrent})"
+    )
+    # httpx.Client is thread-safe (pooled connections), so one client is shared across job
+    # threads. Claim up to max_concurrent jobs and run them in parallel — a whole pool of
+    # workers reprovisions "at once" instead of serially.
+    with httpx.Client(**cfg.client_kwargs) as client, \
+            ThreadPoolExecutor(max_workers=cfg.max_concurrent, thread_name_prefix="job") as pool:
+        active: set = set()
         while True:
-            try:
-                job = _claim(client, cfg)
-            except httpx.HTTPError as e:
-                print(f"claim failed: {e}")
-                time.sleep(cfg.poll)
-                continue
-            if not job:
-                time.sleep(cfg.poll)
-                continue
-            print(f"claimed job {job['id']} → {job['short']}")
-            try:
-                _run_job(client, cfg, job)
-            except Exception as e:  # noqa: BLE001 — always report a terminal outcome for the job
-                _complete(client, cfg, job["id"], False, f"runner error: {e}")
+            active = {f for f in active if not f.done()}  # reap finished jobs
+            while len(active) < cfg.max_concurrent:  # fill idle capacity, FIFO
+                try:
+                    job = _claim(client, cfg)
+                except httpx.HTTPError as e:
+                    print(f"claim failed: {e}")
+                    break
+                if not job:
+                    break  # queue empty
+                print(f"claimed job {job['id']} → {job['short']} ({len(active) + 1}/{cfg.max_concurrent} active)")
+                active.add(pool.submit(_run_job_guarded, client, cfg, job))
+            time.sleep(cfg.poll)
             print(f"finished job {job['id']}")
 
 
