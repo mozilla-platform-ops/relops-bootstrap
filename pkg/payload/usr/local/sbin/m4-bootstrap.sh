@@ -51,50 +51,24 @@ BROKER_HOST=forge.relops.mozilla.com
 ISSUER_CN="Mozilla RelOps Bootstrap CA Intermediate CA"
 
 #------------------------------------------------------------------------------
-# 1. Ensure admin has SecureToken via Bootstrap Token escrow
+# 1. Wait for admin's SecureToken (granted out-of-band — no password handled here)
 #------------------------------------------------------------------------------
-# macOS 12.4+: when no -adminUser is passed to `sysadminctl -secureTokenOn`,
-# the system auto-uses the escrowed Bootstrap Token to grant SecureToken.
-# DEP-enrolled devices escrow BST to SimpleMDM after the first console login;
-# `profiles install -type bootstraptoken` force-escrows on demand and is
-# idempotent.
-echo "=== ensuring admin has SecureToken via Bootstrap Token ==="
-
-if /usr/sbin/sysadminctl -secureTokenStatus admin 2>&1 | grep -q 'ENABLED'; then
-  echo "admin already has SecureToken — skipping BST grant"
-else
-  # Create admin user if it doesn't already exist (cred: admin/admin)
-  if ! /usr/bin/dscl . -read /Users/admin >/dev/null 2>&1; then
-    echo "creating admin user"
-    /usr/sbin/sysadminctl -addUser admin -password "admin" -admin -fullName "admin" 2>&1
+# admin's SecureToken + Bootstrap Token are established out-of-band by the
+# reprovision runner (`reprovision mint` + `escrow-bst`) using the real admin
+# password from the vault — NEVER in this pkg. This block only WAITS for that to
+# land before proceeding, so an out-of-order MDM kickoff can't strand BST on
+# cltbld. No credential is hard-coded here.
+echo "=== waiting for admin SecureToken (granted out-of-band by the reprovision runner) ==="
+deadline=$(( $(/bin/date +%s) + 1800 ))   # 30 min
+until /usr/sbin/sysadminctl -secureTokenStatus admin 2>&1 | grep -q 'ENABLED'; do
+  if [ "$(/bin/date +%s)" -ge "$deadline" ]; then
+    echo "ERROR: admin has no SecureToken after 30 min — the reprovision runner"
+    echo "(mint + escrow-bst) or an operator must grant it first. Aborting."
+    exit 1
   fi
-
-  echo "escrowing bootstrap token to MDM"
-  /usr/bin/profiles install -type bootstraptoken 2>&1 || true
-  sleep 10
-
-  echo "granting SecureToken to admin via bootstrap token"
-  /usr/sbin/sysadminctl -secureTokenOn admin -password "admin" 2>&1
-  sleep 5
-
-  if ! /usr/sbin/sysadminctl -secureTokenStatus admin 2>&1 | grep -q 'ENABLED'; then
-    echo "BST grant didn't take. Falling back to waiting for manual VNC-admin login..."
-    for _ in $(seq 1 180); do
-      if /usr/sbin/sysadminctl -secureTokenStatus admin 2>&1 | grep -q 'ENABLED'; then
-        break
-      fi
-      sleep 10
-    done
-  fi
-fi
-
-if ! /usr/sbin/sysadminctl -secureTokenStatus admin 2>&1 | grep -q 'ENABLED'; then
-  echo "ERROR: admin does not hold a SecureToken after BST attempt + 30 min wait."
-  echo "Action: ssh in as admin (or VNC) to trigger an interactive auth, then"
-  echo "re-run this script. SSH login alone is enough to seed BST custody."
-  exit 1
-fi
-echo "admin SecureToken ENABLED — BST custody good."
+  /bin/sleep 10
+done
+echo "admin SecureToken ENABLED — proceeding."
 
 #------------------------------------------------------------------------------
 # 2. Wait for /etc/puppet_role (MDM Custom Attribute file)
