@@ -152,3 +152,56 @@ def test_404_worker_returns_false():
 
     with patch.object(taskcluster, "get_worker", side_effect=err):
         assert taskcluster.is_currently_busy(WORKER_POOL, WORKER_GROUP, WORKER_ID) is False
+
+
+def _not_found():
+    from taskcluster.exceptions import TaskclusterRestFailure
+
+    err = TaskclusterRestFailure("not found", None)
+    err.status_code = 404
+    return err
+
+
+PROD_POOL = "releng-hardware/gecko-t-osx-1500-m4"
+STAGING_POOL = "releng-hardware/gecko-t-osx-1500-m4-staging"
+
+
+def test_find_registered_pool_returns_staging_when_registered_there():
+    """A host in the -staging pool resolves to staging even though its role maps to prod."""
+    def fake_get_worker(pool_id, group, wid):
+        if pool_id == STAGING_POOL:
+            return _worker_record([])
+        raise _not_found()
+
+    with patch.object(taskcluster, "get_worker", side_effect=fake_get_worker):
+        assert taskcluster.find_registered_pool([STAGING_POOL, PROD_POOL], WORKER_GROUP, WORKER_ID) == STAGING_POOL
+
+
+def test_find_registered_pool_falls_through_to_prod():
+    """Not in staging (404) but registered in prod → prod."""
+    def fake_get_worker(pool_id, group, wid):
+        if pool_id == PROD_POOL:
+            return _worker_record([])
+        raise _not_found()
+
+    with patch.object(taskcluster, "get_worker", side_effect=fake_get_worker):
+        assert taskcluster.find_registered_pool([STAGING_POOL, PROD_POOL], WORKER_GROUP, WORKER_ID) == PROD_POOL
+
+
+def test_find_registered_pool_none_when_registered_nowhere():
+    """A fresh host in neither pool → None (caller falls back to the prod pool)."""
+    with patch.object(taskcluster, "get_worker", side_effect=_not_found()):
+        assert taskcluster.find_registered_pool([STAGING_POOL, PROD_POOL], WORKER_GROUP, WORKER_ID) is None
+
+
+def test_find_registered_pool_reraises_non_404():
+    """A non-404 error (auth, 5xx) must propagate, not be swallowed as 'not in this pool'."""
+    from taskcluster.exceptions import TaskclusterRestFailure
+
+    err = TaskclusterRestFailure("server error", None)
+    err.status_code = 500
+    import pytest
+
+    with patch.object(taskcluster, "get_worker", side_effect=err):
+        with pytest.raises(TaskclusterRestFailure):
+            taskcluster.find_registered_pool([STAGING_POOL, PROD_POOL], WORKER_GROUP, WORKER_ID)

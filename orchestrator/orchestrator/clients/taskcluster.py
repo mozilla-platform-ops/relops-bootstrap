@@ -39,6 +39,24 @@ def get_worker(worker_pool_id: str, worker_group: str, worker_id: str) -> dict:
     return _queue().getWorker(provisioner, worker_type, worker_group, worker_id)
 
 
+def find_registered_pool(candidate_pool_ids: list[str], worker_group: str, worker_id: str) -> str | None:
+    """Return the pool in `candidate_pool_ids` where this worker is actually registered, or None.
+
+    A puppet role can back both a prod pool and its `-staging` sibling (same role, two pools), so
+    the real pool can't be inferred from the role — it must be discovered from TC. We probe each
+    candidate with getWorker and return the first hit; a 404 means "not in that pool, try next."
+    Order the candidates by preference (e.g. staging before prod)."""
+    for pool_id in candidate_pool_ids:
+        try:
+            get_worker(pool_id, worker_group, worker_id)
+            return pool_id
+        except TaskclusterRestFailure as e:
+            if getattr(e, "status_code", None) == 404:
+                continue
+            raise
+    return None
+
+
 def get_task_status(task_id: str) -> dict:
     """queue.status(taskId) -> {runs: [...], state: ...}."""
     return _queue().status(task_id)["status"]
