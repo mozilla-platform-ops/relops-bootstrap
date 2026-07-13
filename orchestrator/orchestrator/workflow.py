@@ -42,14 +42,20 @@ def resolve(hostname: str) -> HostContext:
     hostname = validate_short(hostname)
     role = role_for_hostname(hostname)
 
-    # Worker pool derived from role for now. Roles map 1:1 to pools by convention.
-    pool_by_role = {
+    # A role backs a prod pool by convention, but the SAME role also backs its `-staging`
+    # sibling (e.g. gecko_t_osx_1500_m4 → both gecko-t-osx-1500-m4 and -staging). The role
+    # can't disambiguate, so resolve the real pool from where the worker is actually registered
+    # in TC: probe staging first, then prod. If it's registered in neither (a fresh host not yet
+    # booted into TC), fall back to the prod pool — quarantine/drain then no-op on the 404.
+    prod_pool_by_role = {
         "gecko_t_osx_1500_m4": "releng-hardware/gecko-t-osx-1500-m4",
         "gecko_t_osx_1400_r8": "releng-hardware/gecko-t-osx-1400-r8",
     }
-    pool = pool_by_role.get(role)
-    if not pool:
+    base_pool = prod_pool_by_role.get(role)
+    if not base_pool:
         raise ValueError(f"no worker pool mapping for role '{role}'")
+    worker_group = "mdc1"
+    pool = taskcluster.find_registered_pool([f"{base_pool}-staging", base_pool], worker_group, hostname) or base_pool
 
     fqdn = f"{hostname}.test.releng.mdc1.mozilla.com"
     device = simplemdm.find_device_by_name(hostname)
