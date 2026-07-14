@@ -15,6 +15,7 @@ class _Cfg:
     api = "http://hangar/api"
     token = "t"
     runner_id = "runner-1"
+    unquarantine = False
     headers = {"X-Reprovision-Runner-Token": "t", "X-Reprovision-Runner-Id": "runner-1"}
 
 
@@ -60,6 +61,17 @@ def test_reprovision_cmd_falls_back_to_path_lookup():
 
     with patch.object(sys, "executable", "/nonexistent/dir/python"):
         assert runner._reprovision_cmd("macmini-m4-80") == ["reprovision", "run", "macmini-m4-80"]
+
+
+def test_reprovision_cmd_appends_unquarantine_flag():
+    """unquarantine=True adds --unquarantine so the host returns to service after reprovision."""
+    import sys
+
+    with patch.object(sys, "executable", "/nonexistent/dir/python"):
+        assert runner._reprovision_cmd("macmini-m4-80", unquarantine=True) == \
+            ["reprovision", "run", "macmini-m4-80", "--unquarantine"]
+        # default (omitted) leaves the host quarantined — flag absent
+        assert "--unquarantine" not in runner._reprovision_cmd("macmini-m4-80")
 
 
 def test_complete_retries_until_success():

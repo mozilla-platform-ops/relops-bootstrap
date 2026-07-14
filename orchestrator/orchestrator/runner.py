@@ -19,9 +19,11 @@ Config (env):
 
 Run:  reprovision-runner        (or: python -m orchestrator.runner)
 
-Scope (Phase 2 MVP): executes `reprovision run <host>` and streams the CLI's stdout lines back
-as job events. Fine-grained structured step streaming (via a ui event-emitter) is a later
-enhancement; the CLI's own safety guards (BST, busy-worker, DoNotObliterate) apply unchanged.
+Scope (Phase 2 MVP): executes `reprovision run <host>` (with `--unquarantine` by default, so a
+reprovisioned host returns to service automatically — set RUNNER_UNQUARANTINE=false to opt out)
+and streams the CLI's stdout lines back as job events. Fine-grained structured step streaming
+(via a ui event-emitter) is a later enhancement; the CLI's own safety guards (BST, busy-worker,
+DoNotObliterate) apply unchanged.
 """
 
 from __future__ import annotations
@@ -49,6 +51,13 @@ class Config:
         # re-enrollment / SSH), so a small pool lets a whole pool of workers reprovision "at
         # once" rather than serially. Default 3 (the 1500 staging pool size); raise via env.
         self.max_concurrent = max(1, int(os.environ.get("RUNNER_MAX_CONCURRENT", "3")))
+        # Return the host to service (un-quarantine) at the end of a successful reprovision.
+        # Default on: the whole point of a reprovision is to put a fresh worker back in service,
+        # so the operator doesn't have to un-quarantine by hand afterwards. quarantine +
+        # unquarantine are the same queue.quarantineWorker call, so the runner's existing TC
+        # creds already scope it. Set RUNNER_UNQUARANTINE=false to leave hosts quarantined
+        # (e.g. to inspect a reprovisioned box before it starts claiming tasks).
+        self.unquarantine = os.environ.get("RUNNER_UNQUARANTINE", "true").lower() in ("1", "true", "yes")
         self.runner_id = os.environ.get("RUNNER_ID", socket.gethostname())
         if not self.api:
             sys.exit("set HANGAR_API_URL")
@@ -112,7 +121,7 @@ def _complete(client: httpx.Client, cfg: Config, job_id: int, success: bool, det
     print(f"WARNING: could not report completion of job {job_id} after retries: {last}")
 
 
-def _reprovision_cmd(host: str) -> list[str]:
+def _reprovision_cmd(host: str, unquarantine: bool = False) -> list[str]:
     """The `reprovision` CLI to run, resolved next to *this* runner's interpreter.
 
     The runner and the CLI are installed in the same venv, so the CLI lives beside
@@ -123,7 +132,10 @@ def _reprovision_cmd(host: str) -> list[str]:
     """
     sibling = os.path.join(os.path.dirname(sys.executable), "reprovision")
     exe = sibling if os.path.exists(sibling) else "reprovision"
-    return [exe, "run", host]
+    cmd = [exe, "run", host]
+    if unquarantine:
+        cmd.append("--unquarantine")
+    return cmd
 
 
 def _run_job(client: httpx.Client, cfg: Config, job: dict) -> None:
@@ -136,10 +148,11 @@ def _run_job(client: httpx.Client, cfg: Config, job: dict) -> None:
     except ValueError as e:
         _complete(client, cfg, job_id, False, f"rejected: {e}")
         return
-    _event(client, cfg, job_id, f"runner {cfg.runner_id} starting: reprovision run {host}")
+    cmd = _reprovision_cmd(host, cfg.unquarantine)
+    _event(client, cfg, job_id, f"runner {cfg.runner_id} starting: {' '.join(cmd[1:])}")
     try:
         proc = subprocess.Popen(
-            _reprovision_cmd(host),
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
