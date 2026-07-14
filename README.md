@@ -164,6 +164,7 @@ silently drops URI SANs with URL-encoded chars (e.g. `Mac%20mini`).
 │   └── fetch-vault-mtls.swift                ─ historical URLSession variant (dead end)
 │
 ├── docs/                         📖  rendered walkthrough (index.html + deep-dive.html)
+│                                    + reprovision-architecture.html (one-page flow diagram)
 ├── .github/workflows/test.yml    ✅  CI: pytest + terraform fmt/validate
 └── cloudbuild.yaml               🚀  build + push + deploy broker on commit
 ```
