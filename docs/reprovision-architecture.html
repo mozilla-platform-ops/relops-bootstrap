@@ -14,11 +14,20 @@
   html,body{margin:0;background:radial-gradient(1200px 700px at 50% -10%, #16202f 0%, var(--bg) 60%);
     color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif}
   .wrap{max-width:1180px;margin:0 auto;padding:40px 28px 56px}
-  header{text-align:center;margin-bottom:30px}
+  header{text-align:center;margin-bottom:12px}
   h1{font-size:30px;margin:0 0 8px;letter-spacing:-.5px}
-  .sub{color:var(--dim);font-size:15px;max-width:760px;margin:0 auto}
+  .sub{color:var(--dim);font-size:15px;max-width:800px;margin:0 auto}
+  .sub b{color:var(--ink)}
   .tag{display:inline-block;margin-top:14px;padding:5px 12px;border:1px solid var(--line);border-radius:999px;
     color:var(--dim);font-size:12px;letter-spacing:.4px}
+
+  /* diagram section heads — each diagram answers ONE question */
+  .dhead{margin:40px 0 16px;border-bottom:1px solid var(--line);padding-bottom:10px}
+  .dhead h2{font-size:20px;margin:0;letter-spacing:-.3px;display:flex;align-items:center;gap:10px}
+  .dhead h2 .n{width:24px;height:24px;border-radius:7px;background:var(--line);color:var(--ink);
+    font-size:13px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .dhead .hint{color:var(--dim);font-size:13px;margin-top:7px}
+  .dhead .hint b{color:var(--ink)}
 
   .zone{border:1.5px dashed;border-radius:16px;padding:16px 18px 20px;margin:0 0 20px;position:relative;background:rgba(255,255,255,.012)}
   .zone > .zlabel{position:absolute;top:-11px;left:18px;padding:2px 10px;border-radius:6px;font-size:11px;
@@ -28,20 +37,31 @@
 
   .row{display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap}
   .box{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
-    border-radius:12px;padding:14px 16px;min-width:180px;max-width:280px}
+    border-radius:12px;padding:14px 16px;min-width:180px;max-width:300px}
   .box .t{font-weight:650;font-size:15px;display:flex;align-items:center;gap:8px}
   .box .d{color:var(--dim);font-size:12.5px;margin-top:5px}
   .box.accent-gcp{border-color:rgba(76,141,255,.55);box-shadow:0 0 0 1px rgba(76,141,255,.12),0 8px 30px -12px rgba(76,141,255,.35)}
   .box.accent-mdc1{border-color:rgba(163,113,247,.55);box-shadow:0 0 0 1px rgba(163,113,247,.12),0 8px 30px -12px rgba(163,113,247,.35)}
   .arrow{color:var(--faint);font-size:22px;flex:0 0 auto}
-  .updown{display:flex;flex-direction:column;align-items:center;color:var(--mdc1);font-size:12px;margin:6px 0}
+  .updown{display:flex;flex-direction:column;align-items:center;color:var(--mdc1);font-size:12px;margin:6px 0 18px}
   .updown .a{font-size:20px;line-height:1}
+  .updown span:last-child{max-width:640px;text-align:center}
   .note{color:var(--faint);font-size:11.5px;text-align:center;margin-top:8px}
+  .note b{color:var(--dim)}
 
-  /* pipeline */
+  /* "why is the runner in the datacenter" — the key rationale, called out */
+  .why{margin:16px auto 0;max-width:820px;background:rgba(255,255,255,.03);border:1px solid var(--line);
+    border-left:3px solid var(--mdc1);border-radius:8px;padding:12px 15px;color:var(--dim);font-size:12.5px}
+  .why b{color:var(--ink)}
+
+  /* pipeline — pills on a timeline, deliberately NOT boxed like the topology */
+  .track{display:flex;align-items:center;justify-content:center;gap:10px;color:var(--faint);font-size:11px;
+    letter-spacing:.5px;margin:0 0 10px}
+  .track .bar{height:1px;width:120px;background:linear-gradient(90deg,transparent,var(--faint))}
+  .track .bar.r{background:linear-gradient(90deg,var(--faint),transparent)}
   .pipe{display:grid;grid-template-columns:repeat(7,1fr);gap:0;margin:6px 0 4px}
   .step{position:relative;background:linear-gradient(180deg,#151c27,#0f151e);border:1px solid var(--line);
-    padding:12px 12px 12px;text-align:center}
+    padding:12px 12px;text-align:center}
   .step:first-child{border-radius:12px 0 0 12px} .step:last-child{border-radius:0 12px 12px 0}
   .step:not(:last-child){border-right:none}
   .step .n{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;
@@ -51,17 +71,24 @@
   .step.eacs .n{background:var(--amber)} .step.done .n{background:var(--ok)}
   .step .chev{position:absolute;right:-9px;top:50%;transform:translateY(-50%);z-index:2;color:var(--faint);font-size:16px;background:var(--bg);padding:0 1px}
 
-  .vault{margin-top:16px;background:rgba(236,106,156,.04);border:1px solid rgba(236,106,156,.35);border-radius:12px;padding:14px 16px}
+  /* secret delivery — systems + request path (belongs with the topology view) */
+  .vault{margin-top:4px;background:rgba(236,106,156,.04);border:1px solid rgba(236,106,156,.35);border-radius:12px;padding:14px 16px}
   .vault h3{margin:0 0 10px;font-size:12px;letter-spacing:.6px;text-transform:uppercase;color:var(--pink);font-weight:650}
   .vrow{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap}
-  .vbox{background:#111722;border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:12.5px;min-width:120px;text-align:center}
-  .vbox .vd{color:var(--dim);font-size:11px;margin-top:2px}
+  .vbox{background:#111722;border:1px solid var(--line);border-radius:9px;padding:10px 13px;font-size:12.5px;
+    min-width:158px;max-width:220px;text-align:center}
+  .vbox .vd{color:var(--dim);font-size:11px;margin-top:3px;line-height:1.4}
 
-  .legend{display:flex;flex-wrap:wrap;gap:10px 22px;justify-content:center;margin-top:26px;color:var(--dim);font-size:12.5px}
+  /* pipeline outcome — the proof that it works lives WITH the result */
+  .outcome{margin-top:18px}
+  .proof{margin-top:11px;padding-top:10px;border-top:1px solid rgba(63,185,80,.28);color:var(--ok);
+    font-size:12px;font-weight:600}
+
+  .legend{display:flex;flex-wrap:wrap;gap:10px 22px;justify-content:center;margin-top:32px;color:var(--dim);font-size:12.5px}
   .legend b{color:var(--ink);font-weight:600}
   .chip{display:inline-flex;align-items:center;gap:7px}
   .dot{width:9px;height:9px;border-radius:50%}
-  footer{margin-top:26px;text-align:center;color:var(--faint);font-size:11.5px}
+  footer{margin-top:20px;text-align:center;color:var(--faint);font-size:11.5px}
   .kw{color:var(--ink)}
 </style>
 </head>
@@ -70,9 +97,16 @@
   <header>
     <h1>Zero-Touch Worker Reprovisioning</h1>
     <p class="sub">One click in the Hangar dashboard rebuilds a Firefox-CI Mac from scratch and returns it to service —
-      no operator SSH, no manual steps. Spans Hangar (GCP), an on-network runner, SimpleMDM, step-ca and Puppet.</p>
+      no operator SSH, no manual steps. Two views: first <b>where things live</b>, then <b>what happens, in order</b>.</p>
     <span class="tag">RelOps · macOS M4 CI fleet · MDC1</span>
   </header>
+
+  <!-- ==================== DIAGRAM 1 — ARCHITECTURE (places) ==================== -->
+  <div class="dhead">
+    <h2><span class="n">1</span> Architecture — where things live</h2>
+    <div class="hint">Every box is a <b>system</b> and the environment it runs in; dashed frames are <b>physical / network zones</b>.
+      The one thing to remember: <b>nothing connects into MDC1</b>.</div>
+  </div>
 
   <!-- CONTROL PLANE -->
   <div class="zone gcp">
@@ -80,7 +114,7 @@
     <div class="row">
       <div class="box">
         <div class="t">🧑‍💻 Operator</div>
-        <div class="d">Opens Hangar in the browser, filters to a pool, clicks <b>Reprovision</b> (pool or picked hosts). Access is gated to a 5-person allowlist.</div>
+        <div class="d">Opens Hangar, filters to a pool, clicks <b>Reprovision</b> (whole pool or picked hosts). Access is gated to a 5-person allowlist.</div>
       </div>
       <span class="arrow">→</span>
       <div class="box accent-gcp">
@@ -95,10 +129,10 @@
     </div>
   </div>
 
-  <!-- bridge -->
+  <!-- bridge: outbound-only -->
   <div class="updown">
     <span class="a">↑ &nbsp; ↓</span>
-    <span>① the runner <b>pulls</b> jobs &amp; streams progress over <b>mTLS — outbound only</b> (nothing connects <i>into</i> MDC1)</span>
+    <span>the runner <b>pulls</b> jobs &amp; streams progress back over <b>mTLS — outbound only</b> (nothing connects <i>into</i> MDC1)</span>
   </div>
 
   <!-- EXECUTION PLANE -->
@@ -106,57 +140,78 @@
     <span class="zlabel">MDC1 datacenter · on-network</span>
     <div class="row">
       <div class="box accent-mdc1">
-        <div class="t">⚙️ Reprovision runner <span style="color:var(--faint);font-weight:500">(macmini-m4-81)</span></div>
-        <div class="d">Claims jobs from Hangar, then drives the full rebuild of the target worker. Runs up to <b>3 hosts at once</b> (bandwidth-friendly); returns each host to service automatically.</div>
+        <div class="t">⚙️ Reprovision runner <span style="color:var(--faint);font-weight:500;white-space:nowrap">(macmini-m4-81)</span></div>
+        <div class="d">Claims jobs from Hangar, then drives the full rebuild of the target machine. Runs up to <b>3 hosts at once</b> (bandwidth-friendly).</div>
+      </div>
+      <span class="arrow">→</span>
+      <div class="box">
+        <div class="t">🖥️ Target worker(s)</div>
+        <div class="d">The Mac(s) being rebuilt. The runner drives each one on-host; the worker later fetches its own secrets (path below).</div>
       </div>
     </div>
-    <div class="note">② the runner executes the pipeline below against the target worker &nbsp;↓</div>
-
-    <!-- PIPELINE -->
-    <div class="pipe">
-      <div class="step"><div class="n">1</div><div class="st">Quarantine</div><div class="sd">stop new task claims<br>(Taskcluster)</div><span class="chev">›</span></div>
-      <div class="step"><div class="n">2</div><div class="st">Drain</div><div class="sd">let the in-flight<br>task finish</div><span class="chev">›</span></div>
-      <div class="step eacs"><div class="n">3</div><div class="st">EACS wipe</div><div class="sd">erase the Mac<br>(SimpleMDM)</div><span class="chev">›</span></div>
-      <div class="step"><div class="n">4</div><div class="st">Re-enroll</div><div class="sd">DEP auto-enroll<br>on reboot</div><span class="chev">›</span></div>
-      <div class="step"><div class="n">5</div><div class="st">SecureToken + BST</div><div class="sd">auto-mint &amp;<br>escrow token</div><span class="chev">›</span></div>
-      <div class="step"><div class="n">6</div><div class="st">Fetch secrets</div><div class="sd">SCEP cert →<br>mTLS vault</div><span class="chev">›</span></div>
-      <div class="step done"><div class="n">7</div><div class="st">Puppet + register</div><div class="sd">configure →<br>back in service</div></div>
-    </div>
-
-    <!-- VAULT DETAIL -->
-    <div class="vault">
-      <h3>Step 6 · how the fresh worker gets its secrets (no key on disk, no operator hand-off)</h3>
-      <div class="vrow">
-        <div class="vbox">🖥️ Worker<div class="vd">presents its SCEP client cert</div></div>
-        <span class="arrow">→</span>
-        <div class="vbox">🔐 forge LB<div class="vd">HTTPS · mTLS<br>forge.relops.mozilla.com</div></div>
-        <span class="arrow">→</span>
-        <div class="vbox">📜 vault-broker<div class="vd">Cloud Run · checks the<br>cert's role, then reads…</div></div>
-        <span class="arrow">→</span>
-        <div class="vbox">🗝️ Secret Manager<div class="vd">vault-&lt;role&gt;.yaml</div></div>
-      </div>
-      <div class="note">The cert is issued by <b>step-ca</b> during enrollment; the vault-broker only serves a role the cert is actually authorized for.</div>
+    <div class="why">
+      <b>Why does the runner have to live <i>inside</i> the datacenter?</b> Step&nbsp;5 of the pipeline
+      (SecureToken&nbsp;+&nbsp;Bootstrap&nbsp;Token) is an Apple security operation that, in this context, can only be
+      performed over an <b>on-host SSH session</b> — so the driver must be on-network. That, more than anything, is why
+      this is a datacenter runner and not just a Cloud&nbsp;Run job.
     </div>
   </div>
 
-  <!-- END -->
-  <div class="row">
-    <div class="box" style="border-color:rgba(63,185,80,.55);box-shadow:0 0 0 1px rgba(63,185,80,.12),0 8px 30px -12px rgba(63,185,80,.35);max-width:640px">
+  <!-- SECRET DELIVERY — systems + request path (used by step 6) -->
+  <div class="vault">
+    <h3>Secret delivery — how a fresh worker gets its secrets (used by step 6; no key on disk, no operator hand-off)</h3>
+    <div class="vrow">
+      <div class="vbox">🖥️ Worker<div class="vd">presents its SCEP client cert</div></div>
+      <span class="arrow">→</span>
+      <div class="vbox">🔐 forge LB<div class="vd">HTTPS · mTLS<br>forge.relops.mozilla.com</div></div>
+      <span class="arrow">→</span>
+      <div class="vbox">📜 vault-broker<div class="vd">Cloud Run · validates the cert's role, then serves the matching secret</div></div>
+      <span class="arrow">→</span>
+      <div class="vbox">🗝️ Secret Manager<div class="vd">vault-&lt;role&gt;.yaml</div></div>
+    </div>
+    <div class="note">The cert is issued by <b>step-ca</b> during enrollment; the vault-broker only serves a role the cert is actually authorized for.</div>
+  </div>
+
+  <!-- ==================== DIAGRAM 2 — PIPELINE (phases) ==================== -->
+  <div class="dhead">
+    <h2><span class="n">2</span> Reprovision pipeline — what happens, in order</h2>
+    <div class="hint">These are <b>phases over time</b>, not places. Each runs against the target worker, driven by the runner in
+      diagram&nbsp;1; time flows left&nbsp;→&nbsp;right.</div>
+  </div>
+
+  <div class="track"><span class="bar"></span><span>time →</span><span class="bar r"></span></div>
+  <div class="pipe">
+    <div class="step"><div class="n">1</div><div class="st">Quarantine</div><div class="sd">stop new task claims<br>(Taskcluster)</div><span class="chev">›</span></div>
+    <div class="step"><div class="n">2</div><div class="st">Drain</div><div class="sd">let the in-flight<br>task finish</div><span class="chev">›</span></div>
+    <div class="step eacs"><div class="n">3</div><div class="st">EACS wipe</div><div class="sd">erase the Mac<br>(SimpleMDM)</div><span class="chev">›</span></div>
+    <div class="step"><div class="n">4</div><div class="st">Re-enroll</div><div class="sd">DEP auto-enroll<br>on reboot</div><span class="chev">›</span></div>
+    <div class="step"><div class="n">5</div><div class="st">SecureToken + BST</div><div class="sd">auto-mint &amp; escrow<br><b style="color:var(--amber)">needs on-host SSH</b></div><span class="chev">›</span></div>
+    <div class="step"><div class="n">6</div><div class="st">Fetch secrets</div><div class="sd">SCEP cert → mTLS vault<br>(see Secret delivery ↑)</div><span class="chev">›</span></div>
+    <div class="step done"><div class="n">7</div><div class="st">Puppet + register</div><div class="sd">configure →<br>back in service</div></div>
+  </div>
+  <div class="note"><b>Step 5</b> is the Apple SecureToken quirk that needs an on-host SSH session — the reason the runner
+    lives in MDC1 (diagram&nbsp;1). &nbsp;·&nbsp; <b>Step 6</b> uses the <b>Secret delivery</b> path shown above.</div>
+
+  <!-- OUTCOME — proof that it works lives with the result -->
+  <div class="row outcome">
+    <div class="box" style="border-color:rgba(63,185,80,.55);box-shadow:0 0 0 1px rgba(63,185,80,.12),0 8px 30px -12px rgba(63,185,80,.35);max-width:700px">
       <div class="t">✅ Worker rebuilt &amp; back in service</div>
-      <div class="d">Registered in Taskcluster on the correct pool, un-quarantined automatically, claiming CI tasks again — with the whole run watchable live in Hangar. Self-heals along the way (fixes a missing token, skips steps that don't apply).</div>
+      <div class="d">Registered in Taskcluster on the correct pool, un-quarantined automatically, claiming CI tasks again — with the
+        whole run watchable live in Hangar. Self-heals along the way (mints a missing token, skips steps that don't apply).</div>
+      <div class="proof">✔ Proven end-to-end on the M4 staging pool (m4-111…115); production pool verified ready.</div>
     </div>
   </div>
 
   <div class="legend">
     <span class="chip"><span class="dot" style="background:var(--gcp)"></span> <b>GCP</b> control plane (queue &amp; UI)</span>
     <span class="chip"><span class="dot" style="background:var(--mdc1)"></span> <b>MDC1</b> execution (the actual rebuild)</span>
-    <span class="chip"><span class="dot" style="background:var(--amber)"></span> destructive step</span>
+    <span class="chip"><span class="dot" style="background:var(--amber)"></span> destructive / on-host step</span>
     <span class="chip"><span class="dot" style="background:var(--ok)"></span> back in service</span>
   </div>
 
   <footer>
-    🔒 IAP + 5-person allowlist · mTLS runner auth · Cloud Armor scoped to the MDC1 egress · <span class="kw">no inbound path into the datacenter</span> ·
-    security-reviewed &nbsp;|&nbsp; Proven end-to-end on the M4 staging pool (m4-111…115); production pool verified ready.
+    🔒 IAP + 5-person allowlist · mTLS runner auth · Cloud Armor scoped to the MDC1 egress ·
+    <span class="kw">no inbound path into the datacenter</span> · security-reviewed
   </footer>
 </div>
 </body>
