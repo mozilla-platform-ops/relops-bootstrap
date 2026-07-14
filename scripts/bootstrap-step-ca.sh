@@ -6,11 +6,15 @@
 #
 # The caller (operator on their laptop) is expected to:
 #   1. Generate a random SCEP challenge and SCP it to /tmp/_scep_challenge
-#   2. Generate / SCP an x509 cert template to /tmp/scep-x509-template.json
-#      (a sample is in scripts/scep-x509-template.json.example)
-#   3. SCP this script to /tmp/ and run it
-#   4. Capture the root cert PEM from stdout
-#   5. Push the cert + challenge to Secret Manager
+#   2. SCP this script to /tmp/ and run it
+#   3. Capture the root cert PEM from stdout
+#   4. Push the cert + challenge to Secret Manager
+#
+# The x509 cert template is EMBEDDED below and rendered once per role from the
+# SCEP_ROLES table (one SCEP provisioner per macOS puppet role), so a CA rebuild
+# recreates every provisioner automatically. (Previously the template was SCP'd to
+# /tmp/scep-x509-template.json for a single hardcoded provisioner;
+# scripts/scep-x509-template.json.example remains as a reference of the rendered shape.)
 #
 # Why this script lives in-repo and not in terraform's startup script:
 #   step ca init requires interactive password generation + handles the CA root key
@@ -24,10 +28,26 @@ if ! command -v step-ca >/dev/null; then
   exit 1
 fi
 
-[ -r /tmp/_scep_challenge ]         || { echo "missing /tmp/_scep_challenge"; exit 2; }
-[ -r /tmp/scep-x509-template.json ] || { echo "missing /tmp/scep-x509-template.json"; exit 2; }
+[ -r /tmp/_scep_challenge ] || { echo "missing /tmp/_scep_challenge"; exit 2; }
 
-sudo chown step:step /tmp/_scep_challenge /tmp/scep-x509-template.json
+# Base x509 template for SCEP-issued client certs — identical for every macOS provisioner
+# except __SPIFFE_ROLE__, substituted per provisioner in the add loop below. The vault-broker
+# authorizes on the puppet role stamped into this SPIFFE URI.
+cat > /tmp/scep-x509-template.base.json <<'TMPL'
+{
+  "subject": {{ toJson .Subject }},
+  "sans": [
+    {{- range $i, $s := .SANs }}{{- if $i }},{{- end }}
+    {{ toJson $s }}
+    {{- end }},
+    { "type": "uri", "value": "spiffe://relops.mozilla/host/{{ .Subject.CommonName }}/role/__SPIFFE_ROLE__" }
+  ],
+  "keyUsage": ["digitalSignature","keyEncipherment"],
+  "extKeyUsage": ["clientAuth"]
+}
+TMPL
+
+sudo chown step:step /tmp/_scep_challenge /tmp/scep-x509-template.base.json
 
 sudo -u step bash <<'STEPUSER'
 set -euo pipefail
@@ -65,23 +85,37 @@ set -euo pipefail
 export STEPPATH=/home/step/.step
 CHALLENGE=$(cat /tmp/_scep_challenge)
 
-if step ca provisioner list \
-     --ca-url=https://step-ca.relops.mozilla:443 \
-     --root="$STEPPATH/certs/root_ca.crt" 2>/dev/null \
-   | grep -q '"name": "scep-no-sip"'; then
-  echo "scep-no-sip provisioner already configured, skipping add" >&2
-else
-  echo "=== adding scep-no-sip SCEP provisioner ===" >&2
-  step ca provisioner add scep-no-sip \
+# One SCEP provisioner per macOS puppet role. Each needs a populated vault-<role>
+# secret in Secret Manager + a SimpleMDM SCEP profile pointing at /scep/<name>.
+# Add a role here and a rebuild will recreate its provisioner automatically.
+declare -A SCEP_ROLES=(
+  ["scep-no-sip"]="gecko_t_osx_1500_m4"
+  ["scep-osx-1500-m4-staging"]="gecko_t_osx_1500_m4_staging"
+)
+
+for name in "${!SCEP_ROLES[@]}"; do
+  role="${SCEP_ROLES[$name]}"
+  if step ca provisioner list \
+       --ca-url=https://step-ca.relops.mozilla:443 \
+       --root="$STEPPATH/certs/root_ca.crt" 2>/dev/null \
+     | grep -q "\"name\": \"${name}\""; then
+    echo "${name} provisioner already configured, skipping add" >&2
+    continue
+  fi
+  echo "=== adding ${name} SCEP provisioner (role ${role}) ===" >&2
+  tmpl="/tmp/scep-x509-template-${name}.json"
+  sed "s/__SPIFFE_ROLE__/${role}/" /tmp/scep-x509-template.base.json > "$tmpl"
+  step ca provisioner add "${name}" \
     --type=SCEP \
     --force-cn \
     --challenge="$CHALLENGE" \
-    --x509-template=/tmp/scep-x509-template.json \
+    --x509-template="$tmpl" \
     --admin-provisioner=admin@mozilla.com \
     --admin-password-file="$STEPPATH/secrets/provisioner-password" \
     --ca-url=https://step-ca.relops.mozilla:443 \
     --root="$STEPPATH/certs/root_ca.crt" >&2
-fi
+  rm -f "$tmpl"
+done
 STEPUSER
 
 # Reload step-ca so the new provisioner takes effect.
@@ -94,4 +128,4 @@ sudo cat /home/step/.step/certs/root_ca.crt
 
 # Wipe the temp files — caller is responsible for re-uploading the challenge to
 # Secret Manager from their own host.
-sudo rm -f /tmp/_scep_challenge /tmp/scep-x509-template.json
+sudo rm -f /tmp/_scep_challenge /tmp/scep-x509-template.base.json
