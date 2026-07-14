@@ -6,7 +6,7 @@ so nothing touches a real host or API.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -106,14 +106,44 @@ def test_escrow_bst_raises_when_not_escrowed():
 
 # --- wipe guard ---
 
-def test_wipe_aborts_without_escrowed_bst():
-    """Refuse to wipe a box that can't EACS (no escrowed BST) — else it full-obliterates."""
+def test_wipe_auto_escrows_bst_then_proceeds():
+    """BST not escrowed at first → step_wipe escrows it in place, then wipes (self-heal)."""
+    n = {"status": 0}
+
+    def fake_run(fqdn, cmd, check=True, **kw):
+        m = MagicMock()
+        m.returncode = 0
+        m.stderr = b""
+        if "profiles status" in cmd:
+            n["status"] += 1
+            # 1st status = the step_wipe guard (NO); 2nd = step_escrow_bst's re-verify (YES)
+            m.stdout = b"escrowed to server: NO" if n["status"] == 1 else b"escrowed to server: YES"
+        else:
+            m.stdout = b""  # the `profiles install -type bootstraptoken` command
+        return m
+
     with patch("orchestrator.workflow.ssh.forget_host_key"), \
-         patch("orchestrator.workflow.ssh.run") as run:
-        run.return_value.returncode = 0  # ssh succeeded; the box genuinely has no BST
+         patch("orchestrator.workflow.ssh.run", side_effect=fake_run), \
+         patch("orchestrator.workflow.ssh_admin_password", return_value="pw"), \
+         patch("orchestrator.workflow.taskcluster.is_currently_busy", return_value=False), \
+         patch("orchestrator.workflow.simplemdm.get_device",
+               return_value={"attributes": {"enrolled_at": "2026-01-01T00:00:00Z"}}), \
+         patch("orchestrator.workflow.simplemdm.wipe") as wipe:
+        workflow.step_wipe(_ctx())
+    wipe.assert_called_once()
+
+
+def test_wipe_aborts_when_bst_unescrowable():
+    """No escrowed BST AND auto-escrow can't fix it → refuse to wipe (never obliterate)."""
+    with patch("orchestrator.workflow.ssh.forget_host_key"), \
+         patch("orchestrator.workflow.ssh.run") as run, \
+         patch("orchestrator.workflow.ssh_admin_password", return_value="pw"), \
+         patch("orchestrator.workflow.simplemdm.wipe") as wipe:
+        run.return_value.returncode = 0  # ssh works; box genuinely has no BST and escrow won't take
         run.return_value.stdout = b"profiles: Bootstrap Token escrowed to server: NO"
-        with pytest.raises(RuntimeError, match="not escrowed"):
+        with pytest.raises(RuntimeError, match="auto-escrow failed"):
             workflow.step_wipe(_ctx())
+        wipe.assert_not_called()
 
 
 def test_wipe_aborts_when_ssh_check_fails_without_claiming_no_bst():
