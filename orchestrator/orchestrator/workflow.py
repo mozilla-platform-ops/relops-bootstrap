@@ -32,6 +32,7 @@ class HostContext:
     worker_group: str = "mdc1"
     simplemdm_device_id: int | None = None
     pre_wipe_enrolled_at: str | None = None  # captured by step_wipe; used to detect a *fresh* re-enroll
+    registered: bool = True  # is the worker currently registered in TC? False => skip quarantine/drain
 
 
 def resolve(hostname: str) -> HostContext:
@@ -55,7 +56,12 @@ def resolve(hostname: str) -> HostContext:
     if not base_pool:
         raise ValueError(f"no worker pool mapping for role '{role}'")
     worker_group = "mdc1"
-    pool = taskcluster.find_registered_pool([f"{base_pool}-staging", base_pool], worker_group, hostname) or base_pool
+    found_pool = taskcluster.find_registered_pool([f"{base_pool}-staging", base_pool], worker_group, hostname)
+    # If registered nowhere (fresh host not yet in TC, or a prior wipe that never finished),
+    # fall back to the prod pool for any pool-scoped call, and flag it so the reprovision flow
+    # skips quarantine/drain — there's nothing scheduling tasks on an unregistered worker, so
+    # quarantining it would just 404 (fail-closed) and wedge the run.
+    pool = found_pool or base_pool
 
     fqdn = f"{hostname}.test.releng.mdc1.mozilla.com"
     device = simplemdm.find_device_by_name(hostname)
@@ -67,6 +73,7 @@ def resolve(hostname: str) -> HostContext:
         role=role,
         worker_pool_id=pool,
         simplemdm_device_id=device_id,
+        registered=found_pool is not None,
     )
 
 
@@ -353,16 +360,21 @@ def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = 
     ui.banner(ctx.hostname, ctx.role, ctx.worker_pool_id)
 
     # Show the whole pipeline up front so it never reads as a single opaque action.
-    phases = ["QUARANTINE", "DRAIN"]
+    phases = []
+    if ctx.registered:
+        phases += ["QUARANTINE", "DRAIN"]
     if not skip_wipe:
         phases += ["WIPE", "RE-ENROLL"]
     phases += ["MINT", "ESCROW BST", "BOOTSTRAP"]
-    if unquarantine:
+    if unquarantine and ctx.registered:
         phases += ["UNQUARANTINE"]
     ui.flow(phases)
 
-    step_quarantine(ctx)
-    step_drain(ctx)
+    if ctx.registered:
+        step_quarantine(ctx)
+        step_drain(ctx)
+    else:
+        ui.warn(f"{ctx.hostname} isn't registered in Taskcluster — skipping quarantine/drain (nothing to drain)")
     if not skip_wipe:
         step_wipe(ctx)
         step_wait_for_reenroll(ctx)
@@ -376,6 +388,7 @@ def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = 
     step_wait_for_sentinel(ctx)
     # Default: leave the host quarantined (matches current fleet reality; no un-quarantine
     # key wired). Only return it to service when explicitly asked — the eventual prod flow.
-    if unquarantine:
+    # Skip if we never quarantined it (host was unregistered at start).
+    if unquarantine and ctx.registered:
         step_unquarantine(ctx)
     ui.summary(ctx.hostname, time.monotonic() - started, quarantined=not unquarantine)
