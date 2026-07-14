@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zero-Touch Worker Reprovisioning — RelOps</title>
+<style>
+  :root{
+    --bg:#0b0f17; --panel:#141a24; --panel2:#0f151e; --line:#273142;
+    --ink:#e6edf3; --dim:#8b95a5; --faint:#5b6472;
+    --gcp:#4c8dff; --mdc1:#a371f7; --ok:#3fb950; --amber:#d29922; --pink:#ec6a9c;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:radial-gradient(1200px 700px at 50% -10%, #16202f 0%, var(--bg) 60%);
+    color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:40px 28px 56px}
+  header{text-align:center;margin-bottom:30px}
+  h1{font-size:30px;margin:0 0 8px;letter-spacing:-.5px}
+  .sub{color:var(--dim);font-size:15px;max-width:760px;margin:0 auto}
+  .tag{display:inline-block;margin-top:14px;padding:5px 12px;border:1px solid var(--line);border-radius:999px;
+    color:var(--dim);font-size:12px;letter-spacing:.4px}
+
+  .zone{border:1.5px dashed;border-radius:16px;padding:16px 18px 20px;margin:0 0 20px;position:relative;background:rgba(255,255,255,.012)}
+  .zone > .zlabel{position:absolute;top:-11px;left:18px;padding:2px 10px;border-radius:6px;font-size:11px;
+    font-weight:600;letter-spacing:.8px;text-transform:uppercase;background:var(--bg)}
+  .zone.gcp{border-color:rgba(76,141,255,.5)} .zone.gcp .zlabel{color:var(--gcp)}
+  .zone.mdc1{border-color:rgba(163,113,247,.5)} .zone.mdc1 .zlabel{color:var(--mdc1)}
+
+  .row{display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap}
+  .box{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
+    border-radius:12px;padding:14px 16px;min-width:180px;max-width:280px}
+  .box .t{font-weight:650;font-size:15px;display:flex;align-items:center;gap:8px}
+  .box .d{color:var(--dim);font-size:12.5px;margin-top:5px}
+  .box.accent-gcp{border-color:rgba(76,141,255,.55);box-shadow:0 0 0 1px rgba(76,141,255,.12),0 8px 30px -12px rgba(76,141,255,.35)}
+  .box.accent-mdc1{border-color:rgba(163,113,247,.55);box-shadow:0 0 0 1px rgba(163,113,247,.12),0 8px 30px -12px rgba(163,113,247,.35)}
+  .arrow{color:var(--faint);font-size:22px;flex:0 0 auto}
+  .updown{display:flex;flex-direction:column;align-items:center;color:var(--mdc1);font-size:12px;margin:6px 0}
+  .updown .a{font-size:20px;line-height:1}
+  .note{color:var(--faint);font-size:11.5px;text-align:center;margin-top:8px}
+
+  /* pipeline */
+  .pipe{display:grid;grid-template-columns:repeat(7,1fr);gap:0;margin:6px 0 4px}
+  .step{position:relative;background:linear-gradient(180deg,#151c27,#0f151e);border:1px solid var(--line);
+    padding:12px 12px 12px;text-align:center}
+  .step:first-child{border-radius:12px 0 0 12px} .step:last-child{border-radius:0 12px 12px 0}
+  .step:not(:last-child){border-right:none}
+  .step .n{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;
+    font-size:12px;font-weight:700;color:#0b0f17;background:var(--mdc1);margin-bottom:8px}
+  .step .st{font-weight:640;font-size:13px}
+  .step .sd{color:var(--dim);font-size:11px;margin-top:3px;line-height:1.35}
+  .step.eacs .n{background:var(--amber)} .step.done .n{background:var(--ok)}
+  .step .chev{position:absolute;right:-9px;top:50%;transform:translateY(-50%);z-index:2;color:var(--faint);font-size:16px;background:var(--bg);padding:0 1px}
+
+  .vault{margin-top:16px;background:rgba(236,106,156,.04);border:1px solid rgba(236,106,156,.35);border-radius:12px;padding:14px 16px}
+  .vault h3{margin:0 0 10px;font-size:12px;letter-spacing:.6px;text-transform:uppercase;color:var(--pink);font-weight:650}
+  .vrow{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap}
+  .vbox{background:#111722;border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:12.5px;min-width:120px;text-align:center}
+  .vbox .vd{color:var(--dim);font-size:11px;margin-top:2px}
+
+  .legend{display:flex;flex-wrap:wrap;gap:10px 22px;justify-content:center;margin-top:26px;color:var(--dim);font-size:12.5px}
+  .legend b{color:var(--ink);font-weight:600}
+  .chip{display:inline-flex;align-items:center;gap:7px}
+  .dot{width:9px;height:9px;border-radius:50%}
+  footer{margin-top:26px;text-align:center;color:var(--faint);font-size:11.5px}
+  .kw{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Zero-Touch Worker Reprovisioning</h1>
+    <p class="sub">One click in the Hangar dashboard rebuilds a Firefox-CI Mac from scratch and returns it to service —
+      no operator SSH, no manual steps. Spans Hangar (GCP), an on-network runner, SimpleMDM, step-ca and Puppet.</p>
+    <span class="tag">RelOps · macOS M4 CI fleet · MDC1</span>
+  </header>
+
+  <!-- CONTROL PLANE -->
+  <div class="zone gcp">
+    <span class="zlabel">Google Cloud · IAP-protected (can't reach the datacenter)</span>
+    <div class="row">
+      <div class="box">
+        <div class="t">🧑‍💻 Operator</div>
+        <div class="d">Opens Hangar in the browser, filters to a pool, clicks <b>Reprovision</b> (pool or picked hosts). Access is gated to a 5-person allowlist.</div>
+      </div>
+      <span class="arrow">→</span>
+      <div class="box accent-gcp">
+        <div class="t">🛰️ Hangar</div>
+        <div class="d">FastAPI + React on Cloud Run. It <b>can't SSH into the datacenter</b>, so it just <b>queues one job per host</b> and shows live progress.</div>
+      </div>
+      <span class="arrow">→</span>
+      <div class="box">
+        <div class="t">🗂️ Job queue</div>
+        <div class="d">Postgres. One reprovision job per worker, with a live event stream.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- bridge -->
+  <div class="updown">
+    <span class="a">↑ &nbsp; ↓</span>
+    <span>① the runner <b>pulls</b> jobs &amp; streams progress over <b>mTLS — outbound only</b> (nothing connects <i>into</i> MDC1)</span>
+  </div>
+
+  <!-- EXECUTION PLANE -->
+  <div class="zone mdc1">
+    <span class="zlabel">MDC1 datacenter · on-network</span>
+    <div class="row">
+      <div class="box accent-mdc1">
+        <div class="t">⚙️ Reprovision runner <span style="color:var(--faint);font-weight:500">(macmini-m4-81)</span></div>
+        <div class="d">Claims jobs from Hangar, then drives the full rebuild of the target worker. Runs up to <b>3 hosts at once</b> (bandwidth-friendly); returns each host to service automatically.</div>
+      </div>
+    </div>
+    <div class="note">② the runner executes the pipeline below against the target worker &nbsp;↓</div>
+
+    <!-- PIPELINE -->
+    <div class="pipe">
+      <div class="step"><div class="n">1</div><div class="st">Quarantine</div><div class="sd">stop new task claims<br>(Taskcluster)</div><span class="chev">›</span></div>
+      <div class="step"><div class="n">2</div><div class="st">Drain</div><div class="sd">let the in-flight<br>task finish</div><span class="chev">›</span></div>
+      <div class="step eacs"><div class="n">3</div><div class="st">EACS wipe</div><div class="sd">erase the Mac<br>(SimpleMDM)</div><span class="chev">›</span></div>
+      <div class="step"><div class="n">4</div><div class="st">Re-enroll</div><div class="sd">DEP auto-enroll<br>on reboot</div><span class="chev">›</span></div>
+      <div class="step"><div class="n">5</div><div class="st">SecureToken + BST</div><div class="sd">auto-mint &amp;<br>escrow token</div><span class="chev">›</span></div>
+      <div class="step"><div class="n">6</div><div class="st">Fetch secrets</div><div class="sd">SCEP cert →<br>mTLS vault</div><span class="chev">›</span></div>
+      <div class="step done"><div class="n">7</div><div class="st">Puppet + register</div><div class="sd">configure →<br>back in service</div></div>
+    </div>
+
+    <!-- VAULT DETAIL -->
+    <div class="vault">
+      <h3>Step 6 · how the fresh worker gets its secrets (no key on disk, no operator hand-off)</h3>
+      <div class="vrow">
+        <div class="vbox">🖥️ Worker<div class="vd">presents its SCEP client cert</div></div>
+        <span class="arrow">→</span>
+        <div class="vbox">🔐 forge LB<div class="vd">HTTPS · mTLS<br>forge.relops.mozilla.com</div></div>
+        <span class="arrow">→</span>
+        <div class="vbox">📜 vault-broker<div class="vd">Cloud Run · checks the<br>cert's role, then reads…</div></div>
+        <span class="arrow">→</span>
+        <div class="vbox">🗝️ Secret Manager<div class="vd">vault-&lt;role&gt;.yaml</div></div>
+      </div>
+      <div class="note">The cert is issued by <b>step-ca</b> during enrollment; the vault-broker only serves a role the cert is actually authorized for.</div>
+    </div>
+  </div>
+
+  <!-- END -->
+  <div class="row">
+    <div class="box" style="border-color:rgba(63,185,80,.55);box-shadow:0 0 0 1px rgba(63,185,80,.12),0 8px 30px -12px rgba(63,185,80,.35);max-width:640px">
+      <div class="t">✅ Worker rebuilt &amp; back in service</div>
+      <div class="d">Registered in Taskcluster on the correct pool, un-quarantined automatically, claiming CI tasks again — with the whole run watchable live in Hangar. Self-heals along the way (fixes a missing token, skips steps that don't apply).</div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span class="chip"><span class="dot" style="background:var(--gcp)"></span> <b>GCP</b> control plane (queue &amp; UI)</span>
+    <span class="chip"><span class="dot" style="background:var(--mdc1)"></span> <b>MDC1</b> execution (the actual rebuild)</span>
+    <span class="chip"><span class="dot" style="background:var(--amber)"></span> destructive step</span>
+    <span class="chip"><span class="dot" style="background:var(--ok)"></span> back in service</span>
+  </div>
+
+  <footer>
+    🔒 IAP + 5-person allowlist · mTLS runner auth · Cloud Armor scoped to the MDC1 egress · <span class="kw">no inbound path into the datacenter</span> ·
+    security-reviewed &nbsp;|&nbsp; Proven end-to-end on the M4 staging pool (m4-111…115); production pool verified ready.
+  </footer>
+</div>
+</body>
+</html>
