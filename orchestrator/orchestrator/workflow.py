@@ -172,12 +172,24 @@ def step_wipe(ctx: HostContext) -> None:
             f"{bst.stderr.decode(errors='replace').strip()}"
         )
     if b"escrowed to server: YES" not in bst.stdout:
-        raise ReprovisionError(
-            f"{ctx.fqdn}: Bootstrap Token not escrowed — EACS can't run, so a wipe would fail or "
-            f"full-obliterate (headless reinstall). Mint + escrow first (reprovision mint, escrow-bst), "
-            f"or wipe manually via the SimpleMDM UI if a full obliterate is truly intended."
-        )
-    ui.ok("Bootstrap Token escrowed — EACS can run")
+        # Not escrowed → EACS would fail (DoNotObliterate) or full-obliterate into a headless
+        # reinstall. The runner has admin creds and a registered host's admin already holds a
+        # SecureToken, so escrow it NOW rather than aborting — this self-heals hosts whose prior
+        # bootstrap never finished the escrow (e.g. a run that wedged at the Safari step, like
+        # m4-115). step_escrow_bst re-verifies and raises if it still can't escrow; only then do
+        # we refuse to wipe.
+        ui.warn("Bootstrap Token not escrowed — escrowing it now before the wipe")
+        try:
+            step_escrow_bst(ctx)
+        except ReprovisionError as e:
+            raise ReprovisionError(
+                f"{ctx.fqdn}: Bootstrap Token not escrowed and auto-escrow failed — NOT wiping.\n"
+                f"  {e}\n"
+                f"  Mint + escrow manually (reprovision mint, escrow-bst), or wipe via the SimpleMDM "
+                f"UI if a full obliterate is truly intended (requires admin to hold a SecureToken)."
+            ) from None
+    else:
+        ui.ok("Bootstrap Token escrowed — EACS can run")
     # Final gate against wiping a busy worker. Quarantine only stops NEW task claims — a task
     # claimed just before quarantine keeps running. `drain` waits that out in the full run, but
     # re-verify right here so a direct `wipe` (or a drain miss) can never erase a worker mid-task.
