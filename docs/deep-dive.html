@@ -231,7 +231,7 @@
 <div class="container">
 
 <header>
-  <div class="eyebrow">deep dive · ~45 min read</div>
+  <div class="eyebrow">deep dive · ~30 min read</div>
   <h1>How relops-bootstrap works, and why we trust it</h1>
   <p class="lede">
     A worked-through explanation of how an EACS'd Mac mini (or a fresh
@@ -243,7 +243,7 @@
   <div class="meta-line">
     Companion to <a href="https://mozilla-platform-ops.github.io/relops-bootstrap/">the architecture overview</a>
     · source at <a href="https://github.com/mozilla-platform-ops/relops-bootstrap">mozilla-platform-ops/relops-bootstrap</a>
-    · 2026-06-26
+    · 2026-07-15
   </div>
 </header>
 
@@ -551,7 +551,7 @@
 
 <div class="callout security">
   <div class="callout-label">Why we trust the broker</div>
-  <p>The broker has very little surface area. Its only sensitive operation is "read vault-&lt;role&gt; from Secret Manager," and its IAM binding allows <em>only that</em>. It does not sign anything, hold any private keys, or have administrative privileges on any other GCP resource. If the broker process is compromised, an attacker reads all <code>vault-*</code> secrets. That's bad — but it's the same blast radius as 1Password vault access, which any RelOps operator has. We've added rate limiting per cert serial (token bucket, refills 1/sec, burst 10) to slow down enumeration attacks, but the broker is fundamentally a thin proxy and we trust the GCP infrastructure to keep it isolated.</p>
+  <p>The broker has very little surface area. Its only sensitive operation is "read vault-&lt;role&gt; from Secret Manager," and its IAM binding allows <em>only that</em>. It does not sign anything, hold any private keys, or have administrative privileges on any other GCP resource. If the broker process is compromised, an attacker reads all <code>vault-*</code> secrets. That's bad — but it's the same blast radius as 1Password vault access, which any RelOps operator has. We've added rate limiting per cert serial (token bucket, refills 1/sec, burst 10) to slow down enumeration attacks — though note it's <em>in-memory and per-Cloud-Run-instance</em>, so under autoscaling the effective aggregate limit is higher than the per-instance numbers; it's a speed bump, not a hard global quota (a shared store like Memorystore would fix that). The broker is fundamentally a thin proxy and we trust the GCP infrastructure to keep it isolated.</p>
 </div>
 
 <h2 id="anatomy"><span class="num">4</span>Anatomy of one vault.yaml fetch</h2>
@@ -569,8 +569,12 @@
   with a private key whose ACL allows the OS network stack to sign with
   it. On Linux, this means a PEM cert + PEM key at
   <code>/etc/relops-bootstrap/{cert,key}.pem</code> owned by root with
-  0600 permissions. The cert's Subject Common Name is the host's name;
-  its SAN includes a SPIFFE URI binding it to one puppet role.
+  0600 permissions. The cert's Subject Common Name is whatever the SCEP
+  profile's subject renders to — on macOS that's the device
+  <code>%ComputerName%</code> (frequently the default "Mac mini", so the CN is
+  <em>not</em> a unique hostname), on Linux the host FQDN. The CN is only used
+  to locate the identity in the keychain; the authoritative field is the SAN's
+  SPIFFE URI, which binds the cert to exactly one puppet role.
 </p>
 
 <p>
@@ -687,12 +691,29 @@
 </code></pre>
 
 <p>
-  The connection from the LB to Cloud Run uses
-  <code>INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER</code>, meaning Cloud Run
-  refuses to accept requests from anywhere else — even a leaked Cloud
-  Run URL won't accept traffic. This is why we trust the
-  <code>X-Client-Cert-*</code> headers without further validation: an
-  attacker can't bypass the LB and forge them.
+  This is the load-bearing invariant of the whole design, so it's worth
+  stating precisely. The broker does <strong>not</strong> re-verify the
+  cert chain — it trusts the LB's <code>X-Client-Cert-Chain-Verified</code>
+  header. Two facts make that safe, and a security review should confirm both:
+</p>
+<ol>
+  <li><strong>The LB overwrites the header names it injects.</strong> The
+    <code>custom_request_headers</code> on the backend service
+    (<code>terraform/lb.tf</code>) set each <code>X-Client-Cert-*</code> value
+    the broker reads, overwriting any inbound value for those names — so a
+    client cannot present a forged <code>X-Client-Cert-Chain-Verified: true</code>.</li>
+  <li><strong>Nothing can reach the broker except through the LB.</strong>
+    Cloud Run ingress is <code>INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER</code>
+    (live value <code>internal-and-cloud-load-balancing</code>), so a direct
+    request to the Cloud Run URL is refused at the platform layer — even though
+    <code>allUsers</code> holds <code>roles/run.invoker</code> (the standard
+    grant for an LB-fronted service, gated entirely by that ingress setting).</li>
+</ol>
+<p>
+  Together these mean an attacker can't bypass the LB and forge the headers.
+  <strong>The corollary a reviewer should note: if that ingress setting were
+  ever relaxed, the header trust would become an authentication bypass.</strong>
+  That single setting is what earns the broker the right to trust its headers.
 </p>
 
 <h3>Step 6: broker parses and authorizes</h3>
@@ -913,6 +934,17 @@ san = leaf.extensions.get_extension_for_oid(<span class="field">SUBJECT_ALTERNAT
 </div>
 
 <h2 id="linux"><span class="num">6</span>Linux — same primitive, different constraints</h2>
+
+<div class="callout gotcha">
+  <div class="callout-label">Status: designed &amp; scaffolded, not yet live (2026-07)</div>
+  <p>The Linux flow below is implemented and its six step-ca SCEP provisioners
+  exist, but the corresponding <code>vault-*</code> Secret Manager containers are
+  currently <strong>empty (0 versions)</strong> — so an enrollment would mint a
+  cert but the fetch would have nothing to return. The Linux path is <em>not</em>
+  functional end-to-end until those secrets are populated and a real-host test
+  (ronin_puppet PR #1253) is completed. The live, proven platform today is macOS
+  (m4). Read this section as the design, not a running system.</p>
+</div>
 
 <p>
   Linux has no MDM. There is no daemon that runs at first boot and
@@ -1207,8 +1239,9 @@ san = leaf.extensions.get_extension_for_oid(<span class="field">SUBJECT_ALTERNAT
 <p>
   <em>Residual risk:</em> "read all vault-* secrets" is real. We
   mitigate <em>how easy</em> a compromise is by keeping the broker
-  surface area tiny (it's ~150 lines of FastAPI; no crypto code; no
-  user input parsing beyond the URL path), but we do not mitigate
+  surface area tiny (it's ~150 lines of FastAPI; no cryptography of its own
+  beyond parsing the leaf cert to read its SAN; no user input beyond the URL
+  path), but we do not mitigate
   the consequence. This is the same blast radius as compromising
   operator 1Password access, which RelOps has lived with for years.
 </p>
@@ -1278,14 +1311,17 @@ san = leaf.extensions.get_extension_for_oid(<span class="field">SUBJECT_ALTERNAT
 <h3>The macOS provisioning experience</h3>
 
 <p>
-  Operator clicks "Erase All Content and Settings" on a worker in the
-  SimpleMDM dashboard. The device wipes. DEP re-enrollment kicks in.
-  SimpleMDM pushes the assigned profiles, including
+  An operator clicks <strong>Reprovision</strong> in Hangar (one host or a
+  whole pool); the on-network runner drives the rest. It quarantines and drains
+  the worker in Taskcluster, then triggers EACS. The device wipes and DEP
+  re-enrollment kicks in. SimpleMDM pushes the assigned profiles, including
   <code>Dev - SCEP</code>. <code>mdmclient</code> enrolls a fresh cert
-  into the System keychain. The operator mints the first SecureToken via
-  one interactive ssh login (DEP skips Setup Assistant, so admin holds no
-  token until a PAM login — a script or PKG cannot grant the <em>first</em>
-  SecureToken), and the Bootstrap Token is escrowed alongside it. The
+  into the System keychain. The runner then <strong>auto-mints</strong> the first
+  SecureToken over an on-host ssh login (DEP skips Setup Assistant, so admin
+  holds no token until a PAM login — and Apple only grants the <em>first</em>
+  SecureToken through an interactive session, which is exactly why the driver
+  must be on-network; a script/PKG can't), and the Bootstrap Token is escrowed
+  alongside it. The
   bootstrap — a signed PKG (managed install) built from
   <code>scripts/simplemdm-m4-no-sip-bootstrap.sh</code> that lands during
   DEP convergence and runs as root — then runs
@@ -1299,11 +1335,13 @@ san = leaf.extensions.get_extension_for_oid(<span class="field">SUBJECT_ALTERNAT
 </p>
 
 <p>
-  Total operator touches: one click on EACS. Optionally, one SSH login
-  if the Bootstrap Token isn't already escrowed (rare, only on certain
-  pre-existing state). The entire flow from EACS click to "worker
-  registered in Taskcluster" is roughly 30-45 minutes wall-clock; most
-  of that is puppet doing real installation work, not our bootstrap.
+  Total operator touches: <strong>one click</strong> in Hangar — the runner
+  handles quarantine, drain, EACS, mint, escrow, and un-quarantine, and streams
+  every phase back to a live view. The entire flow from click to "worker
+  re-registered in Taskcluster" is roughly 30-45 minutes wall-clock; most
+  of that is puppet doing real installation work, not our bootstrap. (The
+  individual steps are also runnable directly from the <code>reprovision</code>
+  CLI for a single host without Hangar.)
 </p>
 
 <h3>The Linux provisioning experience</h3>
@@ -1397,9 +1435,10 @@ san = leaf.extensions.get_extension_for_oid(<span class="field">SUBJECT_ALTERNAT
 <ul>
   <li><strong>Per-role SCEP challenges.</strong> Currently all provisioners share one challenge. Splitting them would limit blast radius of a leak. step-ca supports per-provisioner challenges natively; the lift is rotating the challenge in SimpleMDM profiles + Secret Manager.</li>
   <li><strong>Challenge rotation.</strong> The challenge is currently static. Rotating it on a schedule (e.g. monthly) would meaningfully reduce the risk of an undetected long-term leak. SimpleMDM profile updates can re-deliver it.</li>
-  <li><strong>CRL / revocation.</strong> Not currently implemented. step-ca supports CRL endpoints; the broker would need to fetch + cache the CRL and check incoming cert serials. Cert lifetimes are 24 hours so revocation gets you ~half a day of reduction in window of misuse — not zero but not nothing.</li>
+  <li><strong>CRL / revocation.</strong> Not currently implemented. step-ca supports CRL endpoints; the broker would need to fetch + cache the CRL and check incoming cert serials. Cert lifetimes are 24 hours (step-ca's built-in default — <em>not</em> explicitly pinned in <code>ca.json</code>, so it should be set explicitly if we ever want to rely on it) so revocation gets you ~half a day of reduction in window of misuse — not zero but not nothing.</li>
   <li><strong>Hardware-bound keys.</strong> macOS: blocked by Apple's <code>com.apple.identities</code> entitlement model; revisit if Apple loosens it. Linux: feasible via TPM 2.0; not currently a priority.</li>
-  <li><strong>Per-role expansion.</strong> r8, staging, catalina (macOS) and the remaining Linux roles each need a step-ca SCEP provisioner + SimpleMDM SCEP profile + populated Secret Manager secret. Mechanical follow-up work; ~30 min per role.</li>
+  <li><strong>Per-role expansion.</strong> Live today: the m4 family (<code>gecko_t_osx_1500_m4</code>, <code>…_staging</code>, <code>…_no_sip</code>) has both a provisioner and a populated secret. r8 and 1015 aren't started (empty secret containers, no provisioner); the six Linux roles have provisioners but empty secrets (see §6). Each remaining role is a step-ca SCEP provisioner + SimpleMDM SCEP profile + populated Secret Manager secret — mechanical, ~30 min per role.</li>
+  <li><strong>Remove dead CA config.</strong> The live step-ca still carries an <code>acme-no-sip</code> ACME provisioner from the abandoned attestation experiment (<a href="#deadends">dead end 2</a>) and the repo keeps <code>mdm/acme-relops.mobileconfig.template</code>. Neither is used; they should be pruned so the CA's provisioner list matches what's actually in service. Relatedly, <code>scripts/bootstrap-step-ca.sh</code> only codifies two SCEP provisioners while the live CA has eight — that IaC drift should be closed so the CA is reproducible from code.</li>
   <li><strong>Windows hardware support.</strong> Same architecture would work natively on Windows (native cert store, <code>Invoke-RestMethod -Certificate</code>, or <code>curl.exe --cert</code>). Pending finding where the existing Windows bootstrap.ps1 lives — it's not in ronin_puppet.</li>
   <li><strong>Audit dashboard.</strong> Cloud Audit Logs has everything but a per-role/per-host view requires querying. A small page in <a href="https://github.com/mozilla-platform-ops/hangar">hangar</a> would surface this nicely.</li>
 </ul>

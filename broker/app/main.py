@@ -37,13 +37,6 @@ async def healthz() -> str:
     return "ok"
 
 
-@app.get("/_debug/headers")
-async def debug_headers(request: Request) -> dict:
-    """Dump the request headers the broker actually receives. Used to verify
-    LB-forwarded mTLS headers during bring-up. Remove after the mTLS vault fetch is proven."""
-    return {k: v for k, v in request.headers.items()}
-
-
 @app.get("/secret/{role}")
 async def get_secret(
     role: str,

@@ -19,22 +19,28 @@ session to type `vault.yaml` into. Every secret read is logged with the
 requesting cert's serial number — *"who pulled what, when"* is a one-liner
 in Cloud Audit Logs.
 
-**Status:** Validated end-to-end on m4-80 + m4-81 (2026-07) — EACS → DEP enroll →
-SimpleMDM profiles + signed **bootstrap PKG** → SCEP cert in keychain → operator mints
-the SecureToken (one interactive ssh login) → bootstrap PKG fetches vault.yaml → puppet →
-worker in Taskcluster. Driven by the `orchestrator/` CLI (`reprovision`). The one required
-human step per host is the **SecureToken mint** — DEP skips Setup Assistant, so admin holds
-no token until a PAM (password) login; everything else is hands-off. (The bootstrap is now a
-signed PKG that lands during DEP convergence — no GCP/script-job trigger.)
+**Status:** Zero-touch and live for the **m4 pools** (2026-07). One flow, driven by the
+`orchestrator/` CLI (`reprovision`): quarantine → drain → EACS wipe → DEP re-enroll →
+SimpleMDM profiles + signed **bootstrap PKG** → SCEP cert in keychain → auto-mint SecureToken
++ escrow Bootstrap Token → bootstrap PKG fetches `vault.yaml` → puppet → worker re-registered
+in Taskcluster → auto-unquarantine. Proven end-to-end across the m4 staging pool
+(`macmini-m4-111…115`) and verified reprovision-ready on the m4 production pool.
 
-**Now one-click from Hangar (2026-07).** The whole reprovision is a button in the
-[hangar](https://github.com/mozilla-platform-ops/hangar) fleet dashboard. Hangar (Cloud Run)
-can't reach MDC1, so it only *queues* a job; a **Puppet-managed on-network runner** claims it
-over **mTLS** (outbound only), runs `reprovision`, and streams every phase back into a live
-cockpit. The runner is fully declarative — ronin_puppet role `gecko_t_osx_1500_m4_reprovision_runner`
-(Python + this repo's `orchestrator` under a LaunchDaemon, creds from the host's `vault.yaml`).
-**Proven end-to-end in prod:** a Hangar click reprovisioned `macmini-m4-80` via the managed
-runner on `macmini-m4-81`. The operator no longer even needs a terminal.
+**Why the SecureToken mint needs an on-network runner.** DEP skips Setup Assistant, so the
+managed admin holds no SecureToken until a PAM (password) login — and Apple only grants the
+*first* SecureToken through an interactive login session, which in this context can only be
+driven over an **on-host SSH session**. That single Apple constraint is why the driver has to
+run inside the datacenter. The runner performs that login automatically (`reprovision mint`
+/ `scripts/mint-securetoken.sh`), so it is **not** a manual per-host step — it's the reason
+the runner is on-network rather than a Cloud Run job.
+
+**One-click from Hangar.** The whole reprovision is a button in the
+[hangar](https://github.com/mozilla-platform-ops/hangar) fleet dashboard (individual host or a
+whole pool). Hangar (Cloud Run) can't reach MDC1, so it only *queues* a job; a
+**Puppet-managed on-network runner** (`macmini-m4-81`, ronin_puppet role
+`gecko_t_osx_1500_m4_reprovision_runner` — the `orchestrator` under a LaunchDaemon) claims it
+over **mTLS, outbound-only**, runs `reprovision`, and streams every phase back into a live
+view. Nothing dials *into* the datacenter. The operator never needs a terminal.
 
 ---
 
@@ -46,8 +52,8 @@ runner on `macmini-m4-81`. The operator no longer even needs a terminal.
                  │                                                 │
                  │   1. DEP enroll (Setup Assistant skipped) →      │
                  │      managed admin (fixed DEP password)          │
-                 │   2. Operator mints the first SecureToken via    │
-                 │      one interactive ssh login; BST escrowed     │
+                 │   2. Runner auto-mints the first SecureToken     │
+                 │      over an on-host ssh login; BST escrowed      │
                  │   3. SCEP profile → mdmclient → keypair +        │
                  │      cert in System keychain                     │
                  │   4. Signed bootstrap PKG (managed install):     │
@@ -80,7 +86,7 @@ runner on `macmini-m4-81`. The operator no longer even needs a terminal.
        │                                                                              │
        │                                           🔐 Secret Manager                  │
        │                                              vault-<role> per puppet role    │
-       │                                              (mirrors 1P "RelOps Vault")     │
+       │                                              (mirrors the 1P "RelOps" vault) │
        │                                                                              │
        └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -141,10 +147,10 @@ silently drops URI SANs with URL-encoded chars (e.g. `Mac%20mini`).
 │   ├── payload/                  ─ /usr/local/sbin/m4-bootstrap.sh + entrypoint LaunchDaemon
 │   └── scripts/postinstall       ─ kicks the entrypoint on install
 │
-├── provisioner/                  ⏰  GCP cron auto-trigger — six default-deny guards
-│   └── app/                      ─ Cloud Run: Scheduler tick → guard checks → SimpleMDM
-│                                   script-job. The earlier delivery path; the signed PKG
-│                                   (pkg/) now lands the bootstrap at DEP convergence instead.
+│   (provisioner/ — the old Cloud Scheduler → Cloud Run cron reconciler that fired
+│    SimpleMDM script-jobs — was DECOMMISSIONED 2026-07. It is superseded by the signed
+│    PKG (delivery at DEP convergence) + the Hangar on-network runner (orchestration).
+│    Removed from the repo and torn down in GCP; see git history if you need the guard logic.)
 │
 ├── mdm/                          📱  SimpleMDM artifacts
 │   ├── scep-relops.mobileconfig.template
@@ -233,7 +239,9 @@ gcloud run deploy vault-broker \
 For each puppet role, mirror the 1Password entry into Secret Manager:
 
 ```bash
-op read "op://RelOps Vault/vault-gecko_t_osx_1500_m4/notesPlain" \
+# Team 1Password vault is named "RelOps" (matches orchestrator/config.py); adjust
+# the item/field to your per-role vault.yaml entry.
+op read "op://RelOps/Puppet Vault Auth - gecko-t-osx-1500-m4/notesPlain" \
   | gcloud secrets versions add vault-gecko_t_osx_1500_m4 --data-file=-
 ```
 
@@ -250,16 +258,18 @@ want to provision via the broker.
 install) assigned to the device group, so it lands during DEP convergence and runs on its
 own — no SimpleMDM script-job, no GCP trigger. It:
 
-1. Waits for admin to hold a SecureToken — the operator mints it via **one interactive ssh
-   login** (DEP skips Setup Assistant, so admin has no token until a PAM login; a script
-   can't grant the *first* SecureToken). BST escrow happens alongside the mint.
+1. Waits for admin to hold a SecureToken — the **runner** mints the first one over an on-host
+   ssh login (DEP skips Setup Assistant, so admin has no token until a PAM login, and Apple
+   only grants the *first* SecureToken interactively — a script/PKG can't). BST escrow happens
+   alongside the mint.
 2. Discovers the SCEP identity in the keychain by issuer DN
 3. Fetches the role-scoped `vault.yaml` from the broker via SecureTransport curl
 4. Clones ronin_puppet, sets up ssh-to-localhost, installs the m4-bootstrap-driver
    LaunchDaemon (which loops `run-puppet.sh` until the safari semaphores fire)
 
-The mint + BST escrow are driven operator-side by `reprovision mint` / `reprovision
-escrow-bst` (or the standalone `scripts/mint-securetoken.sh`).
+The mint + BST escrow are driven by `reprovision mint` / `reprovision escrow-bst` (the
+standalone `scripts/mint-securetoken.sh`), which the on-network runner runs automatically as
+part of the pipeline — no manual per-host login.
 
 ---
 
@@ -267,16 +277,25 @@ escrow-bst` (or the standalone `scripts/mint-securetoken.sh`).
 
 | Layer | Mechanism | Protects against |
 |---|---|---|
-| Cloud Run ingress | `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` | random internet traffic |
-| HTTPS LB | Cloud Armor source-CIDR allowlist | off-network attackers |
-| HTTPS LB | mTLS via Trust Config (step-ca root + intermediate) | requests without a valid step-ca-issued cert |
-| Broker app | Reads LB-forwarded `X-Client-Cert-Chain-Verified` + parses leaf for SPIFFE | spoofed headers (LB strips client-supplied X-Client-Cert-* before adding its own) |
-| Broker app | Role from cert SPIFFE URI must match URL path role | role escalation / cross-host secret theft |
-| Broker app | Per-cert-serial rate limit | credential abuse |
-| Broker IAM | Per-secret binding (no project-wide grants) | lateral movement if broker is compromised |
-| Cloud Audit | Every secret read logged with cert serial | after-the-fact incident response |
-| Cert lifecycle | SCEP auto-renew, short cert lifetime | long-lived compromised credentials |
-| Cert private key | macOS System keychain ACL-restricted to network-stack helpers | key exfiltration by non-OS code |
+| Cloud Run ingress | `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` (live value: `internal-and-cloud-load-balancing`) | direct-to-broker traffic that skips the LB (spoofed cert headers). **Load-bearing** — the broker trusts the LB's chain verdict, so this is what makes header trust safe |
+| HTTPS LB | Cloud Armor source-CIDR allowlist (default-deny; allow `63.245.209.101/32`) | off-network attackers — blocked before TLS terminates, on both the broker and step-ca backends |
+| HTTPS LB | mTLS via Trust Config (step-ca root + intermediate) | requests without a valid step-ca-issued cert (chain validated at the LB) |
+| HTTPS LB | LB **overwrites** the `X-Client-Cert-*` header names it injects | forged auth headers — an inbound client cannot set `X-Client-Cert-Chain-Verified: true` itself for the names the LB manages |
+| Broker app | Requires LB-set `X-Client-Cert-Present` + `-Chain-Verified` = `true`, else 401 (does not re-verify the chain) | unauthenticated fetches |
+| Broker app | Role from cert SPIFFE URI must exactly match URL path role, else 403 | role escalation / cross-host secret theft |
+| Broker app | Per-cert-serial rate limit, else 429 (in-memory, **per-instance** — a speed bump, not a global quota) | brute-force enumeration from a single instance |
+| Broker IAM | Per-secret binding to `vault-*` + `step-ca-root-cert` only (no project-wide grant) | lateral movement if the broker is compromised |
+| Cloud Audit | Every Secret Manager read logged with cert serial (app log + platform audit log) | after-the-fact incident response |
+| Cert lifecycle | 24h cert lifetime (step-ca default; not explicitly pinned in `ca.json`) | long-lived compromised credentials |
+| Cert private key | macOS System keychain ACL-restricted to network-stack helpers (`KeyIsExtractable=false`) | key exfiltration by non-OS code |
+
+> **Trust boundary (state this plainly in a review):** the broker does **no**
+> cryptography of its own beyond parsing the leaf to read the role — it trusts
+> the LB's `X-Client-Cert-Chain-Verified` header. That is safe only because (a)
+> the LB overwrites those header names, and (b) Cloud Run ingress blocks any
+> request that did not transit the LB. Relaxing the ingress setting would turn
+> the header trust into an auth bypass. See [`SECURITY.md`](SECURITY.md) for the
+> command that proves each of these.
 
 ---
 
@@ -284,8 +303,8 @@ escrow-bst` (or the standalone `scripts/mint-securetoken.sh`).
 
 | URL | What it is |
 |---|---|
-| `https://forge.relops.mozilla.com` | vault-broker (path `/secret/{role}`) AND step-ca (`/scep/*`), HTTPS LB-fronted with Google-managed server cert + mTLS for `/secret/*` |
-| Cloud Run direct URL | broker, for debug-only (no LB-forwarded mTLS headers; broker returns 401) |
+| `https://forge.relops.mozilla.com` | Single HTTPS LB (Google-managed server cert). URL map: `/scep/*` + `/acme/*` → step-ca backend; everything else (incl. `/secret/{role}`) → vault-broker backend. The LB requests a client cert on all paths (`ALLOW_INVALID_OR_MISSING_CLIENT_CERT`) so `/scep/*` works cert-less; `/secret/*` authentication is enforced in the **broker**, not the LB |
+| Cloud Run direct URL | Not reachable from off-LB traffic — ingress is `internal-and-cloud-load-balancing`, so a direct request is refused at the platform layer (it does not reach the broker) rather than returning a 401 |
 
 Vault fetch status (m4 role): proven end-to-end. The validating call from a
 real EACS'd m4 returns the full role-scoped vault.yaml with the broker's
@@ -293,12 +312,21 @@ strict checks all green.
 
 ## 🛠️ Open work
 
-- 🪪 **Per-role expansion** — currently one step-ca SCEP provisioner +
-  matching SimpleMDM profile for the `gecko_t_osx_1500_m4` role. Repeat for
-  `gecko_t_osx_1500_m4_staging`, `gecko_t_osx_1400_r8`, `gecko_t_osx_1015`.
-  Each is mechanical: new provisioner with template hardcoding the role in
-  the SPIFFE URI + new "Dev - SCEP - <role>" SimpleMDM profile + populate
-  the corresponding Secret Manager secret.
+- 🪪 **Per-role expansion** — verified live state (2026-07):
+  - **Live** (SCEP provisioner + populated `vault-*` secret): `gecko_t_osx_1500_m4`
+    (`scep-no-sip`), `gecko_t_osx_1500_m4_staging` (`scep-osx-1500-m4-staging`), and
+    `gecko_t_osx_1500_m4_no_sip`.
+  - **Scaffolded, not functional:** the six `gecko_t_linux_*` roles have step-ca SCEP
+    provisioners **but their `vault-*` secrets are empty (0 versions)** — enrollment would
+    succeed but the fetch has nothing to return. Not usable until the secrets are populated
+    (and the Linux operator-side flow is re-validated — see the Linux notes in `docs/`).
+  - **Not started:** `gecko_t_osx_1400_r8`, `gecko_t_osx_1015` — empty secret containers, no
+    provisioner yet.
+  - Each remaining role is mechanical: new provisioner with a template hardcoding the role in
+    the SPIFFE URI + a "Dev - SCEP - <role>" SimpleMDM profile + a populated Secret Manager
+    secret. **Note:** the live step-ca has more provisioners (the six Linux SCEP + an unused
+    `acme-no-sip` ACME provisioner) than `scripts/bootstrap-step-ca.sh` currently codifies
+    (two) — that IaC drift should be closed so the CA can be rebuilt from code.
 - 🔁 **Cloud Build trigger** — `cloudbuild.yaml` exists, OAuth-flow UI
   got stuck during initial wire-up; switch to a PAT-based webhook trigger
   or retry the GitHub App connection. Manual `gcloud builds submit` works.

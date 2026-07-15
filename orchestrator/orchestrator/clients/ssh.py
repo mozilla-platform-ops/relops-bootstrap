@@ -1,6 +1,9 @@
 """
-Thin SSH wrapper. Uses the local ssh binary so the operator's existing ssh-agent
-+ known_hosts are reused. No paramiko/asyncssh dep.
+Thin SSH wrapper around the local ssh binary (no paramiko/asyncssh dep). Reuses
+the operator's ssh-agent, but deliberately uses a *tool-owned* known_hosts file
+(see _tool_known_hosts) rather than the operator's ~/.ssh/known_hosts — reprovision
+targets rotate their host key on every EACS, and a single stale/bad line in the
+operator's file would make ssh-keygen -R refuse the whole file.
 """
 
 from __future__ import annotations

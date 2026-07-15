@@ -37,9 +37,17 @@
 #        printf "%s" "$CHALLENGE" | \
 #          gcloud secrets versions add step-ca-scep-challenge --data-file=-
 
-# Latest Debian 12 image — auto-resolved by family name.
+# Debian 12 boot image, PINNED to a specific version.
+#
+# Do NOT use `family = "debian-12"` here: a family lookup auto-resolves to the
+# latest published image, so every `terraform apply` would see a new image and
+# want to REPLACE this VM. The CA keys live on the attached step-ca-state disk
+# (below) and survive a replace, but a replace still swaps in a fresh boot disk
+# (losing the step-ca service setup) and changes the VM's internal IP — i.e. it
+# takes the CA offline. Pinning makes `apply` deterministic. Bump this string
+# deliberately (and validate) when you actually want a new base image.
 data "google_compute_image" "debian" {
-  family  = "debian-12"
+  name    = "debian-12-bookworm-v20260609"
   project = "debian-cloud"
 }
 
