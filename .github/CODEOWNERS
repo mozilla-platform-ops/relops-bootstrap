@@ -1,0 +1,36 @@
+# CODEOWNERS — require RelOps review for security-critical changes.
+#
+# @mozilla-platform-ops/relops owns the trust / network / auth surface of the
+# zero-touch provisioning system. Changes under the paths below require a review
+# from that team, enforced by branch protection ("Require review from Code
+# Owners" on main). Pure docs (README.md, docs/*.html, sub-READMEs) are
+# intentionally NOT gated, to keep documentation low-friction.
+#
+# PREREQUISITE: the relops team must have WRITE access to this repo, or GitHub
+# silently ignores these rules.
+
+# The CODEOWNERS file itself — so the protection can't be quietly removed.
+/.github/CODEOWNERS              @mozilla-platform-ops/relops
+
+# GCP infrastructure: LB, mTLS/Trust Config, Cloud Armor CIDR allowlist, ingress,
+# per-secret IAM, step-ca VM/firewalls, secret containers, CA trust PEMs.
+/terraform/                     @mozilla-platform-ops/relops
+
+# Broker auth logic (mTLS header validation, SPIFFE role binding, secret read).
+/broker/                        @mozilla-platform-ops/relops
+
+# step-ca provisioner + SPIFFE x509 template definitions (issuing certs per role).
+/scripts/bootstrap-step-ca.sh   @mozilla-platform-ops/relops
+
+# Reprovision orchestrator, incl. the destructive-action safety guards
+# (drain / pre-wipe idle re-check / DoNotObliterate).
+/orchestrator/                  @mozilla-platform-ops/relops
+
+# SimpleMDM SCEP enrollment profile / MDM artifacts.
+/mdm/                           @mozilla-platform-ops/relops
+
+# Broker build+deploy pipeline.
+/cloudbuild.yaml                @mozilla-platform-ops/relops
+
+# The security-review claims/verification doc.
+/SECURITY.md                    @mozilla-platform-ops/relops
