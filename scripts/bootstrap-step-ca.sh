@@ -30,9 +30,9 @@ fi
 
 [ -r /tmp/_scep_challenge ] || { echo "missing /tmp/_scep_challenge"; exit 2; }
 
-# Base x509 template for SCEP-issued client certs — identical for every macOS provisioner
-# except __SPIFFE_ROLE__, substituted per provisioner in the add loop below. The vault-broker
-# authorizes on the puppet role stamped into this SPIFFE URI.
+# Base x509 template for SCEP-issued client certs — identical for every provisioner
+# (macOS and Linux) except __SPIFFE_ROLE__, substituted per provisioner in the add loop
+# below. The vault-broker authorizes on the puppet role stamped into this SPIFFE URI.
 cat > /tmp/scep-x509-template.base.json <<'TMPL'
 {
   "subject": {{ toJson .Subject }},
@@ -85,12 +85,25 @@ set -euo pipefail
 export STEPPATH=/home/step/.step
 CHALLENGE=$(cat /tmp/_scep_challenge)
 
-# One SCEP provisioner per macOS puppet role. Each needs a populated vault-<role>
-# secret in Secret Manager + a SimpleMDM SCEP profile pointing at /scep/<name>.
-# Add a role here and a rebuild will recreate its provisioner automatically.
+# One SCEP provisioner per puppet role. Each needs a populated vault-<role> secret
+# in Secret Manager + (macOS) a SimpleMDM SCEP profile or (Linux) an sscep enroll,
+# both pointing at /scep/<name>. Add a role here and a rebuild recreates its
+# provisioner automatically. This table must match the live CA's provisioner list
+# (`step ca provisioner list`) so the CA is reproducible from code.
+#
+# NOTE ON STATUS (2026-07): only the macOS m4 family has populated vault-* secrets
+# and is live. The gecko_t_linux_* provisioners are in service on the CA but their
+# secrets are still empty (the Linux path is scaffolded, not yet functional) — they
+# are codified here so the CA stays reproducible, not because Linux is live.
 declare -A SCEP_ROLES=(
   ["scep-no-sip"]="gecko_t_osx_1500_m4"
   ["scep-osx-1500-m4-staging"]="gecko_t_osx_1500_m4_staging"
+  ["scep-gecko-t-linux-talos"]="gecko_t_linux_talos"
+  ["scep-gecko-t-linux-2204-talos"]="gecko_t_linux_2204_talos"
+  ["scep-gecko-t-linux-2404-talos"]="gecko_t_linux_2404_talos"
+  ["scep-gecko-t-linux-2404-talos-wayland"]="gecko_t_linux_2404_talos_wayland"
+  ["scep-gecko-t-linux-netperf"]="gecko_t_linux_netperf"
+  ["scep-gecko-t-linux-2404-netperf"]="gecko_t_linux_2404_netperf"
 )
 
 for name in "${!SCEP_ROLES[@]}"; do

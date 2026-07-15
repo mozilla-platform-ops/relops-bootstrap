@@ -154,7 +154,6 @@ silently drops URI SANs with URL-encoded chars (e.g. `Mac%20mini`).
 │
 ├── mdm/                          📱  SimpleMDM artifacts
 │   ├── scep-relops.mobileconfig.template
-│   ├── acme-relops.mobileconfig.template     ─ historical (ACME path investigated)
 │   └── com.mozilla.relops.bootstrap.plist     ─ optional periodic refresh daemon
 │
 ├── scripts/                      🛠️  Operator helpers + worker bootstrap
@@ -303,7 +302,7 @@ part of the pipeline — no manual per-host login.
 
 | URL | What it is |
 |---|---|
-| `https://forge.relops.mozilla.com` | Single HTTPS LB (Google-managed server cert). URL map: `/scep/*` + `/acme/*` → step-ca backend; everything else (incl. `/secret/{role}`) → vault-broker backend. The LB requests a client cert on all paths (`ALLOW_INVALID_OR_MISSING_CLIENT_CERT`) so `/scep/*` works cert-less; `/secret/*` authentication is enforced in the **broker**, not the LB |
+| `https://forge.relops.mozilla.com` | Single HTTPS LB (Google-managed server cert). URL map: `/scep/*` (and a now-unused `/acme/*`) → step-ca backend; everything else (incl. `/secret/{role}`) → vault-broker backend. The LB requests a client cert on all paths (`ALLOW_INVALID_OR_MISSING_CLIENT_CERT`) so `/scep/*` works cert-less; `/secret/*` authentication is enforced in the **broker**, not the LB |
 | Cloud Run direct URL | Not reachable from off-LB traffic — ingress is `internal-and-cloud-load-balancing`, so a direct request is refused at the platform layer (it does not reach the broker) rather than returning a 401 |
 
 Vault fetch status (m4 role): proven end-to-end. The validating call from a
@@ -324,9 +323,9 @@ strict checks all green.
     provisioner yet.
   - Each remaining role is mechanical: new provisioner with a template hardcoding the role in
     the SPIFFE URI + a "Dev - SCEP - <role>" SimpleMDM profile + a populated Secret Manager
-    secret. **Note:** the live step-ca has more provisioners (the six Linux SCEP + an unused
-    `acme-no-sip` ACME provisioner) than `scripts/bootstrap-step-ca.sh` currently codifies
-    (two) — that IaC drift should be closed so the CA can be rebuilt from code.
+    secret. `scripts/bootstrap-step-ca.sh` codifies all eight live SCEP provisioners (2 macOS +
+    6 Linux), so the CA is reproducible from code; the abandoned `acme-no-sip` ACME provisioner
+    has been pruned from the live CA.
 - 🔁 **Cloud Build trigger** — `cloudbuild.yaml` exists, OAuth-flow UI
   got stuck during initial wire-up; switch to a PAT-based webhook trigger
   or retry the GitHub App connection. Manual `gcloud builds submit` works.
