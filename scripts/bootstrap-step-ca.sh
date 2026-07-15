@@ -98,6 +98,13 @@ CHALLENGE=$(cat /tmp/_scep_challenge)
 declare -A SCEP_ROLES=(
   ["scep-no-sip"]="gecko_t_osx_1500_m4"
   ["scep-osx-1500-m4-staging"]="gecko_t_osx_1500_m4_staging"
+  # macOS Apple Silicon build (arm64). L3 (gecko_3_b / enterprise_3_b) are release-trusted;
+  # per-role SCEP challenges are recommended before those pools carry live secrets (see below).
+  ["scep-gecko-1-b-osx-arm64"]="gecko_1_b_osx_arm64"
+  ["scep-gecko-3-b-osx-arm64"]="gecko_3_b_osx_arm64"
+  ["scep-enterprise-1-b-osx-arm64"]="enterprise_1_b_osx_arm64"
+  ["scep-enterprise-3-b-osx-arm64"]="enterprise_3_b_osx_arm64"
+  # Linux
   ["scep-gecko-t-linux-talos"]="gecko_t_linux_talos"
   ["scep-gecko-t-linux-2204-talos"]="gecko_t_linux_2204_talos"
   ["scep-gecko-t-linux-2404-talos"]="gecko_t_linux_2404_talos"

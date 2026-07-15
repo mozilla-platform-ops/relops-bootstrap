@@ -21,10 +21,19 @@ variable "puppet_roles" {
   description = "Puppet roles for which we provision a vault.yaml Secret Manager container"
   type        = list(string)
   default = [
-    # macOS hardware
+    # macOS hardware — Apple Silicon test (M4)
     "gecko_t_osx_1500_m4",
     "gecko_t_osx_1500_m4_no_sip",
     "gecko_t_osx_1500_m4_staging",
+
+    # macOS hardware — Apple Silicon build (M2, arm64). L3 (gecko_3_b / enterprise_3_b)
+    # are release-trusted; see SECURITY.md before their secrets are populated / they go live.
+    "gecko_1_b_osx_arm64",
+    "gecko_3_b_osx_arm64",
+    "enterprise_1_b_osx_arm64",
+    "enterprise_3_b_osx_arm64",
+
+    # macOS hardware — Intel (parked; vault-fetch portable, EACS/mint half is Apple-Silicon-shaped)
     "gecko_t_osx_1400_r8",
     "gecko_t_osx_1015",
 
