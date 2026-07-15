@@ -291,7 +291,7 @@
       <span class="icon">🔀</span>ronin_puppet PR #1253 (Linux)
     </a>
     <span class="sep">·</span>
-    <span>Updated 2026-06-26</span>
+    <span>Updated 2026-07-15</span>
   </div>
 </header>
 
@@ -327,9 +327,10 @@
     </p>
     <p style="font-size: 14.5px;">
       <strong>Provisioning</strong> — EACS a Mac mini. SimpleMDM pushes profiles + the
-      signed bootstrap PKG; the operator mints the SecureToken via one ssh login (DEP skips
-      Setup Assistant), then the bootstrap fetches vault.yaml, puppet provisions, and the
-      worker registers in Taskcluster. One interactive step; the rest is hands-off.
+      signed bootstrap PKG; the on-network runner auto-mints the SecureToken over an on-host
+      ssh login (DEP skips Setup Assistant, and Apple only grants the first token
+      interactively), then the bootstrap fetches vault.yaml, puppet provisions, and the
+      worker registers in Taskcluster. Fully hands-off — one Hangar click.
     </p>
     <p style="font-size: 14.5px;">
       <strong>Re-provisioning</strong> — Same flow. Worker dies, replace hardware,
@@ -458,7 +459,7 @@
     <text x="416" y="619" class="label-small mono">vault-gecko_t_osx_1400_r8</text>
     <text x="416" y="636" class="label-small mono">vault-gecko_t_osx_1015</text>
     <text x="416" y="653" class="label-small mono">vault-gecko_t_linux_…  (×6)</text>
-    <text x="600" y="676" text-anchor="middle" class="label-small">Content mirrors 1Password "RelOps Vault"</text>
+    <text x="600" y="676" text-anchor="middle" class="label-small">Content mirrors the 1Password "RelOps" vault</text>
   </g>
 
   <!-- Linux worker column -->
@@ -753,8 +754,8 @@
 <div class="status-row">
   <span style="font-size:18px;">🍎</span>
   <div>
-    <strong>macOS m4 — proven end-to-end on m4-80 + m4-81</strong>
-    <div class="dim" style="font-size:13px;">EACS → DEP enroll → SimpleMDM profiles + signed bootstrap PKG → SCEP cert in keychain → operator mints SecureToken (one ssh login) → bootstrap fetches vault.yaml → puppet → worker registered in Taskcluster.</div>
+    <strong>macOS m4 — zero-touch, live across the m4 pools</strong>
+    <div class="dim" style="font-size:13px;">One click in Hangar (individual host or whole pool): quarantine → drain → EACS → DEP enroll → SimpleMDM profiles + signed bootstrap PKG → SCEP cert in keychain → runner <em>auto-mints</em> the SecureToken over an on-host ssh login (the reason the runner is on-network) → bootstrap fetches vault.yaml → puppet → worker re-registered → auto-unquarantine. Proven across the m4 staging pool (m4-111…115); m4 production verified ready.</div>
   </div>
   <span class="pill done">Live</span>
 </div>
@@ -762,10 +763,10 @@
 <div class="status-row">
   <span style="font-size:18px;">🐧</span>
   <div>
-    <strong>Linux talos — implementation complete</strong>
-    <div class="dim" style="font-size:13px;">Per-role step-ca SCEP provisioners stood up. Secret containers ready. <code>bootstrap_linux.sh</code> + <code>deliver_linux.sh</code> changes in ronin_puppet PR <a href="https://github.com/mozilla-platform-ops/ronin_puppet/pull/1253" style="color:var(--accent)">#1253</a>. Pending a real-host test from @aerickson before merge.</div>
+    <strong>Linux talos — scaffolded, not yet functional</strong>
+    <div class="dim" style="font-size:13px;">The six per-role step-ca SCEP provisioners exist, but their <code>vault-*</code> Secret Manager containers are <strong>empty (0 versions)</strong> — an enrollment would mint a cert but the fetch has nothing to return. Not usable until the secrets are populated. <code>bootstrap_linux.sh</code> + <code>deliver_linux.sh</code> in ronin_puppet PR <a href="https://github.com/mozilla-platform-ops/ronin_puppet/pull/1253" style="color:var(--accent)">#1253</a>; pending a real-host test before merge. (macOS is the proven, live path — see the reprovision flow diagram.)</div>
   </div>
-  <span class="pill test">Awaiting test</span>
+  <span class="pill next">Not live</span>
 </div>
 
 <div class="status-row">

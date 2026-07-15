@@ -13,8 +13,9 @@ class Settings(BaseSettings):
         description="GCP project ID; auto-detected on Cloud Run",
     )
 
-    # SPIFFE URI structure that step-ca puts in cert SANs (forwarded by the
-    # LB as X-Client-Cert-SPIFFE after it validates the chain).
+    # SPIFFE URI structure that step-ca puts in cert SANs. The broker parses
+    # this out of the leaf cert itself (see auth.py) — it does NOT rely on the
+    # LB's X-Client-Cert-SPIFFE header, which silently drops URL-encoded URIs.
     # Format: spiffe://relops.mozilla/host/<hostname>/role/<puppet_role>
     spiffe_trust_domain: str = Field(default="relops.mozilla")
 
