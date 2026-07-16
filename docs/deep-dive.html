@@ -558,8 +558,9 @@
 
 <p>
   Let's walk through a single request from the worker's perspective, in
-  detail. Assume the worker has already been enrolled — we'll come back
-  to enrollment afterward.
+  detail. Assume the worker has already been enrolled — if you want the
+  prequel (what EACS and DEP re-enrollment actually do to get here), see
+  <a href="eacs.html">what EACS actually does</a>.
 </p>
 
 <h3>Step 0: the worker has a cert</h3>
@@ -1516,6 +1517,7 @@ san = leaf.extensions.get_extension_for_oid(<span class="field">SUBJECT_ALTERNAT
   <p>
     Companion docs:
     <a href="https://mozilla-platform-ops.github.io/relops-bootstrap/">architecture overview</a> ·
+    <a href="eacs.html">what EACS actually does</a> ·
     <a href="https://github.com/mozilla-platform-ops/relops-bootstrap">source</a> ·
     <a href="https://github.com/mozilla-platform-ops/ronin_puppet/pull/1253">Linux integration PR</a>
   </p>
