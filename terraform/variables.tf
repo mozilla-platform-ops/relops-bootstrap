@@ -26,6 +26,14 @@ variable "puppet_roles" {
     "gecko_t_osx_1500_m4_no_sip",
     "gecko_t_osx_1500_m4_staging",
 
+    # macOS Apple Silicon test (M4) — Tart VM tester pool (gecko-t-osx-1500-m-vms).
+    # Host-mediated vault injection: the MDM-enrolled tart *host* fetches this
+    # vault from the broker (mTLS) and injects it into the credential-free VM at
+    # launch, so no secret is baked into the image or held on the build runner
+    # (the root cause of Bug 2049579).
+    "gecko_t_osx_1500_m_vms",
+    "gecko_t_osx_1500_m_vms_staging",
+
     # macOS hardware — Apple Silicon build (M2, arm64). L3 (gecko_3_b / enterprise_3_b)
     # are release-trusted; see SECURITY.md before their secrets are populated / they go live.
     "gecko_1_b_osx_arm64",
