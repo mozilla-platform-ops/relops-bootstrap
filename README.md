@@ -10,7 +10,7 @@ from a brokered Secret Manager* — covers every operator-driven flow:
 
 | 🚀 | first-time provisioning of brand-new hardware out of DEP enrollment |
 |----|----|
-| 🔄 | re-provisioning an existing host via EACS *(Erase All Content and Settings)* |
+| 🔄 | re-provisioning an existing host via EACS *(Erase All Content and Settings — [what that actually does, button-press → re-enroll](https://mozilla-platform-ops.github.io/relops-bootstrap/eacs.html))* |
 | 🪪 | re-keying a host whose cert was compromised or whose role changed |
 | ⏳ | routine cert rotation — SCEP renews on its own, no operator action |
 
@@ -170,6 +170,7 @@ silently drops URI SANs with URL-encoded chars (e.g. `Mac%20mini`).
 │
 ├── docs/                         📖  rendered walkthrough (index.html + deep-dive.html)
 │                                    + reprovision-architecture.html (one-page flow diagram)
+│                                    + eacs.html (what EACS actually does, button-press → re-enroll)
 ├── .github/workflows/test.yml    ✅  CI: pytest + terraform fmt/validate
 └── cloudbuild.yaml               🚀  build + push + deploy broker on commit
 ```

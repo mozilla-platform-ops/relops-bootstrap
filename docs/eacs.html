@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>relops-bootstrap — what EACS actually does</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2128;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --mac: #ff8e3c;
+    --linux: #a371f7;
+    --gcp: #56d364;
+    --warn: #e3b341;
+    --danger: #f85149;
+    --shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    line-height: 1.7;
+    font-size: 16px;
+  }
+  .container { max-width: 880px; margin: 0 auto; padding: 64px 32px 96px; }
+  header { margin-bottom: 48px; }
+  .eyebrow {
+    color: var(--accent);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  h1 {
+    font-size: 42px;
+    font-weight: 700;
+    margin: 0 0 16px;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+  }
+  .lede { color: var(--text); font-size: 19px; line-height: 1.55; margin: 0 0 8px; }
+  .meta-line { color: var(--text-dim); font-size: 14px; margin-top: 16px; }
+  .meta-line a { color: var(--accent); text-decoration: none; }
+  .meta-line a:hover { text-decoration: underline; }
+
+  h2 {
+    font-size: 28px;
+    font-weight: 700;
+    margin: 56px 0 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    line-height: 1.3;
+  }
+  h2 .num {
+    color: var(--text-dim);
+    font-weight: 400;
+    font-size: 22px;
+    margin-right: 12px;
+  }
+  h3 { font-size: 19px; font-weight: 600; margin: 32px 0 10px; color: var(--text); }
+  h4 { font-size: 16px; font-weight: 600; margin: 24px 0 6px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+  p { margin: 14px 0; }
+  a { color: var(--accent); }
+  strong { color: #fff; font-weight: 600; }
+  em { color: var(--text); font-style: italic; }
+
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13.5px;
+    background: var(--panel-2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #ffb86c;
+  }
+  pre {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  pre code { background: none; padding: 0; color: var(--text); }
+  .comment { color: var(--text-dim); font-style: italic; }
+  .keyword { color: #ff7b72; }
+  .string  { color: #a5d6ff; }
+  .field   { color: #79c0ff; }
+
+  .toc {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin: 32px 0;
+  }
+  .toc h3 { margin-top: 0; color: var(--accent); font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
+  .toc ol { padding-left: 22px; margin: 8px 0; column-count: 1; }
+  .toc li { margin: 4px 0; }
+  .toc a { color: var(--text); text-decoration: none; }
+  .toc a:hover { color: var(--accent); }
+
+  blockquote {
+    margin: 24px 0;
+    padding: 14px 22px;
+    border-left: 3px solid var(--accent);
+    background: rgba(88,166,255,0.05);
+    color: var(--text);
+    font-style: italic;
+  }
+  blockquote p:first-child { margin-top: 0; }
+  blockquote p:last-child { margin-bottom: 0; }
+
+  .callout {
+    margin: 28px 0;
+    padding: 18px 24px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel);
+  }
+  .callout.security { border-left: 4px solid var(--gcp); }
+  .callout.gotcha   { border-left: 4px solid var(--warn); }
+  .callout.danger   { border-left: 4px solid var(--danger); }
+  .callout.aside    { border-left: 4px solid var(--accent); background: rgba(88,166,255,0.04); }
+  .callout-label {
+    color: var(--gcp);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+  }
+  .callout.gotcha .callout-label { color: var(--warn); }
+  .callout.danger .callout-label { color: var(--danger); }
+  .callout.aside .callout-label  { color: var(--accent); }
+  .callout p:first-of-type { margin-top: 0; }
+  .callout p:last-of-type  { margin-bottom: 0; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 14.5px;
+    vertical-align: top;
+  }
+  th { background: var(--panel-2); color: var(--text-dim); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  tr:last-child td { border-bottom: none; }
+  td .mono, th .mono { background: var(--panel-2); }
+
+  .step { color: var(--accent); font-weight: 700; font-family: ui-monospace, SFMono-Regular, monospace; }
+
+  /* two-column survives / destroyed panel */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 28px 0; }
+  @media (max-width: 680px) { .grid-2 { grid-template-columns: 1fr; } }
+  .panel {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 22px;
+    background: var(--panel);
+  }
+  .panel.survives { border-left: 4px solid var(--gcp); }
+  .panel.destroyed { border-left: 4px solid var(--danger); }
+  .panel h4 { margin-top: 0; }
+  .panel.survives h4 { color: var(--gcp); }
+  .panel.destroyed h4 { color: var(--danger); }
+  .panel ul { margin: 8px 0 0; padding-left: 20px; }
+
+  ul, ol { padding-left: 24px; }
+  li { margin: 8px 0; }
+
+  hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 48px 0;
+  }
+
+  footer {
+    margin-top: 64px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <div class="eyebrow">reference · ~12 min read</div>
+  <h1>What actually happens when you press "Erase All Content and Settings"</h1>
+  <p class="lede">
+    Every relops-bootstrap reprovision starts with the same three words —
+    <em>Erase All Content and Settings</em> — fired at a Mac mini over MDM.
+    This page is the missing prequel to the <a href="deep-dive.html">deep
+    dive</a>: what the OS does between the button press and the moment the
+    host is re-enrolled and ready for our SCEP profile. No fluff, no reinstall,
+    and — spoiler — no multi-gigabyte download.
+  </p>
+  <div class="meta-line">
+    Companion to <a href="index.html">the architecture overview</a>
+    and <a href="deep-dive.html">the deep dive</a>
+    · scope ends the instant enrollment completes (the deep dive picks up there)
+    · Apple Silicon focus, macOS 12→26
+  </div>
+</header>
+
+<div class="callout aside">
+  <div class="callout-label">Where this sits in our flow</div>
+  <p>
+    The <code>orchestrator</code> pipeline is <span class="mono">quarantine → drain →
+    <strong>EACS wipe → DEP re-enroll</strong> → SimpleMDM profiles + signed bootstrap PKG →
+    SCEP cert → SecureToken + BST escrow → vault.yaml → puppet → re-registered in TC</span>.
+    This document zooms into just the two bold steps. Everything after
+    "enrollment completes" is the <a href="deep-dive.html">deep dive</a>'s territory.
+  </p>
+</div>
+
+<div class="toc">
+  <h3>Contents</h3>
+  <ol>
+    <li><a href="#tldr">The whole thing in three sentences</a></li>
+    <li><a href="#command">The command, and the token that gates it</a></li>
+    <li><a href="#erase">The erase: one key, thrown away</a></li>
+    <li><a href="#survives">What survives, what dies</a></li>
+    <li><a href="#setup">Reboot → Setup Assistant → re-enroll</a></li>
+    <li><a href="#network">The network traffic, in order</a></li>
+    <li><a href="#allowlist">The MDC1 allowlist</a></li>
+    <li><a href="#silicon-vs-t2">Apple Silicon vs T2 Intel</a></li>
+    <li><a href="#timeline">What changed, by macOS version</a></li>
+    <li><a href="#gaps">What we couldn't nail down</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</div>
+
+<h2 id="tldr"><span class="num">1</span>The whole thing in three sentences</h2>
+
+<p>
+  <strong>EACS is a cryptographic erase, not a reinstall.</strong> The MDM sends an
+  <code>EraseDevice</code> command; the Mac asks the Secure Enclave to destroy the one key
+  that unlocks the Data volume, creates a fresh empty Data volume, and reboots straight into
+  Setup Assistant <em>on the same macOS it was already running</em>. It then does an ordinary
+  Automated Device Enrollment handshake — activate, fetch its enrollment profile from Apple,
+  install our MDM payload, get a client identity cert — and it's back.
+</p>
+
+<div class="callout gotcha">
+  <div class="callout-label">The myth we keep having to bust</div>
+  <p>
+    "The wipe takes under five minutes, so it can't be pulling an OS image." Correct — and
+    that's the whole design. EACS <em>never touches the installed OS</em>. It throws away a
+    key; that's an instant operation regardless of how full the disk was. If you ever see a
+    reprovision that <em>does</em> sit there downloading gigabytes, something has gone wrong
+    (a fallback to old-style obliteration, or a T2 box — see <a href="#silicon-vs-t2">§8</a>),
+    and that's a signal, not normal behavior.
+  </p>
+</div>
+
+<h2 id="command"><span class="num">2</span>The command, and the token that gates it</h2>
+
+<p>
+  Pressing the button in SimpleMDM queues a standard MDM <code>EraseDevice</code> command
+  (Apple's canonical schema lives in <code>apple/device-management</code>, <code>device.erase.yaml</code>).
+  The key that decides the erase <em>strategy</em> is <code>ObliterationBehavior</code>
+  (String, macOS 12.0+):
+</p>
+
+<table>
+  <thead><tr><th>Value</th><th>What the device does</th></tr></thead>
+  <tbody>
+    <tr><td><span class="mono">Default</span></td><td>Try EACS; if preflight fails, fall back to obliteration (the macOS 11.x "wipe the whole disk" behavior).</td></tr>
+    <tr><td><span class="mono">DoNotObliterate</span></td><td>Try EACS; if preflight fails, return an <em>Error</em> status and <strong>do not erase</strong>. Safest for "EACS or nothing."</td></tr>
+    <tr><td><span class="mono">ObliterateWithWarning</span></td><td>Try EACS; fall back to obliteration, but surface a warning.</td></tr>
+    <tr><td><span class="mono">Always</span></td><td>Skip EACS entirely; force obliteration on T2+ devices.</td></tr>
+  </tbody>
+</table>
+
+<p>
+  On M-series and T2 Macs running macOS 12+, the default path <em>is</em> EACS. The key has
+  <strong>no effect on pre-T2 Intel</strong> — those have no Secure Enclave, so there's no key
+  to destroy, and they always take the slow reinstall/obliterate route.
+</p>
+
+<div class="callout danger">
+  <div class="callout-label">The one gotcha that will ruin your afternoon</div>
+  <p>
+    On <strong>macOS 12.0.1 and later, the MDM must be holding an escrowed Bootstrap Token to
+    silently authorize the EACS command.</strong> No escrowed token → the command doesn't
+    silently run. The token is auto-generated when a SecureToken-enabled user logs in for the
+    first time (macOS 10.15.4+) and escrowed to the MDM if it supports it.
+  </p>
+  <p>
+    This is <em>the</em> load-bearing prerequisite for our whole reprovision loop, and it's why
+    the orchestrator mints a SecureToken and escrows the BST as an explicit step. Watch the two
+    classic failure modes: a token that was <em>generated but never escrowed</em>, and a token
+    that landed on the wrong account (e.g. <code>cltbld</code> instead of the managed admin).
+    Either one leaves the MDM unable to fire EACS, and the failure looks like "the button did
+    nothing."
+  </p>
+</div>
+
+<h2 id="erase"><span class="num">3</span>The erase: one key, thrown away</h2>
+
+<p>
+  This phase is pure local cryptography and generates <strong>essentially zero network
+  traffic</strong>. Here's the mechanism, straight from Apple's Platform Security guide:
+</p>
+
+<ol>
+  <li>On the internal SSD, the Data volume's file-system key is wrapped by an <strong>effaceable / media key</strong> that lives under the <strong>Secure Enclave's anti-replay protection</strong>.</li>
+  <li>EACS tells the Enclave to <strong>destroy that key</strong>. That single act renders the entire Data volume "cryptographically inaccessible" — every file becomes undecryptable ciphertext <em>instantly</em>, with <strong>no overwrite of the flash</strong>. Anti-replay guarantees the old key can't be resurrected.</li>
+  <li>A <strong>new random file-metadata key is generated</strong> — Apple's wording is that the metadata key is created "when the operating system is first installed <em>or when the user completes Erase All Content and Settings</em>."</li>
+  <li>A fresh, empty Data volume is created (observed at roughly <strong>300&nbsp;MB</strong> afterward).</li>
+</ol>
+
+<blockquote>
+  <p>
+    "…the best way to securely erase its entire contents is to destroy its encryption key …
+    anti-replay techniques to ensure that previous keys can't be reused." Destroying the key
+    "renders all files cryptographically inaccessible."
+  </p>
+</blockquote>
+
+<h2 id="survives"><span class="num">4</span>What survives, what dies</h2>
+
+<div class="grid-2">
+  <div class="panel survives">
+    <h4>✓ Survives, untouched</h4>
+    <ul>
+      <li>The <strong>Signed System Volume</strong> (SSV) — same macOS version, still sealed</li>
+      <li><strong>Preboot</strong></li>
+      <li><strong>Recovery</strong></li>
+      <li>The macOS installer bits already on disk (nothing is re-fetched)</li>
+    </ul>
+  </div>
+  <div class="panel destroyed">
+    <h4>✗ Gone (cryptographically)</h4>
+    <ul>
+      <li>The entire <strong>Data volume</strong> — all user data, accounts, secrets</li>
+      <li>The <strong>Data-volume encryption keys</strong> in the Secure Enclave</li>
+      <li>Any escrowed local state; the box comes up un-enrolled</li>
+    </ul>
+  </div>
+</div>
+
+<p>
+  Because the OS itself is never rebuilt or re-downloaded, the machine reboots
+  <strong>directly into Setup Assistant</strong> on the pre-existing macOS. This is the reason
+  there's no <code>swscan</code> / <code>swcdn</code> / <code>InstallAssistant</code> /
+  <code>mesu</code> traffic, and the reason it's fast.
+</p>
+
+<h2 id="setup"><span class="num">5</span>Reboot → Setup Assistant → re-enroll</h2>
+
+<p>
+  Now the network wakes up. Setup Assistant walks a fixed sequence: activate the hardware, ask
+  Apple "who owns me and where do I enroll?", then enroll against <em>our</em> MDM. Supervised
+  ADE Macs on macOS 11+ can <strong>Auto Advance</strong> through this with no human at the
+  keyboard — which is exactly what a headless CI mini needs.
+</p>
+
+<ol>
+  <li><strong>Activation</strong> — the device authenticates itself to Apple and gets its activation record.</li>
+  <li><strong>ADE / DEP lookup</strong> — the device fetches its <em>Activation Record</em>, which names our MDM's enrollment URL and the ADE config (skip keys, supervision, non-removable enrollment).</li>
+  <li><strong>MDM enrollment</strong> — the device connects to our MDM URL and installs the enrollment profile, which minimally contains:
+    <ul>
+      <li>root + intermediate certs to establish <strong>SSL trust</strong>,</li>
+      <li>a <strong>client identity certificate</strong> — via an <strong>ACME</strong> payload (Apple's current recommendation), a <strong>SCEP</strong> payload, or a PKCS&nbsp;#12 container,</li>
+      <li>the <strong>MDM payload</strong> itself.</li>
+    </ul>
+  </li>
+  <li>The device becomes <strong>supervised</strong>, and enrollment is complete. <em>(Our story continues in the <a href="deep-dive.html">deep dive</a> from here: SimpleMDM pushes the SCEP profile, the cert lands in the keychain, and the bootstrap PKG fetches <code>vault.yaml</code>.)</em></li>
+</ol>
+
+<div class="callout aside">
+  <div class="callout-label">For the curious</div>
+  <p>
+    The "client identity certificate" in step 3 is generic Apple enrollment — it's the cert the
+    MDM protocol itself uses. Don't confuse it with <em>our</em> step-ca SCEP cert, which
+    SimpleMDM delivers <em>after</em> enrollment via a separate <code>com.apple.security.scep</code>
+    profile and which is the one that actually unlocks the vault broker. Two different certs,
+    two different CAs, two different jobs.
+  </p>
+</div>
+
+<h2 id="network"><span class="num">6</span>The network traffic, in order</h2>
+
+<p>
+  Everything Apple-side is HTTPS on TCP&nbsp;443 <em>except</em> APNs. Here's the full wire
+  sequence from reboot to enrolled:
+</p>
+
+<table>
+  <thead><tr><th>#</th><th>Host</th><th>Port</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td>—</td><td><em>Secure Enclave (local)</em></td><td>none</td><td>key destruction — no packets</td></tr>
+    <tr><td><span class="step">1</span></td><td><span class="mono">albert.apple.com</span><br><span class="mono">gs.apple.com</span></td><td>443</td><td>device activation + glue services</td></tr>
+    <tr><td><span class="step">2</span></td><td><span class="mono">iprofiles.apple.com</span></td><td>443</td><td>fetch the Activation Record / enrollment profile</td></tr>
+    <tr><td><span class="step">3</span></td><td><span class="mono">mdmenrollment.apple.com</span><br><span class="mono">deviceenrollment.apple.com</span></td><td>443</td><td>ADE lookup → returns our MDM URL</td></tr>
+    <tr><td><span class="step">4</span></td><td><span class="mono">gdmf.apple.com</span></td><td>443</td><td>software-update catalog lookup (not a payload download)</td></tr>
+    <tr><td><span class="step">5</span></td><td><em>SimpleMDM</em> CheckIn / ServerURL</td><td>443</td><td>install the MDM enrollment profile</td></tr>
+    <tr><td><span class="step">6</span></td><td>our CA <span class="dim">(via the SCEP/ACME payload)</span></td><td>443</td><td>issue the device identity cert</td></tr>
+    <tr><td><span class="step">7</span></td><td><span class="mono">*.push.apple.com</span></td><td>5223 / 2197 / 443</td><td>APNs channel (see below)</td></tr>
+  </tbody>
+</table>
+
+<p>
+  APNs is the one that trips up firewalls: <strong>devices connect out on TCP&nbsp;5223</strong>
+  (with 443 as fallback), while the <strong>MDM server pushes on TCP&nbsp;2197</strong> (the
+  legacy provider ports 2195/2196 were retired in Nov&nbsp;2020). All of it lives inside Apple's
+  <code>17.0.0.0/8</code> block.
+</p>
+
+<h2 id="allowlist"><span class="num">7</span>The MDC1 allowlist</h2>
+
+<p>
+  For our locked-down datacenter network, the takeaway is refreshingly small:
+</p>
+
+<table>
+  <thead><tr><th>Need it?</th><th>Hosts / ports</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr>
+      <td style="color:var(--gcp);font-weight:700">YES</td>
+      <td><span class="mono">albert</span>, <span class="mono">gs</span>, <span class="mono">iprofiles</span>, <span class="mono">mdmenrollment</span>, <span class="mono">deviceenrollment</span>, <span class="mono">gdmf</span>.apple.com — all :443</td>
+      <td>activation + ADE lookup + enrollment</td>
+    </tr>
+    <tr>
+      <td style="color:var(--gcp);font-weight:700">YES</td>
+      <td>SimpleMDM endpoints :443</td>
+      <td>install profile + ongoing management</td>
+    </tr>
+    <tr>
+      <td style="color:var(--gcp);font-weight:700">YES</td>
+      <td><span class="mono">*.push.apple.com</span> — device :5223/:443 out, server :2197</td>
+      <td>APNs push channel</td>
+    </tr>
+    <tr>
+      <td style="color:var(--warn);font-weight:700">NO*</td>
+      <td><span class="mono">swscan</span> / <span class="mono">swcdn</span> / <span class="mono">oscdn</span> / <span class="mono">mesu</span> / <span class="mono">InstallAssistant</span></td>
+      <td>content servers — <em>not touched</em> by Apple-Silicon EACS. *Keep them open only if you also support T2 fallback or genuine reinstalls.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout security">
+  <div class="callout-label">Use the /8, not a hand-picked subnet</div>
+  <p>
+    Apple's official guidance is to allow outbound to the whole <code>17.0.0.0/8</code> on 5223
+    + 443 rather than chase narrower ranges. When researching this we specifically
+    <strong>refuted</strong> a widely-copied "precise" list (<code>17.248.128.0/17</code>, various
+    IPv6 blocks, etc.) — zero of three independent verifications could substantiate it against a
+    primary source. Don't build a firewall rule on those subnets; they drift and they were never
+    authoritative.
+  </p>
+</div>
+
+<h2 id="silicon-vs-t2"><span class="num">8</span>Apple Silicon vs T2 Intel</h2>
+
+<table>
+  <thead><tr><th></th><th>Apple Silicon (M-series)</th><th>T2 Intel</th><th>Pre-T2 Intel</th></tr></thead>
+  <tbody>
+    <tr><td><strong>EACS available?</strong></td><td>Yes</td><td>Yes</td><td>No</td></tr>
+    <tr><td><strong>Mechanism</strong></td><td>Secure Enclave destroys the media key</td><td>Secure Enclave (T2) destroys the media key</td><td>No enclave — full obliterate/reinstall</td></tr>
+    <tr><td><strong>Speed</strong></td><td>Seconds–minutes</td><td>Seconds–minutes</td><td>Slow (reinstall)</td></tr>
+    <tr><td><strong>Fallback path</strong></td><td>Obliteration <em>can</em> pull an installer → network-heavy</td><td>Obliteration <em>can</em> pull an installer → network-heavy</td><td>Always the slow path</td></tr>
+    <tr><td><strong><code>ObliterationBehavior</code></strong></td><td>Honored</td><td>Honored</td><td>No effect</td></tr>
+  </tbody>
+</table>
+
+<p>
+  Our fleet is M-series, so the fast cryptographic-erase path is what we get every time. The
+  T2 column matters only as context for why a stray "it's downloading forever" reprovision is
+  worth investigating.
+</p>
+
+<h2 id="timeline"><span class="num">9</span>What changed, by macOS version</h2>
+
+<table>
+  <thead><tr><th>Version</th><th>Change</th></tr></thead>
+  <tbody>
+    <tr><td><strong>macOS 12.0</strong></td><td><code>ObliterationBehavior</code> introduced; EACS becomes the erase mechanism on M1/T2.</td></tr>
+    <tr><td><strong>macOS 12.0.1</strong></td><td>An escrowed Bootstrap Token is now <em>required</em> to silently authorize the EACS command.</td></tr>
+    <tr><td><strong>macOS 13 / iOS 16</strong></td><td><strong>ACME</strong> enrollment payload added and made Apple's recommended identity-cert mechanism over SCEP (and required for Managed Device Attestation).</td></tr>
+    <tr><td><strong>macOS 15 / 26</strong></td><td>No change to the fundamental sequence above — same cryptographic-erase + ADE model.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="gaps"><span class="num">10</span>What we couldn't nail down</h2>
+
+<p>
+  In the spirit of the <a href="deep-dive.html#deadends">deep dive's honesty</a>, here's what
+  this page is <em>not</em> certain about:
+</p>
+
+<ul>
+  <li><strong>The internal daemon that orchestrates EACS on Apple Silicon.</strong> Apple doesn't document whether it's <code>remotemanagementd</code> driving an <code>obliterator</code>/<code>eraseinstall</code> helper, or something else, or how that differs process-level from T2. Treat any specific daemon name as folklore until confirmed live in a <code>log stream</code> / sysdiagnose.</li>
+  <li><strong>The exact <code>~300 MB</code> residual Data-volume figure.</strong> Single well-regarded third-party source (eclecticlight.co), empirical observation — not an Apple number.</li>
+  <li><strong>The precise interleaving of the SCEP/ACME cert exchange vs. MDM CheckIn.</strong> Reconstructed from the profile structure; not pinned to a primary source line.</li>
+</ul>
+
+<div class="callout gotcha">
+  <div class="callout-label">Keep this page honest</div>
+  <p>
+    Like the deep dive, this only stays useful if it gets corrected as macOS and our flow
+    evolve. If you watch a real reprovision with a packet capture or <code>log stream</code>
+    and learn something more precise than what's above, please fold it back in.
+  </p>
+</div>
+
+<h2 id="sources"><span class="num">11</span>Sources</h2>
+
+<p>Primary + corroborating, all confirmed via adversarial cross-check:</p>
+<ul>
+  <li>Apple Platform Security guide — <a href="https://support.apple.com/guide/security/data-protection-sece8608431d/web">Data protection</a> (the cryptographic-erase mechanism)</li>
+  <li>Apple device-management schema — <a href="https://github.com/apple/device-management/blob/release/mdm/commands/device.erase.yaml"><code>device.erase.yaml</code></a> + <a href="https://developer.apple.com/documentation/devicemanagement/erasedevicecommand/command-data.dictionary"><code>EraseDeviceCommand</code></a></li>
+  <li>Apple deployment — <a href="https://support.apple.com/guide/deployment/use-secure-and-bootstrap-tokens-dep24dbdcf9e/web">Secure &amp; Bootstrap Tokens</a> (the EACS authorization gate)</li>
+  <li>Apple developer — <a href="https://developer.apple.com/documentation/devicemanagement/deploying-mdm-enrollment-profiles">Deploying MDM enrollment profiles</a> (profile contents, ACME/SCEP/PKCS#12)</li>
+  <li>Apple — <a href="https://support.apple.com/en-us/101555">Use Apple products on enterprise networks</a> (the host/port allowlist)</li>
+  <li>Apple deployment — <a href="https://support.apple.com/guide/deployment/configure-your-network-for-device-management-dep2bcde692e/web">Configure your network for device management</a> (APNs ports)</li>
+  <li>Eclectic Light Co. — <a href="https://eclecticlight.co/2025/11/12/erase-all-content-and-settings-does-what-it-says/">Erase All Content and Settings does what it says</a> (2025, the SSV-survives / ~300&nbsp;MB observations)</li>
+</ul>
+
+<hr>
+
+<footer>
+  <p>
+    Companion docs:
+    <a href="index.html">architecture overview</a> ·
+    <a href="deep-dive.html">deep dive</a> ·
+    <a href="https://github.com/mozilla-platform-ops/relops-bootstrap">source</a>
+  </p>
+  <p>
+    Scope note: this page deliberately stops the moment enrollment completes. Everything after
+    that — SCEP cert delivery, the keychain ACL trick, the brokered <code>vault.yaml</code>
+    fetch — is the <a href="deep-dive.html">deep dive</a>.
+  </p>
+</footer>
+
+</div>
+</body>
+</html>
