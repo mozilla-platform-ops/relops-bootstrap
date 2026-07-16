@@ -98,6 +98,10 @@ CHALLENGE=$(cat /tmp/_scep_challenge)
 declare -A SCEP_ROLES=(
   ["scep-no-sip"]="gecko_t_osx_1500_m4"
   ["scep-osx-1500-m4-staging"]="gecko_t_osx_1500_m4_staging"
+  # Tart VM tester pool — the tart host authenticates as the VM pool role to
+  # fetch + inject the VM's vault (see Bug 2049579 remediation).
+  ["scep-gecko-t-osx-1500-m-vms"]="gecko_t_osx_1500_m_vms"
+  ["scep-gecko-t-osx-1500-m-vms-staging"]="gecko_t_osx_1500_m_vms_staging"
   # macOS Apple Silicon build (arm64). L3 (gecko_3_b / enterprise_3_b) are release-trusted;
   # per-role SCEP challenges are recommended before those pools carry live secrets (see below).
   ["scep-gecko-1-b-osx-arm64"]="gecko_1_b_osx_arm64"
