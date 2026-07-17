@@ -85,6 +85,46 @@ set -euo pipefail
 export STEPPATH=/home/step/.step
 CHALLENGE=$(cat /tmp/_scep_challenge)
 
+# SCEP requires an RSA decrypter cert/key (the RA cert the client encrypts its
+# request to). This CA is EC, so step-ca can NOT auto-use the CA key for SCEP —
+# every SCEP provisioner MUST be given an explicit RSA decrypter, or GetCACert
+# returns only the CA cert (x-x509-ca-cert) and clients fail with MDM-SCEP:14003
+# "unable to generate CSR" (hit 2026-07; the loop below previously omitted it).
+# Use ONE shared decrypter for all provisioners: reuse the existing one if the CA
+# already has SCEP provisioners (keeps them consistent), else mint a new RSA one
+# signed by the CA.
+DECRYPTER_CRT="$STEPPATH/secrets/scep-decrypter.crt"
+DECRYPTER_KEY="$STEPPATH/secrets/scep-decrypter.key"
+if [ ! -s "$DECRYPTER_CRT" ] || [ ! -s "$DECRYPTER_KEY" ]; then
+  if python3 - "$STEPPATH/config/ca.json" "$DECRYPTER_CRT" "$DECRYPTER_KEY" <<'PY'
+import base64, json, sys
+caj, crt, key = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    d = json.load(open(caj))
+except Exception:
+    sys.exit(1)
+for p in d.get("authority", {}).get("provisioners", []):
+    if p.get("type", "").upper() == "SCEP" and p.get("decrypterCertificate") and p.get("decrypterKeyPEM"):
+        open(crt, "wb").write(base64.b64decode(p["decrypterCertificate"]))
+        open(key, "wb").write(base64.b64decode(p["decrypterKeyPEM"]))
+        sys.exit(0)
+sys.exit(1)
+PY
+  then
+    echo "=== reusing existing SCEP decrypter from ca.json ===" >&2
+  else
+    echo "=== minting new RSA SCEP decrypter (CA-signed) ===" >&2
+    step certificate create "Mozilla RelOps SCEP Decrypter" \
+      "$DECRYPTER_CRT" "$DECRYPTER_KEY" \
+      --ca "$STEPPATH/certs/intermediate_ca.crt" \
+      --ca-key "$STEPPATH/secrets/intermediate_ca_key" \
+      --ca-password-file "$STEPPATH/secrets/password" \
+      --kty RSA --size 2048 --not-after 87600h \
+      --no-password --insecure --force >&2
+  fi
+  chmod 0600 "$DECRYPTER_CRT" "$DECRYPTER_KEY"
+fi
+
 # One SCEP provisioner per puppet role. Each needs a populated vault-<role> secret
 # in Secret Manager + (macOS) a SimpleMDM SCEP profile or (Linux) an sscep enroll,
 # both pointing at /scep/<name>. Add a role here and a rebuild recreates its
@@ -134,6 +174,8 @@ for name in "${!SCEP_ROLES[@]}"; do
     --force-cn \
     --challenge="$CHALLENGE" \
     --x509-template="$tmpl" \
+    --scep-decrypter-certificate="$DECRYPTER_CRT" \
+    --scep-decrypter-key="$DECRYPTER_KEY" \
     --admin-provisioner=admin@mozilla.com \
     --admin-password-file="$STEPPATH/secrets/provisioner-password" \
     --ca-url=https://step-ca.relops.mozilla:443 \
