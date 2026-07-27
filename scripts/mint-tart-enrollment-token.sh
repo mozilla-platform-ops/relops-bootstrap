@@ -83,9 +83,21 @@ Then enable the renewing identity in the host's ronin_settings / role data:
     step_cert_enabled: true
     cert_source: 'file'
 
-and apply:
+and apply. NOTE: the tart hosts have no /usr/local/bin/run-puppet.sh and no puppet
+agent daemon — puppet is operator-applied from the on-host checkout under
+/opt/puppet_environments/mozilla-platform-ops/ronin_puppet. Check what ref that
+checkout is on before applying; m4-235 was found pinned to the stale feature
+branch add-tart-worker-role (2026-07-27), so a plain apply there would NOT include
+macos_step_cert at all:
 
-  ssh admin@${HOST} 'sudo /usr/local/bin/run-puppet.sh'
+  ssh admin@${HOST} 'sudo git -C /opt/puppet_environments/mozilla-platform-ops/ronin_puppet rev-parse --abbrev-ref HEAD'
+
+To exercise just this module without dragging in every unrelated change since that
+pin, stage the module alone and apply it (noop first):
+
+  D=/opt/puppet_environments/mozilla-platform-ops/ronin_puppet
+  ssh admin@${HOST} "sudo /opt/puppetlabs/bin/puppet apply --noop \\
+    --modulepath=\$D/modules -e \"include macos_step_cert\""
 
 Verify the cert enrolled AND carries the SPIFFE role the broker authorizes on.
 Use -text: macOS ships LibreSSL, which does not support \`-ext subjectAltName\` and
