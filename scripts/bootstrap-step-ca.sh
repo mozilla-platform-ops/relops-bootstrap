@@ -29,6 +29,10 @@ if ! command -v step-ca >/dev/null; then
 fi
 
 [ -r /tmp/_scep_challenge ] || { echo "missing /tmp/_scep_challenge"; exit 2; }
+# JWK provisioner password for the host-enrollment provisioners (see JWK_ROLES
+# below). Optional: absent means the SCEP provisioners are still (re)created and
+# only the JWK ones are skipped.
+JWK_PW_FILE=/tmp/_jwk_password
 
 # Base x509 template for SCEP-issued client certs — identical for every provisioner
 # (macOS and Linux) except __SPIFFE_ROLE__, substituted per provisioner in the add loop
@@ -48,6 +52,10 @@ cat > /tmp/scep-x509-template.base.json <<'TMPL'
 TMPL
 
 sudo chown step:step /tmp/_scep_challenge /tmp/scep-x509-template.base.json
+if [ -r "$JWK_PW_FILE" ]; then
+  sudo chown step:step "$JWK_PW_FILE"
+  sudo chmod 0400 "$JWK_PW_FILE"
+fi
 
 sudo -u step bash <<'STEPUSER'
 set -euo pipefail
@@ -182,6 +190,89 @@ for name in "${!SCEP_ROLES[@]}"; do
     --root="$STEPPATH/certs/root_ca.crt" >&2
   rm -f "$tmpl"
 done
+
+# ---------------------------------------------------------------------------
+# JWK provisioners for host-enrollment of FILE-BASED, SELF-RENEWING client certs
+# ---------------------------------------------------------------------------
+# Why these exist alongside the SCEP provisioners above:
+#
+# An MDM/SCEP cert is a ONE-SHOT bootstrap credential. Apple's
+# com.apple.security.scep payload has no self-renewal, it only re-enrolls if the
+# MDM re-installs the profile, and the key is issued KeyIsExtractable=false so
+# `step ca renew` cannot operate on it. That is fine for the bootstrap flow, which
+# uses the cert once (minutes after enrollment) to fetch vault.yaml.
+#
+# It is NOT fine for a host that needs an identity at RUNTIME. The tart VM hosts
+# fetch the worker vault on every VM launch (ronin_puppet tart-run-vm.sh), and on
+# 2026-07-27 all of macmini-m4-235..239 were found holding SCEP certs that had
+# expired nine days earlier — silently, because nothing renews them.
+#
+# So those hosts get a SECOND, independent identity: a PEM cert/key generated
+# on-host, enrolled once with a single-use token from the provisioner below, and
+# kept fresh by a `step ca renew --daemon` LaunchDaemon (ronin_puppet
+# modules/macos_step_cert). One provisioner per puppet role, mirroring the SCEP
+# table, so a leaked enrollment token cannot mint an identity for another role.
+#
+# Claims, and why they differ from the SCEP provisioners:
+#   x509 dur 168h  - the CA's global claims are {} so step-ca's 24h default
+#                    applies everywhere. 24h is fine for a one-shot bootstrap
+#                    cert but needlessly tight for a renewing one: it means a
+#                    renewal every ~16h forever. 7d renews at ~4.7d.
+#   allow-renewal-after-expiry
+#                  - `step ca renew` normally REFUSES an expired cert, so a host
+#                    powered off longer than the lifetime would need a fresh
+#                    single-use token — a manual per-host step, i.e. exactly the
+#                    failure this whole change removes. TRADE-OFF: it also means a
+#                    stolen expired cert stays renewable, weakening
+#                    revocation-by-expiry. Mitigation is revocation at the CA.
+#                    This is the one judgment call here worth a reviewer's
+#                    explicit sign-off; set it false if you would rather take the
+#                    manual re-enrollment.
+#
+# The SPIFFE URI SAN is stamped by the same base x509 template the SCEP
+# provisioners use, so the vault-broker authorizes these certs identically. That
+# also means an enrollment token does NOT need to carry --san; the template
+# derives the SPIFFE role from the provisioner and the CN from the token subject.
+declare -A JWK_ROLES=(
+  ["jwk-tart-gecko-t-osx-1500-m-vms"]="gecko_t_osx_1500_m_vms"
+  ["jwk-tart-gecko-t-osx-1500-m-vms-staging"]="gecko_t_osx_1500_m_vms_staging"
+)
+
+if [ ! -r /tmp/_jwk_password ]; then
+  echo "no /tmp/_jwk_password — skipping JWK host-enrollment provisioners" >&2
+else
+  # Persist the password so mint-tart-enrollment-token.sh can mint later without
+  # the operator re-uploading it. Canonical copy lives in Secret Manager
+  # (step-ca-tart-jwk-password) for a CA rebuild; this is the working copy, and
+  # it never leaves the VM.
+  install -m 0400 -o step -g step /tmp/_jwk_password "$STEPPATH/secrets/jwk-provisioner-password"
+  for name in "${!JWK_ROLES[@]}"; do
+    role="${JWK_ROLES[$name]}"
+    if step ca provisioner list \
+         --ca-url=https://step-ca.relops.mozilla:443 \
+         --root="$STEPPATH/certs/root_ca.crt" 2>/dev/null \
+       | grep -q "\"name\": \"${name}\""; then
+      echo "${name} provisioner already configured, skipping add" >&2
+      continue
+    fi
+    echo "=== adding ${name} JWK provisioner (role ${role}) ===" >&2
+    tmpl="/tmp/jwk-x509-template-${name}.json"
+    sed "s/__SPIFFE_ROLE__/${role}/" /tmp/scep-x509-template.base.json > "$tmpl"
+    step ca provisioner add "${name}" \
+      --type=JWK \
+      --create \
+      --password-file=/tmp/_jwk_password \
+      --x509-template="$tmpl" \
+      --x509-default-dur=168h \
+      --x509-max-dur=168h \
+      --allow-renewal-after-expiry \
+      --admin-provisioner=admin@mozilla.com \
+      --admin-password-file="$STEPPATH/secrets/provisioner-password" \
+      --ca-url=https://step-ca.relops.mozilla:443 \
+      --root="$STEPPATH/certs/root_ca.crt" >&2
+    rm -f "$tmpl"
+  done
+fi
 STEPUSER
 
 # Reload step-ca so the new provisioner takes effect.
@@ -194,4 +285,8 @@ sudo cat /home/step/.step/certs/root_ca.crt
 
 # Wipe the temp files — caller is responsible for re-uploading the challenge to
 # Secret Manager from their own host.
-sudo rm -f /tmp/_scep_challenge /tmp/scep-x509-template.base.json
+#
+# sudo, because the JWK password and the SCEP challenge are chown'd to step above
+# and /tmp is sticky: an unprivileged `rm` cannot remove them and leaves a live
+# credential on the CA VM (hit while applying this by hand, 2026-07-27).
+sudo rm -f /tmp/_scep_challenge /tmp/scep-x509-template.base.json "$JWK_PW_FILE"
