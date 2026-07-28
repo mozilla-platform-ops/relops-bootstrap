@@ -18,7 +18,19 @@ dependencies = [
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
-    "ruff>=0.5",
+    # Upper bound is deliberate. There is no [tool.ruff] section in this repo, so
+    # linting is entirely at the mercy of whichever rules ruff enables by default,
+    # and CI installs ruff with `pip install -e '.[dev]'` + bare `ruff check .` --
+    # it does not use uv.lock, so an unbounded range means CI silently tracks the
+    # newest release.
+    #
+    # ruff 0.16.0 widened the default rule set and produced 29 errors on unchanged
+    # code (SIM117 x16, UP033 x5, I001 x3, RUF012 x2, UP037, UP017, RUF100). 0.15.19
+    # reports the same tree clean. That broke every open PR at once -- the failure
+    # showed up on a branch whose only change was two shell scripts.
+    #
+    # Bump this deliberately, together with whatever fixes the new rules require.
+    "ruff>=0.15,<0.16",
 ]
 
 [project.scripts]
