@@ -214,20 +214,26 @@ done
 # table, so a leaked enrollment token cannot mint an identity for another role.
 #
 # Claims, and why they differ from the SCEP provisioners:
-#   x509 dur 168h  - the CA's global claims are {} so step-ca's 24h default
+#   x509 dur 720h  - the CA's global claims are {} so step-ca's 24h default
 #                    applies everywhere. 24h is fine for a one-shot bootstrap
-#                    cert but needlessly tight for a renewing one: it means a
-#                    renewal every ~16h forever. 7d renews at ~4.7d.
-#   allow-renewal-after-expiry
-#                  - `step ca renew` normally REFUSES an expired cert, so a host
-#                    powered off longer than the lifetime would need a fresh
-#                    single-use token — a manual per-host step, i.e. exactly the
-#                    failure this whole change removes. TRADE-OFF: it also means a
-#                    stolen expired cert stays renewable, weakening
-#                    revocation-by-expiry. Mitigation is revocation at the CA.
-#                    This is the one judgment call here worth a reviewer's
-#                    explicit sign-off; set it false if you would rather take the
-#                    manual re-enrollment.
+#                    cert but needlessly tight for a renewing one. 30d renews at
+#                    ~20d, so a host can be powered off for most of a month and
+#                    still renew normally.
+#   allowRenewalAfterExpiry
+#                  - deliberately NOT set, i.e. left at step-ca's default false.
+#                    `step ca renew` therefore refuses an expired cert, which
+#                    keeps revocation-by-expiry intact: a leaked cert is dead once
+#                    it lapses. Setting it true would make renewal (which is
+#                    authenticated by the cert itself) work forever on a stolen
+#                    copy, turning a short-lived cert into an unbounded bearer
+#                    credential and removing the main reason to use short-lived
+#                    certs at all.
+#                    Recovery for a host that WAS off too long does not need this
+#                    flag: the 720h window covers realistic downtime, and past
+#                    that the host re-enrolls (macos_step_cert re-runs enrollment
+#                    when the cert is absent OR expired) using a token it fetches
+#                    with its MDM/SCEP cert -- which is what that one-shot
+#                    bootstrap credential is for.
 #
 # The SPIFFE URI SAN is stamped by the same base x509 template the SCEP
 # provisioners use, so the vault-broker authorizes these certs identically. That
@@ -263,9 +269,8 @@ else
       --create \
       --password-file=/tmp/_jwk_password \
       --x509-template="$tmpl" \
-      --x509-default-dur=168h \
-      --x509-max-dur=168h \
-      --allow-renewal-after-expiry \
+      --x509-default-dur=720h \
+      --x509-max-dur=720h \
       --admin-provisioner=admin@mozilla.com \
       --admin-password-file="$STEPPATH/secrets/provisioner-password" \
       --ca-url=https://step-ca.relops.mozilla:443 \
