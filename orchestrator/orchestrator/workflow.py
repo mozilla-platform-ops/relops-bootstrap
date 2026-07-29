@@ -114,11 +114,12 @@ def check() -> None:
 # --- workflow steps ---
 
 
-def step_quarantine(ctx: HostContext) -> None:
-    until = (datetime.now(timezone.utc) + timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+def step_quarantine(ctx: HostContext, until: str | None = None, info: str = "") -> None:
+    if not until:
+        until = (datetime.now(timezone.utc) + timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     ui.step("QUARANTINE", "tell Taskcluster to stop scheduling tasks on this worker")
     ui.wire(f"PUT queue/v1 quarantineWorker {ctx.worker_pool_id}/{ctx.worker_group}/{ctx.hostname}")
-    taskcluster.quarantine(ctx.worker_pool_id, ctx.worker_group, ctx.hostname, until)
+    taskcluster.quarantine(ctx.worker_pool_id, ctx.worker_group, ctx.hostname, until, info)
     ui.ok(f"quarantined until {until[:10]}")
 
 

@@ -62,13 +62,17 @@ def get_task_status(task_id: str) -> dict:
     return _queue().status(task_id)["status"]
 
 
-def quarantine(worker_pool_id: str, worker_group: str, worker_id: str, until: str) -> dict:
+def quarantine(worker_pool_id: str, worker_group: str, worker_id: str, until: str, info: str = "") -> dict:
     """
     Set quarantineUntil = ISO timestamp. Use a far-future date to quarantine
-    "indefinitely" and call unquarantine() to clear.
+    "indefinitely" and call unquarantine() to clear. Optional `info` is stored as
+    quarantineInfo (audit reason, shown in the TC worker view).
     """
     provisioner, worker_type = worker_pool_id.split("/", 1)
-    return _queue().quarantineWorker(provisioner, worker_type, worker_group, worker_id, {"quarantineUntil": until})
+    payload: dict = {"quarantineUntil": until}
+    if info:
+        payload["quarantineInfo"] = info
+    return _queue().quarantineWorker(provisioner, worker_type, worker_group, worker_id, payload)
 
 
 def unquarantine(worker_pool_id: str, worker_group: str, worker_id: str) -> dict:

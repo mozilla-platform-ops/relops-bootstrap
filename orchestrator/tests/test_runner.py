@@ -46,32 +46,53 @@ def test_complete_posts_outcome():
     assert client.post.call_args.kwargs["json"]["success"] is True
 
 
-def test_reprovision_cmd_prefers_sibling_of_interpreter(tmp_path):
+def test_job_cmd_reprovision_prefers_sibling_of_interpreter(tmp_path):
     # A `reprovision` next to sys.executable is used even when PATH lacks the venv.
     import sys
 
     sibling = tmp_path / "reprovision"
     sibling.write_text("#!/bin/sh\n")
     with patch.object(sys, "executable", str(tmp_path / "python")):
-        assert runner._reprovision_cmd("macmini-m4-80") == [str(sibling), "run", "macmini-m4-80"]
+        assert runner._job_cmd("macmini-m4-80", {}, _Cfg()) == [str(sibling), "run", "macmini-m4-80"]
 
 
-def test_reprovision_cmd_falls_back_to_path_lookup():
+def test_job_cmd_reprovision_falls_back_to_path_lookup():
     import sys
 
     with patch.object(sys, "executable", "/nonexistent/dir/python"):
-        assert runner._reprovision_cmd("macmini-m4-80") == ["reprovision", "run", "macmini-m4-80"]
+        assert runner._job_cmd("macmini-m4-80", {}, _Cfg()) == ["reprovision", "run", "macmini-m4-80"]
 
 
-def test_reprovision_cmd_appends_unquarantine_flag():
+def test_job_cmd_reprovision_appends_unquarantine_flag():
     """unquarantine=True adds --unquarantine so the host returns to service after reprovision."""
     import sys
 
+    class _CfgUnq(_Cfg):
+        unquarantine = True
+
     with patch.object(sys, "executable", "/nonexistent/dir/python"):
-        assert runner._reprovision_cmd("macmini-m4-80", unquarantine=True) == \
+        assert runner._job_cmd("macmini-m4-80", {}, _CfgUnq()) == \
             ["reprovision", "run", "macmini-m4-80", "--unquarantine"]
-        # default (omitted) leaves the host quarantined — flag absent
-        assert "--unquarantine" not in runner._reprovision_cmd("macmini-m4-80")
+        # default cfg leaves the host quarantined — flag absent
+        assert "--unquarantine" not in runner._job_cmd("macmini-m4-80", {}, _Cfg())
+
+
+def test_job_cmd_quarantine_passes_until_and_info():
+    """A quarantine job runs the `quarantine` subcommand with --until/--info."""
+    import sys
+
+    with patch.object(sys, "executable", "/nonexistent/dir/python"):
+        job = {"action": "quarantine", "params": {"until": "2026-08-01T00:00:00.000Z", "info": "by rcurran"}}
+        assert runner._job_cmd("macmini-m4-80", job, _Cfg()) == \
+            ["reprovision", "quarantine", "macmini-m4-80", "--until", "2026-08-01T00:00:00.000Z", "--info", "by rcurran"]
+
+
+def test_job_cmd_unquarantine():
+    import sys
+
+    with patch.object(sys, "executable", "/nonexistent/dir/python"):
+        job = {"action": "unquarantine", "params": {}}
+        assert runner._job_cmd("macmini-m4-80", job, _Cfg()) == ["reprovision", "unquarantine", "macmini-m4-80"]
 
 
 def test_complete_retries_until_success():
