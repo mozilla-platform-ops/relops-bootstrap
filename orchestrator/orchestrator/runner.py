@@ -230,7 +230,6 @@ def main() -> None:
                 print(f"claimed job {job['id']} → {job['short']} ({len(active) + 1}/{cfg.max_concurrent} active)")
                 active.add(pool.submit(_run_job_guarded, client, cfg, job))
             time.sleep(cfg.poll)
-            print(f"finished job {job['id']}")
 
 
 if __name__ == "__main__":
