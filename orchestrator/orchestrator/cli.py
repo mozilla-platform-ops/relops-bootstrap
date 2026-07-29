@@ -36,8 +36,12 @@ def run(
 
 
 @_app.command()
-def quarantine(hostname: str) -> None:
-    workflow.step_quarantine(workflow.resolve(hostname))
+def quarantine(
+    hostname: str,
+    until: str = typer.Option("", "--until", help="ISO-8601 quarantineUntil (default: 365 days out)."),
+    info: str = typer.Option("", "--info", help="Audit reason stored as quarantineInfo."),
+) -> None:
+    workflow.step_quarantine(workflow.resolve(hostname), until=until or None, info=info)
 
 
 @_app.command()

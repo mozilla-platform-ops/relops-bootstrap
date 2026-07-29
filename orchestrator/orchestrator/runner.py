@@ -121,8 +121,8 @@ def _complete(client: httpx.Client, cfg: Config, job_id: int, success: bool, det
     print(f"WARNING: could not report completion of job {job_id} after retries: {last}")
 
 
-def _reprovision_cmd(host: str, unquarantine: bool = False) -> list[str]:
-    """The `reprovision` CLI to run, resolved next to *this* runner's interpreter.
+def _reprovision_exe() -> str:
+    """The `reprovision` CLI, resolved next to *this* runner's interpreter.
 
     The runner and the CLI are installed in the same venv, so the CLI lives beside
     sys.executable. Resolving it explicitly means it works whether or not the venv
@@ -131,9 +131,30 @@ def _reprovision_cmd(host: str, unquarantine: bool = False) -> list[str]:
     back to a bare PATH lookup for editable/dev installs.
     """
     sibling = os.path.join(os.path.dirname(sys.executable), "reprovision")
-    exe = sibling if os.path.exists(sibling) else "reprovision"
+    return sibling if os.path.exists(sibling) else "reprovision"
+
+
+def _job_cmd(host: str, job: dict, cfg: "Config") -> list[str]:
+    """Map a claimed job to the reprovision CLI invocation for its action.
+
+    action "quarantine"/"unquarantine" (from Hangar's quarantine control) run the
+    matching lightweight CLI subcommand — a single TC quarantineWorker call, using
+    this runner's existing TC creds. Anything else is the full reprovision workflow.
+    """
+    exe = _reprovision_exe()
+    action = job.get("action") or "reprovision"
+    params = job.get("params") or {}
+    if action == "quarantine":
+        cmd = [exe, "quarantine", host]
+        if params.get("until"):
+            cmd += ["--until", params["until"]]
+        if params.get("info"):
+            cmd += ["--info", params["info"]]
+        return cmd
+    if action == "unquarantine":
+        return [exe, "unquarantine", host]
     cmd = [exe, "run", host]
-    if unquarantine:
+    if cfg.unquarantine:
         cmd.append("--unquarantine")
     return cmd
 
@@ -148,7 +169,7 @@ def _run_job(client: httpx.Client, cfg: Config, job: dict) -> None:
     except ValueError as e:
         _complete(client, cfg, job_id, False, f"rejected: {e}")
         return
-    cmd = _reprovision_cmd(host, cfg.unquarantine)
+    cmd = _job_cmd(host, job, cfg)
     _event(client, cfg, job_id, f"runner {cfg.runner_id} starting: {' '.join(cmd[1:])}")
     try:
         proc = subprocess.Popen(
