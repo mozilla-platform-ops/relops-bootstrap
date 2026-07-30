@@ -138,9 +138,13 @@ silently drops URI SANs with URL-encoded chars (e.g. `Mac%20mini`).
 │   ├── tests/                    ─ pytest happy-path + adversarial cases
 │   └── Dockerfile, pyproject.toml
 │
-├── orchestrator/                 🧰  Operator CLI (`reprovision`)
-│   └── ... TC (Hawk) + SimpleMDM clients + workflow steps (quarantine→wipe→mint→escrow→wait)
-│                                   see orchestrator/README.md for the pipeline + golden paths
+├── orchestrator/                 🧰  Operator CLI (`reprovision`) + the on-network daemons
+│   ├── ... TC (Hawk) + SimpleMDM clients + workflow steps (quarantine→wipe→mint→escrow→wait)
+│   │                               see orchestrator/README.md for the pipeline + golden paths
+│   └── three LaunchDaemons on the runner host, all Puppet-managed, all outbound-only:
+│       reprovision-runner        ─ claims Hangar-queued reprovision jobs
+│       hangar-screen-agent       ─ VNC frames for Hangar's live worker view
+│       hangar-tart-health-agent  ─ per-slot tart VM health → Hangar /api/tart-health
 │
 ├── pkg/                          📦  Signed bootstrap PKG builder (current delivery)
 │   ├── build.sh                  ─ builds + Developer-ID-signs the component pkg (43AQ936H96)

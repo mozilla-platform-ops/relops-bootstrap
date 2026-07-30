@@ -81,6 +81,63 @@ click reprovisioned `macmini-m4-80` via the managed runner on `macmini-m4-81`.
 reprovision-runner            # HANGAR_API_URL + RUNNER_CLIENT_CERT/KEY (mTLS) or REPROVISION_RUNNER_TOKEN
 ```
 
+### Companion agents on the same host
+
+The runner host carries two more Puppet-managed LaunchDaemons, sharing its venv, env file and
+mTLS cert. Same reason in both cases: Cloud Run can't reach MDC1, so anything needing to touch
+a worker has to run on-network and push results outbound.
+
+| Daemon | Purpose |
+|---|---|
+| `hangar-screen-agent` | On-demand VNC frames for Hangar's live worker view. |
+| `hangar-tart-health-agent` | Sweeps the tart VM hosts and pushes per-slot health to Hangar. |
+
+```bash
+hangar-tart-health-agent --hosts-file hosts.txt --loop --interval 600   # as the LaunchDaemon runs it
+hangar-tart-health-agent --hosts-file hosts.txt --dry-run               # one sweep, print, don't push
+```
+
+**`hangar-tart-health-agent`** exists because Taskcluster can't see inside a tart VM. In July 2026
+five of 26 slots in `gecko-t-osx-1500-m-vms` were out of production for weeks: three guests were
+crash-rebooting every ~84 s while `tart run` on the host stayed up 11+ days, so every host-level
+signal read green. Nor could it surface as a TC worker error — hardware pools have no
+worker-manager representation, so `reportWorkerError` returns `ResourceNotFound` whatever scopes
+the caller holds.
+
+It is deliberately a **dumb collector**: every severity threshold lives server-side in Hangar, so
+what counts as `crit` can be retuned by deploying Hangar alone, with nothing changed on-network.
+
+Per host it collects, in one ssh round trip: guest uptime vs `tart run` uptime (the crash-loop
+signature), guest disk free, configured workerId vs the MAC-derived one (a clone impersonating
+another host's worker), guest clock skew (a clone inheriting the image RTC never registers),
+client-cert expiry/notBefore/owner, and the puppet clone's refspec.
+
+Four things that only bite in production, all now handled — worth knowing if you extend it:
+
+- **Prod is cert-only.** Hangar sets `REPROVISION_RUNNER_HOSTS` but no `REPROVISION_RUNNER_TOKEN`,
+  so `require_runner`'s token fallback is dead there. The token path is for local dev.
+- **Push at the runner hostname, not the human one.** Only `/api/tart-health/agent/*` is routed to
+  the non-IAP backend. A push at `hangar.relops.mozilla.com` is 301'd to a login page.
+- **`HANGAR_API_URL` already ends in `/api`** — as the sibling agents read it. `_api_base()`
+  normalises, so both that and a bare site URL work.
+- **ssh must go as the admin user.** Under launchd as root, a bare `ssh <host>` is `root@` and
+  every worker refuses it; identity comes from `clients/ssh.py`, so a rotated admin key needs no
+  change here.
+
+Guest-level probes (disk, clock, identity) need an `expect` password login per VM and are off by
+default (`--no-guests` in the LaunchDaemon argv). They are also the checks that catch a
+crash-looping guest inside a healthy host, so a green Hangar page without them means "the hosts
+look fine", not "the fleet is fine".
+
+Running it by hand on the runner host **requires sourcing the env file first**, or secret
+resolution falls through to an `op://` ref and the 1Password CLI isn't installed there:
+
+```bash
+sudo bash -c 'set -a; . /var/root/reprovision-runner/runner.env; set +a;
+  /opt/reprovision-runner/.venv/bin/hangar-tart-health-agent \
+    --hosts-file /var/root/reprovision-runner/tart-hosts.txt --no-guests --dry-run'
+```
+
 ## Two golden paths
 
 Both share the same core — **mint → escrow BST → signed-PKG bootstrap → sentinel**. They
