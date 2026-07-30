@@ -31,6 +31,8 @@ REPROVISION_RUNNER_HOSTS but no REPROVISION_RUNNER_TOKEN, so require_runner's to
 fallback is dead there; the token path exists for local dev, which has no cert.
 Pushes must also go to the runner hostname — only /api/tart-health/agent/* is routed
 to the non-IAP backend, while the read rollup stays behind IAP on the human host.
+--hangar-url accepts either the API root (HANGAR_API_URL, which already ends in
+/api, as the sibling agents read it) or a bare site URL; see _api_base.
 
 Usage:
     # production, as the LaunchDaemon runs it (RUNNER_CLIENT_CERT/KEY from the env)
@@ -307,6 +309,19 @@ def _ssl_context(client_cert: str, client_key: str) -> ssl.SSLContext | None:
     return ctx
 
 
+def _api_base(url: str) -> str:
+    """Normalise to Hangar's API root, with exactly one `/api`.
+
+    HANGAR_API_URL already ends in `/api` — reprovision-runner and
+    hangar-screen-agent both treat it as the API root and append `/screen/agent/...`
+    to it. The LaunchDaemon sources the same runner.env, so this agent has to read it
+    the same way or it builds `/api/api/...` and 404s. Accepting either form means a
+    bare site URL works too, which is what local dev passes.
+    """
+    url = url.rstrip("/")
+    return url if url.endswith("/api") else f"{url}/api"
+
+
 def sweep(hosts: list[str], args: argparse.Namespace) -> int:
     """One collection pass over every host, then one push. Returns slots pushed."""
     tc = tc_workers()
@@ -328,7 +343,7 @@ def sweep(hosts: list[str], args: argparse.Namespace) -> int:
 
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
-        f"{args.hangar_url.rstrip('/')}/api/tart-health/agent/push",
+        f"{_api_base(args.hangar_url)}/tart-health/agent/push",
         data=body, method="POST", headers=headers,
     )
     ctx = _ssl_context(args.client_cert, args.client_key)
