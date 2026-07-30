@@ -70,6 +70,32 @@ def _identity_opts() -> list[str]:
     return ["-o", "IdentitiesOnly=yes", "-i", path]
 
 
+def user_host(hostname: str) -> str:
+    """`<admin user>@<hostname>` — public so other tools in this package don't guess the user.
+
+    hangar-tart-health-agent runs as root under launchd, where an ssh with no user
+    becomes `root@` and is refused by every worker.
+    """
+    return _user_host(hostname)
+
+
+def admin_ssh_opts() -> list[str]:
+    """The ssh options any tool here should use to reach a worker.
+
+    Kept public and in one place so the admin identity, the accept-new policy and the
+    tool-owned known_hosts stay consistent across callers — notably so a rotated admin
+    key takes effect everywhere at once. Callers that need their own timeout run their
+    own subprocess with these options rather than going through run().
+    """
+    return [
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", f"UserKnownHostsFile={_tool_known_hosts()}",
+        "-o", "ConnectTimeout=15",
+        *_identity_opts(),
+    ]
+
+
 def forget_host_key(hostname: str) -> None:
     """Drop hostname from the tool's known_hosts so the next connect accept-new's the current
     key. Idempotent, and scoped to our own file — the operator's ~/.ssh/known_hosts is never

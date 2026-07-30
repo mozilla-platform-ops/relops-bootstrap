@@ -222,3 +222,25 @@ def test_push_url_is_correct_for_the_runner_env_form(monkeypatch):
         monkeypatch, _args(hangar_url="https://hangar-runner.relops.mozilla.com/api"))
     assert sent["req"].full_url == \
         "https://hangar-runner.relops.mozilla.com/api/tart-health/agent/push"
+
+
+# ---- ssh identity: must not connect as root ------------------------------------
+
+def test_ssh_uses_the_admin_user_not_the_invoking_one():
+    # Regression: running as root under launchd, a bare `ssh <host>` becomes `root@<host>`
+    # and every worker refuses it — observed on m4-81 against m4-185/186.
+    with patch("subprocess.run", return_value=_completed(stdout="k=v\n")) as m:
+        agent._ssh("macmini-m4-185.test", "probe")
+    argv = m.call_args[0][0]
+    target = [a for a in argv if a.endswith("macmini-m4-185.test")]
+    assert target, f"no target host in {argv}"
+    assert target[0].startswith("admin@"), f"expected admin@, got {target[0]}"
+
+
+def test_ssh_uses_the_tool_owned_known_hosts():
+    # The operator's ~/.ssh/known_hosts must not accumulate worker keys.
+    with patch("subprocess.run", return_value=_completed(stdout="k=v\n")) as m:
+        agent._ssh("macmini-m4-185.test", "probe")
+    argv = " ".join(m.call_args[0][0])
+    assert "UserKnownHostsFile=" in argv
+    assert "BatchMode=yes" in argv

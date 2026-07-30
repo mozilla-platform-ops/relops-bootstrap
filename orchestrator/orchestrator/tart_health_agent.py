@@ -60,12 +60,17 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
+# Reuse the package ssh client's identity handling rather than rolling our own: it
+# resolves the admin user, materializes the vault admin key for `ssh -i`, and keeps a
+# tool-owned known_hosts. Running as root under launchd, an ssh with no user is `root@`
+# and every worker refuses it.
+from .clients.ssh import admin_ssh_opts, user_host
+
 TC_ROOT = "https://firefox-ci-tc.services.mozilla.com"
 POOL = ("releng-hardware", "gecko-t-osx-1500-m-vms")
 PUPPET_REPO = "/opt/puppet_environments/mozilla-platform-ops/ronin_puppet"
 CERT = "/etc/step-cert/tart-client.crt"
 KEY = "/etc/step-cert/tart-client.key"
-SSH_OPTS = ["-o", "ConnectTimeout=10", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
 
 # Collected in ONE ssh round trip per host. Emits `key=value` lines; anything the
 # host cannot answer is simply omitted rather than guessed at.
@@ -154,7 +159,10 @@ def _ssh(host: str, script: str, timeout: int = 120) -> tuple[str, str]:
     sent me chasing two live hosts (m4-237, m4-239) that were fine all along.
     """
     try:
-        r = subprocess.run(["ssh", *SSH_OPTS, host, script], capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(
+            ["ssh", *admin_ssh_opts(), user_host(host), script],
+            capture_output=True, text=True, timeout=timeout,
+        )
     except subprocess.TimeoutExpired:
         return "", f"ssh timed out after {timeout}s"
     except OSError as e:
