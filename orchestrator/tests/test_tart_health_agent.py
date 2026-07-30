@@ -127,3 +127,74 @@ def test_collect_host_recovers_on_the_retry():
         slots = agent.collect_host("macmini-m4-239.test", {}, False)
     assert all("agent_error" not in s for s in slots)
     assert slots[0]["vm_name"] == "sequoia-tester-1"
+
+
+# ---- auth: prod is cert-only ----------------------------------------------------
+
+def test_ssl_context_none_without_both_halves():
+    assert agent._ssl_context("", "") is None
+    assert agent._ssl_context("/only/cert", "") is None
+    assert agent._ssl_context("", "/only/key") is None
+
+
+def _args(**kw):
+    import argparse
+    base = dict(hangar_url="https://h", client_cert="", client_key="", token_env="TOK",
+                concurrency=1, no_guests=True, dry_run=False)
+    base.update(kw)
+    return argparse.Namespace(**base)
+
+
+def _capture_push(monkeypatch, args, token_value=""):
+    """Run one sweep with the network stubbed; return the urllib Request it built."""
+    sent = {}
+
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"accepted": 2}'
+
+    def fake_urlopen(req, timeout=None, context=None):
+        sent["req"] = req
+        sent["context"] = context
+        return _Resp()
+
+    monkeypatch.setenv("TOK", token_value)
+    # Stub the TLS setup: load_cert_chain really opens the files, and these tests are
+    # about which headers/URL get sent, not about certificate loading.
+    monkeypatch.setattr(agent, "_ssl_context", lambda c, k: object() if (c and k) else None)
+    monkeypatch.setattr(agent, "tc_workers", lambda: {})
+    monkeypatch.setattr(agent, "collect_host", lambda h, tc, g: [{"hostname": h, "slot": 1}])
+    monkeypatch.setattr(agent.urllib.request, "urlopen", fake_urlopen)
+    agent.sweep(["host-a"], args)
+    return sent
+
+
+def test_cert_authed_agent_sends_no_token_header(monkeypatch):
+    # reprovision-runner does the same: a cert-authed client omits the token entirely.
+    sent = _capture_push(monkeypatch, _args(client_cert="/c", client_key="/k"), token_value="secret")
+    assert "X-Reprovision-runner-token" not in sent["req"].headers
+    assert "X-Reprovision-Runner-Token" not in sent["req"].headers
+
+
+def test_token_used_when_no_cert(monkeypatch):
+    sent = _capture_push(monkeypatch, _args(), token_value="secret")
+    assert sent["req"].get_header("X-reprovision-runner-token") == "secret"
+
+
+def test_push_targets_the_agent_endpoint(monkeypatch):
+    sent = _capture_push(monkeypatch, _args())
+    assert sent["req"].full_url == "https://h/api/tart-health/agent/push"
+    assert sent["req"].get_method() == "POST"
+
+
+def test_dry_run_does_not_push(monkeypatch, capsys):
+    monkeypatch.setattr(agent, "tc_workers", lambda: {})
+    monkeypatch.setattr(agent, "collect_host", lambda h, tc, g: [{"hostname": h, "slot": 1}])
+
+    def boom(*a, **k):
+        raise AssertionError("dry run must not open a connection")
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", boom)
+    assert agent.sweep(["host-a"], _args(dry_run=True)) == 1
+    assert "host-a" in capsys.readouterr().out
