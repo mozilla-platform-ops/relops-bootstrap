@@ -26,13 +26,22 @@ and nothing noticed:
   clone refspec                      a single-branch pin makes a host structurally
                                      unable to follow master
 
+Auth: production accepts ONLY the mTLS client cert. Hangar sets
+REPROVISION_RUNNER_HOSTS but no REPROVISION_RUNNER_TOKEN, so require_runner's token
+fallback is dead there; the token path exists for local dev, which has no cert.
+Pushes must also go to the runner hostname — only /api/tart-health/agent/* is routed
+to the non-IAP backend, while the read rollup stays behind IAP on the human host.
+
 Usage:
-    python -m orchestrator.tart_health_agent --hosts-file hosts.txt \\
-        --hangar-url https://hangar.relops.mozilla.com --token-env HANGAR_RUNNER_TOKEN
+    # production, as the LaunchDaemon runs it (RUNNER_CLIENT_CERT/KEY from the env)
+    hangar-tart-health-agent --hosts-file hosts.txt --loop --interval 600
+
+    # one sweep, printing the payload instead of pushing
+    hangar-tart-health-agent --hosts-file hosts.txt --dry-run
 
     # local dev against a Hangar running in docker compose
     python -m orchestrator.tart_health_agent --hosts-file hosts.txt \\
-        --hangar-url http://localhost:8000 --token-env HANGAR_RUNNER_TOKEN --dry-run
+        --hangar-url http://localhost:8000 --token-env HANGAR_RUNNER_TOKEN
 """
 
 from __future__ import annotations
@@ -40,6 +49,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import ssl
 import subprocess
 import sys
 import time
@@ -282,17 +292,71 @@ def collect_host(host: str, tc: dict[str, dict[str, Any]], probe_guests: bool) -
     return slots
 
 
+def _ssl_context(client_cert: str, client_key: str) -> ssl.SSLContext | None:
+    """Client-cert context for the mTLS push, or None to use plain TLS.
+
+    Production accepts ONLY the cert: Hangar sets REPROVISION_RUNNER_HOSTS but no
+    REPROVISION_RUNNER_TOKEN, so require_runner's token fallback is dead there and a
+    token-only agent is refused. The token path stays for local dev against
+    docker compose, which has no cert.
+    """
+    if not (client_cert and client_key):
+        return None
+    ctx = ssl.create_default_context()
+    ctx.load_cert_chain(certfile=client_cert, keyfile=client_key)
+    return ctx
+
+
+def sweep(hosts: list[str], args: argparse.Namespace) -> int:
+    """One collection pass over every host, then one push. Returns slots pushed."""
+    tc = tc_workers()
+    slots: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
+        for res in ex.map(lambda hh: collect_host(hh, tc, not args.no_guests), hosts):
+            slots.extend(res)
+
+    payload = {"slots": slots}
+    if args.dry_run:
+        print(json.dumps(payload, indent=2))
+        return len(slots)
+
+    headers = {"Content-Type": "application/json"}
+    # A cert-authed agent sends no token, matching reprovision-runner.
+    token = os.environ.get(args.token_env, "")
+    if token and not args.client_cert:
+        headers["X-Reprovision-Runner-Token"] = token
+
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        f"{args.hangar_url.rstrip('/')}/api/tart-health/agent/push",
+        data=body, method="POST", headers=headers,
+    )
+    ctx = _ssl_context(args.client_cert, args.client_key)
+    with urllib.request.urlopen(req, timeout=60, context=ctx) as r:
+        print(r.read().decode(), file=sys.stderr)
+    return len(slots)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Collect tart slot health and push it to Hangar.")
     ap.add_argument("--hosts-file", required=True, help="one FQDN per line; blank lines and # comments ignored")
-    ap.add_argument("--hangar-url", default="https://hangar.relops.mozilla.com")
+    # Pushes go to the mTLS frontend, not the IAP one: only /api/tart-health/agent/* is
+    # routed to the non-IAP backend. The read rollup stays on the human hostname.
+    ap.add_argument("--hangar-url", default=os.environ.get("HANGAR_API_URL", "https://hangar-runner.relops.mozilla.com"))
+    ap.add_argument("--client-cert", default=os.environ.get("RUNNER_CLIENT_CERT", ""),
+                    help="mTLS client cert (required in production; same pair reprovision-runner uses)")
+    ap.add_argument("--client-key", default=os.environ.get("RUNNER_CLIENT_KEY", ""))
     ap.add_argument("--token-env", default="HANGAR_RUNNER_TOKEN",
-                    help="env var holding the runner token (local dev; production uses the mTLS client cert)")
+                    help="env var holding the runner token (local dev only; production requires the cert)")
     ap.add_argument("--concurrency", type=int, default=4,
                     help="MDC1 bandwidth is the constraint; keep this low")
     ap.add_argument("--no-guests", action="store_true",
                     help="skip in-guest probes (much faster; loses disk/clock/identity checks)")
     ap.add_argument("--dry-run", action="store_true", help="print the payload instead of pushing")
+    ap.add_argument("--loop", action="store_true",
+                    help="run forever, sweeping every --interval seconds (how the LaunchDaemon runs it)")
+    ap.add_argument("--interval", type=int, default=int(os.environ.get("TART_HEALTH_INTERVAL_SECONDS", "600")),
+                    help="seconds between sweeps in --loop mode; must stay under Hangar's 30min staleness window")
     args = ap.parse_args(argv)
 
     hosts = [
@@ -303,28 +367,26 @@ def main(argv: list[str] | None = None) -> int:
         print("no hosts", file=sys.stderr)
         return 2
 
-    tc = tc_workers()
-    print(f"collecting {len(hosts)} hosts (guest probes: {not args.no_guests})", file=sys.stderr)
-    slots: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
-        for res in ex.map(lambda hh: collect_host(hh, tc, not args.no_guests), hosts):
-            slots.extend(res)
-
-    payload = {"slots": slots}
-    if args.dry_run:
-        print(json.dumps(payload, indent=2))
+    auth = "mTLS cert" if args.client_cert else "shared token"
+    if not args.loop:
+        print(f"collecting {len(hosts)} hosts (guest probes: {not args.no_guests})", file=sys.stderr)
+        sweep(hosts, args)
         return 0
 
-    body = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        f"{args.hangar_url.rstrip('/')}/api/tart-health/agent/push",
-        data=body, method="POST",
-        headers={"Content-Type": "application/json",
-                 "X-Reprovision-Runner-Token": os.environ.get(args.token_env, "")},
-    )
-    with urllib.request.urlopen(req, timeout=60) as r:
-        print(r.read().decode())
-    return 0
+    print(f"hangar-tart-health-agent → {args.hangar_url} "
+          f"(auth: {auth}, {len(hosts)} hosts, every {args.interval}s, "
+          f"guest probes: {not args.no_guests})", file=sys.stderr)
+    while True:
+        started = time.time()
+        try:
+            n = sweep(hosts, args)
+            print(f"swept {len(hosts)} hosts, pushed {n} slots in {time.time() - started:.0f}s", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 — a failed sweep must never kill the daemon
+            # Hangar ages rows to `unknown` on its own, so dropping a sweep degrades
+            # to "stale" rather than to a false green. Keep going.
+            print(f"sweep failed: {e}", file=sys.stderr)
+        # Sleep the remainder of the interval, so a slow sweep doesn't stack delays.
+        time.sleep(max(5, args.interval - (time.time() - started)))
 
 
 if __name__ == "__main__":
