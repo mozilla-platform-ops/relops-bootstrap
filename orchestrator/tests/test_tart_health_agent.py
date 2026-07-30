@@ -198,3 +198,27 @@ def test_dry_run_does_not_push(monkeypatch, capsys):
     monkeypatch.setattr(agent.urllib.request, "urlopen", boom)
     assert agent.sweep(["host-a"], _args(dry_run=True)) == 1
     assert "host-a" in capsys.readouterr().out
+
+
+# ---- _api_base: HANGAR_API_URL already ends in /api -----------------------------
+
+def test_api_base_does_not_double_up_when_env_includes_api():
+    # The live value on macmini-m4-81, sourced from runner.env by the LaunchDaemon.
+    assert agent._api_base("https://hangar-runner.relops.mozilla.com/api") == \
+        "https://hangar-runner.relops.mozilla.com/api"
+
+
+def test_api_base_appends_api_to_a_bare_site_url():
+    assert agent._api_base("http://localhost:8000") == "http://localhost:8000/api"
+
+
+def test_api_base_tolerates_trailing_slashes():
+    assert agent._api_base("https://h/api/") == "https://h/api"
+    assert agent._api_base("https://h/") == "https://h/api"
+
+
+def test_push_url_is_correct_for_the_runner_env_form(monkeypatch):
+    sent = _capture_push(
+        monkeypatch, _args(hangar_url="https://hangar-runner.relops.mozilla.com/api"))
+    assert sent["req"].full_url == \
+        "https://hangar-runner.relops.mozilla.com/api/tart-health/agent/push"
