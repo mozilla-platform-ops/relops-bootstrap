@@ -9,12 +9,12 @@ operator's file would make ssh-keygen -R refuse the whole file.
 from __future__ import annotations
 
 import atexit
-import functools
 import os
 import shlex
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -43,23 +43,61 @@ def _tool_known_hosts() -> str:
     return str(path)
 
 
-@functools.lru_cache(maxsize=None)
+_identity_lock = threading.Lock()
+_identity_path: str | None = None
+
+
 def _admin_identity_file() -> str | None:
     """Materialize the vault-fetched admin private key to a 0600 temp file for `ssh -i`.
 
     Returns None when no admin key is configured — ssh then falls back to the agent / default
     identities (the pre-existing behavior, so operators who already have the key on disk keep
-    working). Cached: written once per process, removed at exit.
+    working).
+
+    Cached per process, but the cache is **validated against the filesystem** on every call and
+    re-materialized if the file has gone away. It must be: hangar-tart-health-agent runs this
+    module as a LaunchDaemon with `--loop`, i.e. one process alive for weeks, and a temp file
+    does not live that long. When this was a plain lru_cache, the first thing to remove the file
+    from /tmp broke every subsequent sweep *permanently* until the daemon restarted --
+    `_identity_opts()` kept handing ssh `-i <deleted path>` together with `IdentitiesOnly=yes`,
+    which forbids falling back to the agent, so auth could only fail:
+
+        ssh failed twice: Warning: Identity file /tmp/reprovision-admin-XXXX.key not accessible:
+        No such file or directory. ... Permission denied (publickey,password,keyboard-interactive)
+
+    Observed on macmini-m4-81 on 2026-08-04 against the whole tart VM fleet: the agent had been
+    up since 2026-07-30 19:00 and /tmp held no reprovision-admin key at all. The helper was
+    written for the short-lived `reprovision` CLI (materialize once, drop at exit); commit
+    13895c2 pointed a long-lived daemon at it without revisiting that assumption.
+
+    Thread-safe: the agent collects hosts through a ThreadPoolExecutor, so several threads can
+    call this at once and must not each write their own key.
     """
-    key = ssh_admin_key()
-    if not key:
-        return None
-    fd, path = tempfile.mkstemp(prefix="reprovision-admin-", suffix=".key")
-    os.write(fd, key.encode() if key.endswith("\n") else (key + "\n").encode())
-    os.close(fd)
-    os.chmod(path, 0o600)  # ssh refuses a group/world-readable private key
-    atexit.register(lambda: os.path.exists(path) and os.remove(path))
-    return path
+    global _identity_path
+    with _identity_lock:
+        if _identity_path is not None and os.path.exists(_identity_path):
+            return _identity_path
+        key = ssh_admin_key()  # itself lru_cached, so re-materializing costs no secret fetch
+        if not key:
+            return None
+        fd, path = tempfile.mkstemp(prefix="reprovision-admin-", suffix=".key")
+        os.write(fd, key.encode() if key.endswith("\n") else (key + "\n").encode())
+        os.close(fd)
+        os.chmod(path, 0o600)  # ssh refuses a group/world-readable private key
+        atexit.register(lambda p=path: os.path.exists(p) and os.remove(p))
+        _identity_path = path
+        return path
+
+
+def _reset_admin_identity_cache() -> None:
+    """Forget the materialized key path (tests; also correct after an admin-key rotation)."""
+    global _identity_path
+    with _identity_lock:
+        _identity_path = None
+
+
+# Back-compat for callers/tests that used the old lru_cache surface.
+_admin_identity_file.cache_clear = _reset_admin_identity_cache  # type: ignore[attr-defined]
 
 
 def _identity_opts() -> list[str]:

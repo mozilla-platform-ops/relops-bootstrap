@@ -57,6 +57,51 @@ def test_admin_identity_file_writes_private_key_0600():
         ssh._admin_identity_file.cache_clear()
 
 
+def test_admin_identity_file_rematerializes_when_file_disappears():
+    """Regression: hangar-tart-health-agent runs for weeks under launchd, so the temp key
+    outlives nothing -- something eventually removes it from /tmp. The old lru_cache kept
+    returning the dead path, and because _identity_opts() also sets IdentitiesOnly=yes, ssh
+    could not fall back to the agent: every sweep failed auth until the daemon was restarted.
+    Seen on macmini-m4-81 2026-08-04, agent up since 2026-07-30.
+    """
+    ssh._admin_identity_file.cache_clear()
+    with patch("orchestrator.clients.ssh.ssh_admin_key", return_value="PRIVATE-KEY-BODY"):
+        first = ssh._admin_identity_file()
+        assert first is not None
+
+        # Simulate whatever reaps /tmp, with the process still running.
+        os.remove(first)
+        assert not os.path.exists(first)
+
+        second = ssh._admin_identity_file()
+        try:
+            assert second is not None, "must re-materialize, not hand ssh a deleted path"
+            assert os.path.exists(second), "re-materialized key must actually be on disk"
+            with open(second) as fh:
+                assert fh.read() == "PRIVATE-KEY-BODY\n"
+            assert stat.S_IMODE(os.stat(second).st_mode) == 0o600
+
+            # And the options handed to ssh must point at the live file.
+            assert ssh._identity_opts() == ["-o", "IdentitiesOnly=yes", "-i", second]
+        finally:
+            if second and os.path.exists(second):
+                os.remove(second)
+            ssh._admin_identity_file.cache_clear()
+
+
+def test_admin_identity_file_reuses_path_while_file_is_present():
+    """The validated cache must still be a cache -- no new temp file per ssh invocation."""
+    ssh._admin_identity_file.cache_clear()
+    with patch("orchestrator.clients.ssh.ssh_admin_key", return_value="PRIVATE-KEY-BODY"):
+        first = ssh._admin_identity_file()
+        second = ssh._admin_identity_file()
+    try:
+        assert first == second
+    finally:
+        os.remove(first)
+        ssh._admin_identity_file.cache_clear()
+
+
 def test_run_255_gives_friendly_vpn_error():
     class CP:
         returncode = 255
