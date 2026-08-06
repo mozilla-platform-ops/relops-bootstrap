@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from . import ui
 from .clients import simplemdm, ssh, taskcluster
 from .config import get_settings
-from .errors import ReprovisionError
+from .errors import NotReadyError, ReprovisionError
 from .hostnames import validate_short
 from .role_map import role_for_hostname
 from .secrets import simplemdm_api_key, ssh_admin_key, ssh_admin_password, tc_credentials
@@ -35,6 +35,26 @@ class HostContext:
     registered: bool = True  # is the worker currently registered in TC? False => skip quarantine/drain
 
 
+_PROD_POOL_BY_ROLE = {
+    "gecko_t_osx_1500_m4": "releng-hardware/gecko-t-osx-1500-m4",
+    "gecko_t_osx_1400_r8": "releng-hardware/gecko-t-osx-1400-r8",
+}
+
+
+def candidate_pools(role: str) -> list[str]:
+    """The pools a role's worker could be registered in, staging first.
+
+    A role backs a prod pool by convention, but the SAME role also backs its `-staging`
+    sibling (e.g. gecko_t_osx_1500_m4 → both gecko-t-osx-1500-m4 and -staging), so the role
+    alone can't disambiguate — callers probe these in order against TC. Shared by resolve()
+    and the fresh-host quarantine so the two can't drift onto different pool names.
+    """
+    base_pool = _PROD_POOL_BY_ROLE.get(role)
+    if not base_pool:
+        raise ValueError(f"no worker pool mapping for role '{role}'")
+    return [f"{base_pool}-staging", base_pool]
+
+
 def resolve(hostname: str) -> HostContext:
     """Look up everything we need about a host from its short name."""
     # Validate before the name reaches SSH / expect / SimpleMDM / VNC. Every CLI
@@ -43,20 +63,13 @@ def resolve(hostname: str) -> HostContext:
     hostname = validate_short(hostname)
     role = role_for_hostname(hostname)
 
-    # A role backs a prod pool by convention, but the SAME role also backs its `-staging`
-    # sibling (e.g. gecko_t_osx_1500_m4 → both gecko-t-osx-1500-m4 and -staging). The role
-    # can't disambiguate, so resolve the real pool from where the worker is actually registered
-    # in TC: probe staging first, then prod. If it's registered in neither (a fresh host not yet
-    # booted into TC), fall back to the prod pool — quarantine/drain then no-op on the 404.
-    prod_pool_by_role = {
-        "gecko_t_osx_1500_m4": "releng-hardware/gecko-t-osx-1500-m4",
-        "gecko_t_osx_1400_r8": "releng-hardware/gecko-t-osx-1400-r8",
-    }
-    base_pool = prod_pool_by_role.get(role)
-    if not base_pool:
-        raise ValueError(f"no worker pool mapping for role '{role}'")
+    # Resolve the real pool from where the worker is actually registered in TC. If it's
+    # registered in neither (a fresh host not yet booted into TC), fall back to the prod pool —
+    # quarantine/drain then no-op on the 404.
+    pools = candidate_pools(role)
+    base_pool = pools[-1]
     worker_group = "mdc1"
-    found_pool = taskcluster.find_registered_pool([f"{base_pool}-staging", base_pool], worker_group, hostname)
+    found_pool = taskcluster.find_registered_pool(pools, worker_group, hostname)
     # If registered nowhere (fresh host not yet in TC, or a prior wipe that never finished),
     # fall back to the prod pool for any pool-scoped call, and flag it so the reprovision flow
     # skips quarantine/drain — there's nothing scheduling tasks on an unregistered worker, so
@@ -74,6 +87,25 @@ def resolve(hostname: str) -> HostContext:
         worker_pool_id=pool,
         simplemdm_device_id=device_id,
         registered=found_pool is not None,
+    )
+
+
+def resolve_offline(hostname: str) -> HostContext:
+    """Build a HostContext from the hostname alone — no SimpleMDM, no Taskcluster.
+
+    `resolve()` costs a SimpleMDM device lookup and up to two TC pool probes per host, which
+    the wipe/quarantine steps need. The fresh-host path doesn't: preflight only touches the box
+    over SSH, and a readiness sweep across 55 hosts shouldn't need an MDM API key at all. The
+    fields those steps would fill are left unset, so anything that requires them fails loudly
+    rather than acting on a half-populated context.
+    """
+    hostname = validate_short(hostname)
+    return HostContext(
+        hostname=hostname,
+        fqdn=f"{hostname}.test.releng.mdc1.mozilla.com",
+        role=role_for_hostname(hostname),
+        worker_pool_id="",  # unset on purpose: no pool-scoped call belongs on this path
+        registered=False,
     )
 
 
@@ -112,6 +144,94 @@ def check() -> None:
 
 
 # --- workflow steps ---
+
+
+def _os_version_matches(actual: str, expected: str) -> bool:
+    """True when `actual` is `expected` or a point release of it.
+
+    Prefix-with-dot, not a bare startswith: "15.3" must accept 15.3 and 15.3.1 but reject
+    15.30 (a real version string shape) and 15.4.
+    """
+    return actual == expected or actual.startswith(expected + ".")
+
+
+def step_preflight(
+    ctx: HostContext,
+    *,
+    expected_os: str = "",
+    require_sip_disabled: bool = True,
+) -> None:
+    """Refuse to provision a fresh host that isn't at its target OS / SIP state yet.
+
+    This is the gate that keeps a batch honest. Three failure modes it exists to prevent,
+    each one observed on a previous rollout:
+
+    1. **OS install lands mid-bootstrap.** On the 2026-05-12 batch a pending "upgrade to 15.3"
+       MDM job fired on ~12 of 25 hosts while puppet was converging and took them all offline
+       for 25-45 min. The OS must already be at target before the host enters the bootstrap
+       group — so we assert it here rather than hoping the ordering held.
+    2. **SIP came back on.** The fleet's TCC grants for this role are written straight into the
+       system TCC DB (`add_tcc_perms.sh` takes that branch only when `csrutil status` says
+       disabled). A host that quietly re-enabled SIP still *finishes* bootstrap — it just
+       finishes wrong, with the PPPC-dependent branch on a role that has no PPPC profile. That
+       is far more expensive to find later than to catch here.
+    3. **Box isn't up yet.** Fresh DEP hosts appear over ~15 min. Waiting the full window
+       inside a batch slot burns a concurrency slot for one host; "not ready, skip, re-run"
+       gets the other 54 moving.
+
+    Raises NotReadyError (exit 2 — go fix / come back) for all three, never ReprovisionError.
+    """
+    s = get_settings()
+    expected_os = expected_os or s.provision_expected_os
+    ui.step("PREFLIGHT", "verify the host is at its target OS + SIP state before we commit to it")
+
+    ui.wire(f"tcp connect {ctx.fqdn}:22  (fresh DEP hosts come up over ~15 min)")
+    try:
+        ssh.wait_for_sshd(ctx.fqdn, timeout=s.preflight_sshd_wait_seconds)
+    except TimeoutError:
+        raise NotReadyError(
+            f"{ctx.fqdn}: sshd not reachable within {s.preflight_sshd_wait_seconds}s — "
+            "still converging, powered off, or not on the VPN"
+        ) from None
+    ui.ok("sshd reachable")
+
+    ui.wire(f"ssh admin@{ctx.hostname} sw_vers -productVersion")
+    cp = ssh.run(ctx.fqdn, "sw_vers -productVersion", check=False)
+    actual_os = cp.stdout.decode(errors="replace").strip()
+    if cp.returncode != 0 or not actual_os:
+        raise NotReadyError(f"{ctx.fqdn}: couldn't read the OS version over ssh (admin key installed yet?)")
+    if not _os_version_matches(actual_os, expected_os):
+        raise NotReadyError(
+            f"{ctx.fqdn}: macOS {actual_os}, expected {expected_os} — let the MDM in-place update "
+            "finish before moving this host into the bootstrap group (an OS install landing "
+            "mid-puppet takes the box down for 25-45 min)"
+        )
+    ui.ok(f"macOS {actual_os}")
+
+    # Same detection as ronin_puppet's add_tcc_perms.sh, so preflight and puppet can't disagree
+    # about which TCC branch this host is on.
+    ui.wire(f"ssh admin@{ctx.hostname} csrutil status")
+    cp = ssh.run(ctx.fqdn, "csrutil status", check=False)
+    sip_raw = cp.stdout.decode(errors="replace").strip()
+    sip_disabled = "disabled" in sip_raw.lower()
+    if require_sip_disabled and not sip_disabled:
+        raise NotReadyError(
+            f"{ctx.fqdn}: SIP is not disabled ({sip_raw or 'no output'}) — puppet would take the "
+            "PPPC/system-DB-read-only branch on a role that has no PPPC profile. Disable SIP in "
+            "Recovery first, or pass --allow-sip-enabled if this host is meant to be SIP-on"
+        )
+    ui.ok("SIP disabled" if sip_disabled else f"SIP enabled — allowed by request ({sip_raw})")
+
+    # Informational: mint/escrow handle both of these, so they gate nothing. Printed because
+    # "already ENABLED / already escrowed" is the difference between a fresh host and one
+    # somebody already half-provisioned by hand.
+    token = ssh.secure_token_status(ctx.fqdn)
+    ui.info(f"admin SecureToken: {token or 'unknown'} (mint will grant it if needed)")
+    cp = ssh.run(ctx.fqdn, "sudo profiles status -type bootstraptoken", check=False)
+    escrowed = b"escrowed to server: YES" in cp.stdout
+    ui.info(f"Bootstrap Token escrowed: {'YES' if escrowed else 'no — escrow step will fix'}")
+    if ssh.file_exists(ctx.fqdn, "/var/log/m4-bootstrap-complete"):
+        ui.warn("sentinel /var/log/m4-bootstrap-complete already present — this host has bootstrapped before")
 
 
 def step_quarantine(ctx: HostContext, until: str | None = None, info: str = "") -> None:
@@ -348,6 +468,60 @@ def step_wait_for_sentinel(ctx: HostContext) -> None:
     ui.ok("bootstrap complete — /var/log/m4-bootstrap-complete present")
 
 
+def step_quarantine_on_register(ctx: HostContext) -> None:
+    """Wait for a fresh worker to appear in Taskcluster, then quarantine it on sight.
+
+    A fresh DEP host is not registered in TC, and `queue.quarantineWorker` 404s on a worker
+    that doesn't exist yet — that's why the reprovision flow skips quarantine for unregistered
+    hosts. So the only way to hold a brand-new box out of the pool is to watch for it and
+    quarantine the moment it shows up.
+
+    **This narrows the race; it does not close it.** The driver writes the sentinel, then
+    worker-runner starts generic-worker, which registers and can `claimWork` immediately —
+    observed at roughly a minute after the sentinel. We poll every few seconds from the
+    sentinel onward, so the exposure is seconds rather than however long it takes an operator
+    to notice, but a task claimed inside that window does run on an unvalidated host. If you
+    need a hard guarantee, don't put the host in the bootstrap group until the pool is drained,
+    or accept the window knowingly.
+
+    Fails closed: if TC credentials aren't configured we refuse up front rather than spend the
+    bootstrap window discovering we can't quarantine anything.
+    """
+    s = get_settings()
+    client_id, access_token = tc_credentials()
+    if not (client_id and access_token):
+        raise ReprovisionError(
+            "quarantine-on-register needs Taskcluster credentials "
+            "(REPROVISION_TC_CLIENT_ID / _ACCESS_TOKEN, or their _REF defaults) — "
+            "refusing to wait for a registration we couldn't act on"
+        )
+
+    pools = candidate_pools(ctx.role)
+    ui.step("QUARANTINE ON REGISTER", "hold the fresh worker out of the pool the moment it appears")
+    ui.wire(f"queue.getWorker {' | '.join(pools)} / {ctx.worker_group} / {ctx.hostname}  (poll)")
+
+    deadline = time.monotonic() + s.quarantine_on_register_max_wait_seconds
+    found_pool: str | None = None
+    with ui.waiting("waiting for the worker to register with Taskcluster") as tick:
+        while time.monotonic() < deadline:
+            found_pool = taskcluster.find_registered_pool(pools, ctx.worker_group, ctx.hostname)
+            if found_pool:
+                break
+            tick("not in a pool yet — worker-runner starts generic-worker after the sentinel")
+            time.sleep(s.quarantine_on_register_poll_seconds)
+
+    if not found_pool:
+        raise ReprovisionError(
+            f"{ctx.hostname} never registered in {' or '.join(pools)} within "
+            f"{s.quarantine_on_register_max_wait_seconds}s — bootstrap finished but the worker "
+            "didn't come up; check worker-runner and /var/tmp/semaphore/run-buildbot on the host"
+        )
+
+    ctx.worker_pool_id = found_pool
+    ui.ok(f"registered in {found_pool}")
+    step_quarantine(ctx, info="fresh host — quarantined on registration pending validation")
+
+
 def step_unquarantine(ctx: HostContext) -> None:
     ui.step("UNQUARANTINE", "return the worker to service")
     ui.wire(f"PUT queue/v1 quarantineWorker {ctx.hostname}  (quarantineUntil → past)")
@@ -405,3 +579,84 @@ def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = 
     if unquarantine and ctx.registered:
         step_unquarantine(ctx)
     ui.summary(ctx.hostname, time.monotonic() - started, quarantined=not unquarantine)
+
+
+def provision(
+    hostname: str,
+    *,
+    expected_os: str = "",
+    require_sip_disabled: bool = True,
+    wait: bool = True,
+    quarantine_on_register: bool = False,
+) -> None:
+    """Bring a **fresh** DEP-enrolled host to prod. No EACS, no wipe — nothing here can erase.
+
+    For factory-clean hardware that auto-enrolled via DEP/ADE, where `reprovision run`'s
+    wipe/re-enroll phases are not just unnecessary but destructive. The one-command form of
+    the "Fresh (B)" column in the 2026-07-08 handoff, which until now had to be driven as
+    three separate subcommands — with `run` sitting right there as the obvious-looking
+    alternative that would wipe the box.
+
+    Where this sits in the wider rollout, for a SIP-off fleet:
+
+        DEP enroll (intake group)
+          → `reprovision mint`        # grants admin a SecureToken, i.e. a volume owner —
+          →                           #   Recovery needs one to authenticate `csrutil disable`
+          → operator: csrutil disable in Recovery
+          → MDM: in-place update to the target OS
+          → move host into the bootstrap group   # membership installs the signed pkg = "go"
+          → `reprovision provision`   # THIS: preflight gate → mint (no-op) → escrow BST →
+                                      #   wait for the pkg's sentinel
+
+    `mint` is idempotent and safe to run early, which is what makes that ordering work: the
+    same step that mints the volume owner for the Recovery trip is a no-op by the time this
+    command re-runs it.
+
+    quarantine_on_register holds the finished host out of the pool (see
+    step_quarantine_on_register for what that does and doesn't guarantee). It needs `wait`,
+    since there's no registration to catch if we're not staying for the bootstrap.
+    """
+    if quarantine_on_register and not wait:
+        raise ReprovisionError(
+            "--quarantine-on-register needs the bootstrap wait: the worker registers at the very "
+            "end, so there's nothing to catch if we return after the BST escrow. Drop --no-wait, "
+            "or quarantine later with `reprovision quarantine-on-register <host>`"
+        )
+    # Check the TC credentials NOW, not in ~40 minutes. The whole point of the flag is that the
+    # host doesn't take work; discovering we can't quarantine it only once it's already claiming
+    # tasks is the one outcome worth engineering against.
+    if quarantine_on_register:
+        client_id, access_token = tc_credentials()
+        if not (client_id and access_token):
+            raise ReprovisionError(
+                "--quarantine-on-register needs Taskcluster credentials "
+                "(REPROVISION_TC_CLIENT_ID / _ACCESS_TOKEN, or their _REF defaults) — "
+                "checked up front so this fails now rather than after the bootstrap"
+            )
+
+    ctx = resolve_offline(hostname)
+    started = time.monotonic()
+    ui.banner(ctx.hostname, ctx.role, "fresh DEP host — no wipe")
+
+    phases = ["PREFLIGHT", "MINT", "ESCROW BST"]
+    if wait:
+        phases.append("BOOTSTRAP")
+    if quarantine_on_register:
+        phases.append("QUARANTINE ON REGISTER")
+    ui.flow(phases)
+
+    step_preflight(ctx, expected_os=expected_os, require_sip_disabled=require_sip_disabled)
+    step_mint(ctx)  # mint SecureToken (must precede escrow_bst)
+    step_escrow_bst(ctx)
+    if wait:
+        # The bootstrap pkg is a managed install driven by group membership, so there is
+        # nothing to trigger — we only wait for the sentinel it writes.
+        step_wait_for_sentinel(ctx)
+    else:
+        ui.info("--no-wait: credentials are in place; sweep the sentinel later with `wait-sentinel`")
+
+    if quarantine_on_register:
+        step_quarantine_on_register(ctx)
+
+    elapsed = time.monotonic() - started
+    ui.provisioned(ctx.hostname, elapsed, waited=wait, quarantined=quarantine_on_register)

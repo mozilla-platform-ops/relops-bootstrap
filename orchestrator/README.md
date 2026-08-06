@@ -164,17 +164,79 @@ reprovision escrow-bst    macmini-m4-80
 reprovision wait-sentinel macmini-m4-80
 ```
 
-### Provision a fresh host → prod
+### Provision a fresh host → prod  *(what `provision` does)*
 
-No EACS (factory-clean). Standard DEP front-end, then the same core:
+No EACS (factory-clean). **Nothing in this path can erase a host** — that's the point of it
+being a separate command from `run`, whose second phase is a wipe.
 
-1. **Assign** the machine (by serial) to DEP/ADE **and** the SimpleMDM group.
-2. **Power on** → DEP enrolls (Setup Assistant skipped) → profiles/PKGs begin.
-3. `reprovision mint macmini-m4-XX` — mints the *first* SecureToken + kicks off PKG delivery.
-4. `reprovision escrow-bst macmini-m4-XX` — establishes BST custody (so it's EACS-able later).
-5. Signed **bootstrap PKG** runs → SCEP vault → puppet → sentinel;
-   confirm with `reprovision wait-sentinel macmini-m4-XX`.
-6. Quarantine during bring-up; **un-quarantine into service** when validated.
+```bash
+reprovision provision macmini-m4-201
+# preflight → mint → escrow-bst → wait-sentinel
+```
+
+For a hardware refresh where SIP is disabled by hand, the surrounding order matters:
+
+1. **Assign** the machine (by serial) to DEP/ADE and to the **intake** group — the group that
+   carries DEP account-setup, `relops-ssh` and the OS-install job, but *not* the bootstrap PKG.
+2. **Power on** → DEP enrolls (Setup Assistant skipped).
+3. `reprovision mint macmini-m4-201` — grants admin a SecureToken, i.e. makes it a **volume
+   owner**. Recovery needs one to authenticate `csrutil disable`, so this comes first.
+4. **Operator:** `csrutil disable` in Recovery.
+5. **MDM:** in-place update to the target OS.
+6. **Move the host into the bootstrap group** — membership installs the signed PKG, so the
+   move *is* the trigger. Keeping the PKG out of the intake group is what stops an OS install
+   from landing on top of a converging puppet run.
+7. `reprovision provision macmini-m4-201` — gates on OS + SIP state, re-runs `mint` (a no-op
+   by now), escrows the BST, then waits for the PKG's sentinel.
+
+A fresh host was never quarantined, so by default it **starts claiming work as soon as
+generic-worker registers.** To hold it out of the pool:
+
+```bash
+reprovision provision macmini-m4-201 --quarantine-on-register
+```
+
+A worker that isn't registered yet **cannot** be quarantined — `queue.quarantineWorker` 404s
+on a worker that doesn't exist — so this watches for it to appear and quarantines on sight.
+
+> **It narrows the race; it does not close it.** The driver writes the sentinel, then
+> worker-runner starts generic-worker, which registers and can `claimWork` immediately —
+> roughly a minute after the sentinel. We poll every 5s from the sentinel onward, so exposure
+> is seconds rather than however long it takes someone to notice. A task claimed inside that
+> window does run on an unvalidated host. For a hard guarantee, don't move the host into the
+> bootstrap group until you can accept it in the pool.
+
+Fails closed: without TC credentials it refuses **up front**, rather than spending the
+bootstrap window to discover it can't quarantine anything. Validate, then
+`reprovision unquarantine <host>`.
+
+### Batches
+
+```bash
+reprovision batch hosts.txt --action preflight            # read-only readiness sweep
+reprovision batch hosts.txt --action mint                 # before the Recovery trip
+reprovision batch hosts.txt --action provision -j 3 \
+    --quarantine-on-register                              # the real run
+```
+
+`hosts.txt` is one short hostname per line, `#` comments allowed. Each host runs as its own
+`reprovision` subprocess with its own log under `~/.local/state/reprovision/batch-<stamp>/`,
+so one bad host can't take the batch down.
+
+Hosts that aren't ready yet come back **skipped**, not failed, and re-running the same command
+picks them up — every action is idempotent:
+
+```
+  ✓ macmini-m4-201  ok       12:44
+  ▲ macmini-m4-202  skipped   0:04   macOS 26.1, expected 15.3 — let the MDM in-place update…
+  ✗ macmini-m4-203  failed    0:918  password login denied (wrong admin password?)
+
+  ████████  38 ok · 15 skipped · 2 failed · 71:20 wall clock
+```
+
+Concurrency defaults to **3**, matching the runner's `RUNNER_MAX_CONCURRENT`: the ceiling is
+MDC1 network and imaging throughput, not local CPU. Pushing past it is what took ~12 of 25
+hosts offline simultaneously on the 2026-05-12 batch.
 
 ---
 
@@ -220,7 +282,11 @@ direct `REPROVISION_*` value always wins over its `_REF`.
 
 | Command | What it does |
 |---|---|
-| `reprovision run <host>` | Full pipeline. `--unquarantine` returns it to service at the end. |
+| `reprovision run <host>` | Full pipeline, **including an EACS wipe**. `--unquarantine` returns it to service at the end. |
+| `reprovision provision <host>` | Fresh DEP host → prod. **No wipe in this path.** `--no-wait` stops after the BST escrow. |
+| `reprovision preflight <host>` | Read-only readiness check (OS version, SIP, SecureToken, BST). Needs no SimpleMDM/TC credential. |
+| `reprovision quarantine-on-register <host>` | Watch for a fresh worker to register, then quarantine it on sight. |
+| `reprovision batch <file>` | Run `--action preflight\|mint\|provision` across a host list, `-j` at a time, one log per host. |
 | `reprovision quarantine <host>` | Quarantine in Taskcluster. |
 | `reprovision drain <host>` | Wait for the current task to finish. |
 | `reprovision wipe <host>` | EACS via SimpleMDM (`DoNotObliterate`, BST-guarded). |
@@ -232,6 +298,20 @@ direct `REPROVISION_*` value always wins over its `_REF`.
 
 Any step is independently re-runnable — if the pipeline fails partway, fix the issue and
 re-run just that subcommand.
+
+**Exit codes:** `0` success · **`2` host not ready** (wrong OS, SIP still enabled, box not up
+yet — go fix it or come back later) · `1` everything else. `batch` reads the `2` to report
+skipped separately from failed, which is what makes "38 ok, 15 not ready, 2 broken" possible.
+
+| Gate override | Default |
+|---|---|
+| `--expected-os` / `REPROVISION_PROVISION_EXPECTED_OS` | `15.3` (accepts point releases: 15.3.1 ✓, 15.4 ✗) |
+| `--allow-sip-enabled` | off — `provision`/`preflight` require SIP **disabled** |
+| `--quarantine-on-register` | off — a fresh host serves as soon as it registers |
+| `-j` / `REPROVISION_BATCH_MAX_CONCURRENT` | `3` |
+| `REPROVISION_PREFLIGHT_SSHD_WAIT_SECONDS` | `60` |
+| `REPROVISION_QUARANTINE_ON_REGISTER_POLL_SECONDS` | `5` (this interval *is* the exposure window) |
+| `REPROVISION_QUARANTINE_ON_REGISTER_MAX_WAIT_SECONDS` | `900` |
 
 > **The host stays quarantined through the whole reprovision by default.** `run` does *not*
 > auto-unquarantine unless you pass `--unquarantine`, because returning a host to service

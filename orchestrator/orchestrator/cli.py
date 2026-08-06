@@ -8,7 +8,7 @@ from __future__ import annotations
 import typer
 
 from . import ui, workflow
-from .errors import ReprovisionError
+from .errors import NotReadyError, ReprovisionError
 
 _app = typer.Typer(
     no_args_is_help=True,
@@ -33,6 +33,111 @@ def run(
     By default the host stays quarantined throughout; pass --unquarantine to return it to service.
     """
     workflow.reprovision(hostname, unquarantine=unquarantine)
+
+
+_EXPECTED_OS_OPT = typer.Option(
+    "", "--expected-os", help="Required macOS version (default: REPROVISION_PROVISION_EXPECTED_OS, 15.3)."
+)
+_ALLOW_SIP_OPT = typer.Option(
+    False, "--allow-sip-enabled", help="Don't require SIP to be disabled (for the SIP-on flow)."
+)
+_QUARANTINE_ON_REGISTER_OPT = typer.Option(
+    False,
+    "--quarantine-on-register",
+    help="Hold the host out of the pool: watch for it to register in Taskcluster and quarantine "
+    "it on sight. Needs TC credentials.",
+)
+
+
+@_app.command()
+def provision(
+    hostname: str = typer.Argument(..., help="Short hostname, e.g. macmini-m4-201"),
+    expected_os: str = _EXPECTED_OS_OPT,
+    allow_sip_enabled: bool = _ALLOW_SIP_OPT,
+    no_wait: bool = typer.Option(
+        False, "--no-wait", help="Stop after mint + BST escrow; don't block on the bootstrap sentinel."
+    ),
+    quarantine_on_register: bool = _QUARANTINE_ON_REGISTER_OPT,
+) -> None:
+    """Provision a FRESH DEP-enrolled host: preflight -> mint -> escrow BST -> bootstrap.
+
+    For factory-clean hardware that auto-enrolled via DEP. Unlike `run` there is no wipe in
+    this path at all — nothing it can do will erase the host.
+    """
+    workflow.provision(
+        hostname,
+        expected_os=expected_os,
+        require_sip_disabled=not allow_sip_enabled,
+        wait=not no_wait,
+        quarantine_on_register=quarantine_on_register,
+    )
+
+
+@_app.command()
+def quarantine_on_register(hostname: str) -> None:
+    """Wait for a fresh worker to appear in Taskcluster, then quarantine it on sight.
+
+    A worker that isn't registered yet can't be quarantined (`quarantineWorker` 404s), so this
+    watches for it. Narrows the window between registration and the first claimed task to
+    seconds — it does not eliminate it. Use standalone for hosts already mid-bootstrap.
+    """
+    workflow.step_quarantine_on_register(workflow.resolve_offline(hostname))
+
+
+@_app.command()
+def preflight(
+    hostname: str = typer.Argument(..., help="Short hostname, e.g. macmini-m4-201"),
+    expected_os: str = _EXPECTED_OS_OPT,
+    allow_sip_enabled: bool = _ALLOW_SIP_OPT,
+) -> None:
+    """Read-only readiness check on one host: OS version, SIP state, SecureToken/BST status.
+
+    Changes nothing and needs no SimpleMDM or Taskcluster credential — just the admin SSH key.
+    Exits 2 (not 1) when the host simply isn't ready yet.
+    """
+    workflow.step_preflight(
+        workflow.resolve_offline(hostname),
+        expected_os=expected_os,
+        require_sip_disabled=not allow_sip_enabled,
+    )
+
+
+@_app.command()
+def batch(
+    hosts_file: str = typer.Argument(..., help="File with one short hostname per line ('#' comments ok)."),
+    action: str = typer.Option(
+        "provision", "--action", help="What to run per host: preflight | mint | provision."
+    ),
+    concurrency: int = typer.Option(
+        0, "--concurrency", "-j", help="How many hosts in flight (default 3 — MDC1 throughput, not CPU)."
+    ),
+    expected_os: str = _EXPECTED_OS_OPT,
+    allow_sip_enabled: bool = _ALLOW_SIP_OPT,
+    no_wait: bool = typer.Option(False, "--no-wait", help="For --action provision: skip the sentinel wait."),
+    quarantine_on_register: bool = _QUARANTINE_ON_REGISTER_OPT,
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print the per-host commands and exit."),
+) -> None:
+    """Run one action across a list of hosts, a few at a time, with per-host logs.
+
+    Each host runs as its own `reprovision` subprocess, so one bad host can't take the batch
+    down. Hosts that aren't ready yet are reported as skipped, not failed, and re-running the
+    same command picks them up — every action here is idempotent.
+    """
+    from . import batch as _batch
+
+    hosts = _batch.read_host_file(hosts_file)
+    failed = _batch.run_batch(
+        hosts,
+        action=action,
+        concurrency=concurrency,
+        expected_os=expected_os,
+        allow_sip_enabled=allow_sip_enabled,
+        wait=not no_wait,
+        quarantine_on_register=quarantine_on_register,
+        dry_run=dry_run,
+    )
+    if failed:
+        raise SystemExit(1)
 
 
 @_app.command()
@@ -102,9 +207,17 @@ def demo(
 def app() -> None:
     """Entry point. Turns expected operational failures — not signed in to 1Password, off the
     VPN, host unreachable, BST not escrowed, timeouts — into one clean red line instead of a
-    traceback. Anything that isn't one of these propagates normally so real bugs stay visible."""
+    traceback. Anything that isn't one of these propagates normally so real bugs stay visible.
+
+    Exit codes: 0 success · 2 host not ready (wrong OS, SIP on, box not up — come back later)
+    · 1 everything else. `reprovision batch` reads the 2 to report skipped separately from
+    failed, so keep them distinct.
+    """
     try:
         _app()
+    except NotReadyError as e:  # subclass of ReprovisionError — must be caught first
+        ui.warn(str(e))
+        raise SystemExit(2) from None
     except (ReprovisionError, TimeoutError, ValueError) as e:
         ui.err(str(e))
         raise SystemExit(1) from None
