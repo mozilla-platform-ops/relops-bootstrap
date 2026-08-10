@@ -29,7 +29,12 @@ class Settings(BaseSettings):
     # SimpleMDM
     simplemdm_api_key: str = Field(default="")
     # Shared op:// ref (no gcloud). Override with a Secret Manager id if you prefer that backend.
-    simplemdm_api_key_ref: str = Field(default="op://RelOps/SimpleMDM API admin/password")
+    # NB: the item is "SimpleMDM API admin VNC", not "SimpleMDM API admin". The shorter name
+    # was the default here and no longer exists in the vault, so `reprovision check` failed for
+    # every operator with `isn't an item in the "RelOps" vault`. Verified 2026-08-10: this ref
+    # returns a key that GETs /api/v1/account with HTTP 200. (GCP Secret Manager id
+    # `simplemdm-api-token` also works, if you'd rather resolve it through gcloud.)
+    simplemdm_api_key_ref: str = Field(default="op://RelOps/SimpleMDM API admin VNC/password")
 
     # SSH to host
     ssh_admin_user: str = Field(default="admin")
