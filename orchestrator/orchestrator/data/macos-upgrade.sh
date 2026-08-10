@@ -111,6 +111,20 @@ if ! /usr/sbin/sysadminctl -secureTokenStatus "$ADMIN_USERNAME" 2>&1 | /usr/bin/
   exit 1
 fi
 
+# ...and the token being ENABLED says nothing about WHICH password it's under.
+# The fleet is mixed: hosts provisioned before the DEP account-setup change still
+# have the old default admin password, while freshly DEP-enrolled hosts have the
+# fixed strong one. Wrong password = 14GB downloaded, pkg installed, reboot, and
+# only THEN a startosinstall auth failure. `dscl . -authonly` settles it locally
+# in about a second, with no network and no side effects.
+if ! /usr/bin/dscl . -authonly "$ADMIN_USERNAME" "$ADMIN_PASSWORD" >/dev/null 2>&1; then
+  echo "[ERROR] the supplied password is not valid for $ADMIN_USERNAME on this host."
+  echo "        Older hosts predate the DEP fixed-password account-setup and still use the"
+  echo "        old default. Re-run with the right credential — e.g."
+  echo "        REPROVISION_SSH_ADMIN_PASSWORD=... reprovision os-update <host>"
+  exit 1
+fi
+
 FREE_GB=$(/bin/df -g / | /usr/bin/awk 'NR==2 {print $4}')
 if [[ -n "$FREE_GB" && "$FREE_GB" -lt "$REQUIRED_GB" ]]; then
   echo "[ERROR] only ${FREE_GB}GB free on /, need ~${REQUIRED_GB}GB."

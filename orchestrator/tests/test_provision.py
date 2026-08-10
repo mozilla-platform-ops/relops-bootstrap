@@ -466,3 +466,15 @@ def test_os_update_surfaces_a_refused_start_as_not_ready():
          patch("orchestrator.workflow.time.sleep"):
         with pytest.raises(NotReadyError, match="SecureToken"):
             workflow.step_os_update(_ctx(), expected_os="15.3")
+
+
+def test_os_upgrade_script_validates_the_credential_before_downloading():
+    # The fleet is split: hosts enrolled before the DEP static-password change still have the
+    # old default. A SecureToken can be ENABLED under either one, so the token check alone
+    # can't catch a wrong password -- and the cost of finding out at startosinstall is ~14GB
+    # and a reboot per host.
+    with patch("orchestrator.workflow.ssh_admin_password", return_value="pw"):
+        body = workflow._os_upgrade_script("15.3")
+    assert "dscl . -authonly" in body
+    # ...and it must come before the download, or it saves nothing.
+    assert body.index("dscl . -authonly") < body.index("downloading $REMOTE_URL")
