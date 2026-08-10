@@ -77,6 +77,13 @@ class Settings(BaseSettings):
     # wait only needs to cover worker-runner starting generic-worker, not a puppet run.
     quarantine_on_register_poll_seconds: int = Field(default=5)
     quarantine_on_register_max_wait_seconds: int = Field(default=900)
+    # How long to wait for the bootstrap pkg to land before concluding the host is in the wrong
+    # SimpleMDM group. Short by design: the point is to fail in minutes instead of burning the
+    # full bootstrap_max_wait_seconds on a sentinel that was never going to appear. Long enough
+    # to absorb a pending MDM check-in right after a group move (check-in on these boxes is
+    # often boot-only).
+    bootstrap_pkg_poll_seconds: int = Field(default=10)
+    bootstrap_pkg_max_wait_seconds: int = Field(default=300)
 
     # (The bootstrap is delivered as a signed PKG / managed install, not a triggered
     # script-job, so there's no bootstrap_script_id anymore.)

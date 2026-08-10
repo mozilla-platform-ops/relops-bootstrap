@@ -145,6 +145,14 @@ def check() -> None:
 
 # --- workflow steps ---
 
+# Written by the bootstrap driver when everything has converged; presence == done.
+SENTINEL = "/var/log/m4-bootstrap-complete"
+# Laid down by the signed bootstrap pkg at install time. Presence == the managed install ran,
+# i.e. the host is in a group that carries the pkg. The driver self-cleans its *driver* script
+# and LaunchDaemon on completion but leaves this payload in place, so it stays a valid signal
+# after a host has finished bootstrapping.
+BOOTSTRAP_PKG_PAYLOAD = "/usr/local/sbin/m4-bootstrap.sh"
+
 
 def _os_version_matches(actual: str, expected: str) -> bool:
     """True when `actual` is `expected` or a point release of it.
@@ -230,8 +238,62 @@ def step_preflight(
     cp = ssh.run(ctx.fqdn, "sudo profiles status -type bootstraptoken", check=False)
     escrowed = b"escrowed to server: YES" in cp.stdout
     ui.info(f"Bootstrap Token escrowed: {'YES' if escrowed else 'no — escrow step will fix'}")
-    if ssh.file_exists(ctx.fqdn, "/var/log/m4-bootstrap-complete"):
-        ui.warn("sentinel /var/log/m4-bootstrap-complete already present — this host has bootstrapped before")
+
+    # Reported, NOT gated. In the intended rollout order the readiness sweep runs BEFORE hosts
+    # are moved into the bootstrap group, so the pkg is legitimately absent here and failing on
+    # it would fail every host in the sweep. Across a batch this line doubles as the "has the
+    # group move happened yet?" indicator. `provision` gates on it separately, later, once the
+    # host has had a login and time to converge.
+    ui.info(
+        f"bootstrap pkg: {'landed' if ssh.file_exists(ctx.fqdn, BOOTSTRAP_PKG_PAYLOAD) else 'not yet'}"
+        " (installed by bootstrap-group membership)"
+    )
+    if ssh.file_exists(ctx.fqdn, SENTINEL):
+        ui.warn(f"sentinel {SENTINEL} already present — this host has bootstrapped before")
+
+
+def step_wait_for_bootstrap_pkg(ctx: HostContext) -> None:
+    """Confirm the bootstrap pkg actually landed, before committing to the long sentinel wait.
+
+    The pkg is a managed install driven by SimpleMDM **assignment-group membership** — moving a
+    host into the bootstrap group *is* the trigger. A host in the wrong group therefore never
+    bootstraps, and without this check `step_wait_for_sentinel` polls the full
+    bootstrap_max_wait_seconds (an hour by default) before failing with "sentinel did not appear
+    in time" — which points at the bootstrap when the real answer is "wrong group". Across a
+    55-host batch that is an extremely expensive way to discover a group-assignment mistake.
+
+    A short bounded poll rather than an instant check, because a group move that just happened
+    leaves an MDM check-in pending and check-in on these boxes is often boot-only.
+
+    Deliberately runs AFTER mint/escrow, not before: pkg delivery has been observed to land
+    during convergence once admin logs in (i.e. around the mint), so gating on it earlier could
+    fail a host that was going to be fine. mint and escrow are both idempotent and cheap, so
+    there's nothing to unwind.
+    """
+    s = get_settings()
+    if ssh.file_exists(ctx.fqdn, SENTINEL):
+        ui.ok("host has already bootstrapped — pkg check not needed")
+        return
+
+    ui.step("BOOTSTRAP PKG", "confirm the signed pkg landed — i.e. the host is in the bootstrap group")
+    ui.wire(f"ssh admin@{ctx.hostname} test -f {BOOTSTRAP_PKG_PAYLOAD}")
+    deadline = time.monotonic() + s.bootstrap_pkg_max_wait_seconds
+    found = False
+    with ui.waiting("waiting for the managed install to land") as tick:
+        while time.monotonic() < deadline:
+            if ssh.file_exists(ctx.fqdn, BOOTSTRAP_PKG_PAYLOAD):
+                found = True
+                break
+            tick("not yet — MDM check-in on these boxes is often boot-only")
+            time.sleep(s.bootstrap_pkg_poll_seconds)
+
+    if not found:
+        raise NotReadyError(
+            f"{ctx.fqdn}: bootstrap pkg hasn't landed after {s.bootstrap_pkg_max_wait_seconds}s "
+            f"({BOOTSTRAP_PKG_PAYLOAD} missing) — is this host in the bootstrap group? The pkg is "
+            "a managed install triggered by group membership, so nothing will bootstrap until it is"
+        )
+    ui.ok("bootstrap pkg present — the host will provision itself")
 
 
 def step_quarantine(ctx: HostContext, until: str | None = None, info: str = "") -> None:
@@ -453,19 +515,19 @@ def step_wait_for_sentinel(ctx: HostContext) -> None:
     ui.wire("→ host fetches its vault.yaml over mTLS from the forge LB (step-ca SCEP client cert)")
     ui.wire(f"→ puppet apply: role {ctx.role} — generic-worker, users, TCC perms, launch daemons")
     ui.wire("→ generic-worker self-registers with Taskcluster (Hawk) and starts claiming work")
-    ui.wire(f"ssh admin@{ctx.hostname} test -f /var/log/m4-bootstrap-complete  (poll for the sentinel it writes)")
+    ui.wire(f"ssh admin@{ctx.hostname} test -f {SENTINEL}  (poll for the sentinel it writes)")
     deadline = time.monotonic() + s.bootstrap_max_wait_seconds
     found = False
     with ui.waiting("waiting for the bootstrap sentinel") as tick:
         while time.monotonic() < deadline:
-            if ssh.file_exists(ctx.fqdn, "/var/log/m4-bootstrap-complete"):
+            if ssh.file_exists(ctx.fqdn, SENTINEL):
                 found = True
                 break
             tick("puppet converging on the freshly-enrolled host")
             time.sleep(s.bootstrap_poll_seconds)
     if not found:
         raise TimeoutError("bootstrap sentinel did not appear in time")
-    ui.ok("bootstrap complete — /var/log/m4-bootstrap-complete present")
+    ui.ok(f"bootstrap complete — {SENTINEL} present")
 
 
 def step_quarantine_on_register(ctx: HostContext) -> None:
@@ -640,7 +702,7 @@ def provision(
 
     phases = ["PREFLIGHT", "MINT", "ESCROW BST"]
     if wait:
-        phases.append("BOOTSTRAP")
+        phases += ["BOOTSTRAP PKG", "BOOTSTRAP"]
     if quarantine_on_register:
         phases.append("QUARANTINE ON REGISTER")
     ui.flow(phases)
@@ -649,6 +711,9 @@ def provision(
     step_mint(ctx)  # mint SecureToken (must precede escrow_bst)
     step_escrow_bst(ctx)
     if wait:
+        # Confirm the group move actually happened before committing to the hour-long sentinel
+        # poll. Cheap, and turns "wrong SimpleMDM group" from a silent timeout into a named skip.
+        step_wait_for_bootstrap_pkg(ctx)
         # The bootstrap pkg is a managed install driven by group membership, so there is
         # nothing to trigger — we only wait for the sentinel it writes.
         step_wait_for_sentinel(ctx)

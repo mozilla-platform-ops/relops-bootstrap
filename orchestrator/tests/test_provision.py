@@ -155,12 +155,14 @@ def test_provision_runs_the_steps_in_order_and_never_wipes():
     with patch("orchestrator.workflow.step_preflight", side_effect=lambda *a, **k: calls.append("preflight")), \
          patch("orchestrator.workflow.step_mint", side_effect=lambda *a, **k: calls.append("mint")), \
          patch("orchestrator.workflow.step_escrow_bst", side_effect=lambda *a, **k: calls.append("escrow")), \
+         patch("orchestrator.workflow.step_wait_for_bootstrap_pkg"), \
          patch("orchestrator.workflow.step_wait_for_sentinel", side_effect=lambda *a, **k: calls.append("sentinel")), \
          patch("orchestrator.workflow.step_wipe", side_effect=AssertionError("provision must never wipe")), \
          patch("orchestrator.workflow.step_quarantine", side_effect=AssertionError("no pool calls")):
         workflow.provision(HOST)
 
     # mint before escrow is load-bearing: the BST escrow needs an existing SecureToken holder.
+    # (the pkg gate's own position is pinned by test_provision_gates_on_the_pkg_before_the_sentinel_wait)
     assert calls == ["preflight", "mint", "escrow", "sentinel"]
 
 
@@ -185,6 +187,84 @@ def test_provision_stops_at_the_gate():
 
 
 POOL = "releng-hardware/gecko-t-osx-1500-m4"
+
+
+# --- bootstrap pkg gate ---
+
+
+def _pkg_settings(settings, *, max_wait=60):
+    settings.return_value.bootstrap_pkg_poll_seconds = 0
+    settings.return_value.bootstrap_pkg_max_wait_seconds = max_wait
+
+
+def test_pkg_gate_passes_once_the_managed_install_lands():
+    # A group move that just happened leaves an MDM check-in pending, so the first polls
+    # legitimately find nothing.
+    seen = [False, False, False, True]  # sentinel absent, then pkg absent twice, then present
+    with patch("orchestrator.workflow.ssh.file_exists", side_effect=seen), \
+         patch("orchestrator.workflow.get_settings") as settings:
+        _pkg_settings(settings)
+        workflow.step_wait_for_bootstrap_pkg(_ctx())  # no raise
+
+
+def test_pkg_gate_skips_a_host_in_the_wrong_group():
+    # Without this the sentinel wait burns the full hour before failing with a message that
+    # points at the bootstrap instead of the group assignment.
+    with patch("orchestrator.workflow.ssh.file_exists", return_value=False), \
+         patch("orchestrator.workflow.get_settings") as settings:
+        _pkg_settings(settings, max_wait=0)
+        with pytest.raises(NotReadyError, match="is this host in the bootstrap group"):
+            workflow.step_wait_for_bootstrap_pkg(_ctx())
+
+
+def test_pkg_gate_is_a_noop_on_an_already_bootstrapped_host():
+    # Sentinel present => the pkg obviously ran; don't re-poll for a payload that may predate
+    # the check.
+    with patch("orchestrator.workflow.ssh.file_exists", return_value=True) as exists, \
+         patch("orchestrator.workflow.get_settings") as settings:
+        _pkg_settings(settings)
+        workflow.step_wait_for_bootstrap_pkg(_ctx())
+    # One call: the sentinel probe. It must not go on to poll for the payload.
+    assert exists.call_count == 1
+    assert exists.call_args.args[1] == workflow.SENTINEL
+
+
+def test_preflight_reports_the_pkg_but_does_not_gate_on_it():
+    # The readiness sweep runs BEFORE hosts are moved into the bootstrap group, so gating here
+    # would fail every host in the sweep.
+    host = _Host(sentinel=False)
+    patches = host.install()
+    for p in patches:
+        p.start()
+    try:
+        workflow.step_preflight(_ctx())  # pkg absent (file_exists -> False), must not raise
+    finally:
+        for p in patches:
+            p.stop()
+
+
+def test_provision_gates_on_the_pkg_before_the_sentinel_wait():
+    calls: list[str] = []
+    with patch("orchestrator.workflow.step_preflight"), \
+         patch("orchestrator.workflow.step_mint"), \
+         patch("orchestrator.workflow.step_escrow_bst"), \
+         patch(
+             "orchestrator.workflow.step_wait_for_bootstrap_pkg",
+             side_effect=lambda *a: calls.append("pkg"),
+         ), \
+         patch("orchestrator.workflow.step_wait_for_sentinel", side_effect=lambda *a: calls.append("sentinel")):
+        workflow.provision(HOST)
+    assert calls == ["pkg", "sentinel"]
+
+
+def test_provision_no_wait_skips_the_pkg_gate_too():
+    # Nothing is going to wait on the sentinel, so there's nothing to protect.
+    with patch("orchestrator.workflow.step_preflight"), \
+         patch("orchestrator.workflow.step_mint"), \
+         patch("orchestrator.workflow.step_escrow_bst"), \
+         patch("orchestrator.workflow.step_wait_for_bootstrap_pkg") as pkg:
+        workflow.provision(HOST, wait=False)
+    pkg.assert_not_called()
 
 
 # --- quarantine on register ---
@@ -248,6 +328,7 @@ def test_provision_quarantines_after_the_sentinel():
          patch("orchestrator.workflow.step_preflight"), \
          patch("orchestrator.workflow.step_mint"), \
          patch("orchestrator.workflow.step_escrow_bst"), \
+         patch("orchestrator.workflow.step_wait_for_bootstrap_pkg"), \
          patch("orchestrator.workflow.step_wait_for_sentinel", side_effect=lambda *a: calls.append("sentinel")), \
          patch(
              "orchestrator.workflow.step_quarantine_on_register",
@@ -283,6 +364,7 @@ def test_provision_does_not_quarantine_by_default():
     with patch("orchestrator.workflow.step_preflight"), \
          patch("orchestrator.workflow.step_mint"), \
          patch("orchestrator.workflow.step_escrow_bst"), \
+         patch("orchestrator.workflow.step_wait_for_bootstrap_pkg"), \
          patch("orchestrator.workflow.step_wait_for_sentinel"), \
          patch("orchestrator.workflow.step_quarantine_on_register") as quarantine, \
          patch("orchestrator.workflow.tc_credentials") as creds:
@@ -295,6 +377,7 @@ def test_provision_passes_the_gate_options_through():
     with patch("orchestrator.workflow.step_preflight") as pre, \
          patch("orchestrator.workflow.step_mint"), \
          patch("orchestrator.workflow.step_escrow_bst"), \
+         patch("orchestrator.workflow.step_wait_for_bootstrap_pkg"), \
          patch("orchestrator.workflow.step_wait_for_sentinel"):
         workflow.provision(HOST, expected_os="15.6", require_sip_disabled=False)
     assert pre.call_args.kwargs == {"expected_os": "15.6", "require_sip_disabled": False}

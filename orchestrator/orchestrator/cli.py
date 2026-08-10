@@ -189,6 +189,16 @@ def wait_sentinel(hostname: str) -> None:
 
 
 @_app.command()
+def wait_bootstrap_pkg(hostname: str) -> None:
+    """Confirm the signed bootstrap pkg landed — i.e. the host is in the bootstrap group.
+
+    The pkg is a managed install triggered by SimpleMDM group membership, so a host in the
+    wrong group never bootstraps. Exits 2 if it hasn't landed.
+    """
+    workflow.step_wait_for_bootstrap_pkg(workflow.resolve_offline(hostname))
+
+
+@_app.command()
 def check() -> None:
     """Read-only preflight — confirm every credential resolves from the vault (no changes)."""
     workflow.check()
@@ -196,12 +206,22 @@ def check() -> None:
 
 @_app.command()
 def demo(
-    host: str = typer.Option("macmini-m4-88", "--host", help="Hostname to show on screen during the demo."),
+    flow: str = typer.Option(
+        "reprovision",
+        "--flow",
+        help="Which replay: reprovision (EACS an existing host) | provision (fresh DEP host) | "
+        "batch (the hardware-refresh rollout).",
+    ),
+    host: str = typer.Option("", "--host", help="Hostname to show on screen (default: per-flow)."),
 ) -> None:
-    """Play a safe, no-host replay of the full flow — for live demos (touches nothing)."""
+    """Play a safe, no-host replay of a flow — for live demos (touches nothing).
+
+    Same `ui` layer as the real run, so the screen looks like production, just faster. No ssh,
+    no SimpleMDM, no Taskcluster.
+    """
     from . import demo as _demo
 
-    _demo.run_demo(host)
+    _demo.run(flow, host)
 
 
 def app() -> None:
