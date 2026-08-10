@@ -381,3 +381,88 @@ def test_provision_passes_the_gate_options_through():
          patch("orchestrator.workflow.step_wait_for_sentinel"):
         workflow.provision(HOST, expected_os="15.6", require_sip_disabled=False)
     assert pre.call_args.kwargs == {"expected_os": "15.6", "require_sip_disabled": False}
+
+
+# --- os-update ---
+
+
+def test_os_upgrade_script_substitutes_the_credential_and_target():
+    import shlex
+
+    pw = "s3cr3t pw'with quotes"  # the shape that breaks naive substitution
+    with patch("orchestrator.workflow.ssh_admin_password", return_value=pw):
+        body = workflow._os_upgrade_script("15.4")
+
+    # The placeholder that shipped in SimpleMDM script 8903 must be gone...
+    assert 'ADMIN_PASSWORD="INSERT_HERE"' not in body
+    # ...replaced with a *shell-quoted* value, so quotes/spaces can't break the script or
+    # inject. The raw string deliberately does NOT appear — that's the quoting working.
+    assert pw not in body
+    assert f"ADMIN_PASSWORD={shlex.quote(pw)}" in body
+    assert f"TARGET_VERSION={shlex.quote('15.4')}" in body
+
+    # And the quoted form must actually parse back to the original under real shell rules.
+    line = next(ln for ln in body.splitlines() if ln.startswith("ADMIN_PASSWORD="))
+    assert shlex.split(line)[0] == f"ADMIN_PASSWORD={pw}"
+
+
+def test_os_upgrade_script_keeps_the_placeholder_guard():
+    # Belt and braces: even with substitution, the guard must survive into the shipped body so
+    # a hand-pasted SimpleMDM copy still refuses to burn 14GB on a placeholder.
+    with patch("orchestrator.workflow.ssh_admin_password", return_value="pw"):
+        body = workflow._os_upgrade_script("")
+    assert "refusing to run" in body
+
+
+def test_os_update_is_a_noop_when_already_at_target():
+    with patch("orchestrator.workflow.ssh.wait_for_sshd"), \
+         patch("orchestrator.workflow.ssh.run", return_value=_cp(b"15.3")) as run, \
+         patch("orchestrator.workflow.ssh.write_file_as_root") as write:
+        workflow.step_os_update(_ctx(), expected_os="15.3")
+    write.assert_not_called()          # nothing staged
+    assert run.call_count == 1         # just the version probe
+
+
+def test_os_update_stages_and_launches():
+    calls = []
+
+    def _run(_fqdn, command, **_kw):
+        calls.append(command)
+        if "sw_vers" in command:
+            return _cp(b"15.1")
+        if "tail" in command:
+            return _cp(b"[INFO] downloading http://releng-pxe1...")
+        return _cp(b"launched")
+
+    with patch("orchestrator.workflow.ssh.wait_for_sshd"), \
+         patch("orchestrator.workflow.ssh.run", side_effect=_run), \
+         patch("orchestrator.workflow.ssh.write_file_as_root") as write, \
+         patch("orchestrator.workflow.ssh_admin_password", return_value="pw"), \
+         patch("orchestrator.workflow.time.sleep"):
+        workflow.step_os_update(_ctx(), expected_os="15.3")
+
+    # Staged root-only, at a root-only path.
+    assert write.call_args.args[1] == workflow.OS_UPGRADE_REMOTE
+    assert write.call_args.kwargs["mode"] == "0700"
+    # Launched detached — the ~14GB download outlives any ssh timeout and ends in a reboot.
+    assert any("nohup" in c for c in calls)
+
+
+def test_os_update_surfaces_a_refused_start_as_not_ready():
+    # The script's own guards (placeholder credential, no SecureToken, low disk) fail within
+    # seconds. Catching that here is the difference between "skipped, go fix it" and a host
+    # that silently never upgrades.
+    def _run(_fqdn, command, **_kw):
+        if "sw_vers" in command:
+            return _cp(b"15.1")
+        if "tail" in command:
+            return _cp(b"[ERROR] admin holds no SecureToken, so it is not a volume owner")
+        return _cp(b"launched")
+
+    with patch("orchestrator.workflow.ssh.wait_for_sshd"), \
+         patch("orchestrator.workflow.ssh.run", side_effect=_run), \
+         patch("orchestrator.workflow.ssh.write_file_as_root"), \
+         patch("orchestrator.workflow.ssh_admin_password", return_value="pw"), \
+         patch("orchestrator.workflow.time.sleep"):
+        with pytest.raises(NotReadyError, match="SecureToken"):
+            workflow.step_os_update(_ctx(), expected_os="15.3")

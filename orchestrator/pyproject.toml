@@ -47,6 +47,12 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["orchestrator*"]
 
+# The macOS upgrade script ships inside the package so `--action os-update` can read it at
+# run time. scripts/simplemdm-macos-upgrade.sh is a symlink to this same file -- one body, so
+# the copy pasted into SimpleMDM and the copy driven over SSH cannot drift.
+[tool.setuptools.package-data]
+orchestrator = ["data/*.sh"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

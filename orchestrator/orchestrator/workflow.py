@@ -152,6 +152,9 @@ SENTINEL = "/var/log/m4-bootstrap-complete"
 # and LaunchDaemon on completion but leaves this payload in place, so it stays a valid signal
 # after a host has finished bootstrapping.
 BOOTSTRAP_PKG_PAYLOAD = "/usr/local/sbin/m4-bootstrap.sh"
+# Where the OS-upgrade script is staged when driven over SSH instead of as an MDM script job.
+# /var/root so it is root-only by location as well as by mode.
+OS_UPGRADE_REMOTE = "/var/root/macos-upgrade.sh"
 
 
 def _os_version_matches(actual: str, expected: str) -> bool:
@@ -294,6 +297,75 @@ def step_wait_for_bootstrap_pkg(ctx: HostContext) -> None:
             "a managed install triggered by group membership, so nothing will bootstrap until it is"
         )
     ui.ok("bootstrap pkg present — the host will provision itself")
+
+
+def _os_upgrade_script(expected_os: str) -> str:
+    """The packaged upgrade script with the credential and target substituted in.
+
+    Same file that gets pasted into SimpleMDM (scripts/simplemdm-macos-upgrade.sh is a symlink
+    to it) — one body, so the MDM copy and the SSH-driven copy cannot drift. Driving it from
+    here is strictly better than the MDM path on secrets: the password is resolved from the
+    vault at fire time and reaches the host over an ssh stdin pipe, so it never sits in the
+    SimpleMDM script body and never appears in an argv.
+    """
+    from importlib import resources
+
+    body = (resources.files("orchestrator") / "data" / "macos-upgrade.sh").read_text()
+    body = body.replace('ADMIN_PASSWORD="INSERT_HERE"', f'ADMIN_PASSWORD={shlex.quote(ssh_admin_password())}')
+    if expected_os:
+        body = body.replace('TARGET_VERSION="15.3"', f'TARGET_VERSION={shlex.quote(expected_os)}')
+    return body
+
+
+def step_os_update(ctx: HostContext, *, expected_os: str = "") -> None:
+    """Kick the in-place macOS upgrade on one host, then return — it reboots on its own.
+
+    Staged over SSH rather than fired as a SimpleMDM script job, for three reasons: the
+    credential stays out of the SimpleMDM UI (see _os_upgrade_script), we get a real exit code
+    instead of SimpleMDM's job-status API (documented unreliable — it reports `pending` after a
+    script has already run), and it composes with the batch driver's concurrency bound.
+
+    That bound is the point. `releng-pxe1` has been served by `python3 -m http.server`, which
+    is single-threaded AND has a listen backlog of 5 — past five pending connections the rest
+    are refused outright. 55 hosts pulling a ~14GB installer at once is not slow, it's a pile
+    of timeouts. Pacing costs almost nothing in wall clock because the link is the bottleneck
+    either way; it just converts failures into a queue.
+
+    Returns once the upgrade is *launched*. The script downloads, installs the pkg, and reboots
+    into a one-shot LaunchDaemon that runs startosinstall — tens of minutes, unattended. Poll
+    for arrival separately with `--action preflight`, which is the same OS check.
+    """
+    s = get_settings()
+    expected_os = expected_os or s.provision_expected_os
+    ui.step("OS UPDATE", f"in-place upgrade to macOS {expected_os} — launches, then the host reboots itself")
+
+    with ui.waiting("waiting for sshd"):
+        ssh.wait_for_sshd(ctx.fqdn, timeout=s.preflight_sshd_wait_seconds)
+
+    cp = ssh.run(ctx.fqdn, "sw_vers -productVersion", check=False)
+    current = cp.stdout.decode(errors="replace").strip()
+    if current and _os_version_matches(current, expected_os):
+        ui.ok(f"already on macOS {current} — nothing to do")
+        return
+
+    ui.wire(f"scp → {OS_UPGRADE_REMOTE} (0700, credential substituted from the vault)")
+    ssh.write_file_as_root(ctx.fqdn, OS_UPGRADE_REMOTE, _os_upgrade_script(expected_os).encode(), mode="0700")
+
+    # Detached: the download alone outlives any sane ssh timeout, and the script ends in a
+    # reboot that would kill the channel anyway. setsid+nohup so it survives our disconnect.
+    ui.wire(f"ssh admin@{ctx.hostname} sudo nohup {OS_UPGRADE_REMOTE} (detached; log /var/log/macos-upgrade.log)")
+    ssh.run(ctx.fqdn, f"sudo /usr/bin/nohup {OS_UPGRADE_REMOTE} >/dev/null 2>&1 & echo launched", check=False)
+
+    # Confirm it actually started rather than dying on a precondition — the script's own guards
+    # (placeholder credential, no SecureToken, low disk) all fail within a second or two.
+    time.sleep(5)
+    cp = ssh.run(ctx.fqdn, "sudo tail -5 /var/log/macos-upgrade.log 2>/dev/null", check=False)
+    tail = cp.stdout.decode(errors="replace").strip()
+    if "[ERROR]" in tail:
+        raise NotReadyError(f"{ctx.fqdn}: upgrade refused to start —\n    " + tail.replace("\n", "\n    "))
+    ui.ok(f"upgrade launched — macOS {current or 'unknown'} → {expected_os}")
+    ui.info("host downloads ~14GB, installs, then reboots into startosinstall (tens of minutes)")
+    ui.info("confirm arrival later with: reprovision batch <file> --action preflight")
 
 
 def step_quarantine(ctx: HostContext, until: str | None = None, info: str = "") -> None:

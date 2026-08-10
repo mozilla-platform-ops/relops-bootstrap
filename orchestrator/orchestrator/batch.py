@@ -45,7 +45,7 @@ EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_NOT_READY = 2
 
-ACTIONS = ("preflight", "mint", "provision")
+ACTIONS = ("preflight", "mint", "os-update", "provision")
 
 
 @dataclass
@@ -116,6 +116,13 @@ def _child_cmd(
     exe = _reprovision_exe()
     if action == "preflight":
         cmd = [exe, "preflight", host]
+    elif action == "os-update":
+        # No SIP flag: the upgrade doesn't care about SIP state, and the OS gate would be
+        # self-defeating -- this IS the step that gets the host to the target version.
+        cmd = [exe, "os-update", host]
+        if expected_os:
+            cmd += ["--expected-os", expected_os]
+        return cmd
     elif action == "mint":
         # No gate flags: mint runs BEFORE the Recovery trip and the OS update, because Recovery
         # needs a volume owner and mint is what creates one. Gating it would deadlock the order.
@@ -223,6 +230,10 @@ def run_batch(
             per_host_timeout = s.bootstrap_max_wait_seconds + 900
             if quarantine_on_register:
                 per_host_timeout += s.quarantine_on_register_max_wait_seconds
+        elif action == "os-update":
+            # Launch-and-return: staging the script plus the started-cleanly check. The ~14GB
+            # download runs detached and outlives this call by design.
+            per_host_timeout = 600
         else:
             per_host_timeout = 1800
 
@@ -231,6 +242,8 @@ def run_batch(
     ui.info(f"gate: macOS {expected_os} · {sip_note} · per-host timeout {_mmss(per_host_timeout)}")
     if action == "provision" and not wait:
         ui.info("--no-wait: mint + escrow only; sweep sentinels afterwards")
+    if action == "os-update":
+        ui.info("launches the upgrade and returns; hosts reboot on their own — sweep with --action preflight after")
     if action == "provision":
         ui.info(
             "hosts will be quarantined on registration"

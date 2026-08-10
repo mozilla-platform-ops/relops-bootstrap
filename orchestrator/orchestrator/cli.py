@@ -85,6 +85,20 @@ def quarantine_on_register(hostname: str) -> None:
 
 
 @_app.command()
+def os_update(
+    hostname: str = typer.Argument(..., help="Short hostname, e.g. macmini-m4-201"),
+    expected_os: str = _EXPECTED_OS_OPT,
+) -> None:
+    """Launch the in-place macOS upgrade on a fresh host, then return (it reboots itself).
+
+    Staged over SSH, so the admin password is resolved from the vault at fire time and never
+    stored in the SimpleMDM script body. Idempotent: a no-op if the host is already at target.
+    Confirm arrival later with `preflight` — the upgrade runs unattended for tens of minutes.
+    """
+    workflow.step_os_update(workflow.resolve_offline(hostname), expected_os=expected_os)
+
+
+@_app.command()
 def preflight(
     hostname: str = typer.Argument(..., help="Short hostname, e.g. macmini-m4-201"),
     expected_os: str = _EXPECTED_OS_OPT,
