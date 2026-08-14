@@ -6,7 +6,7 @@
 # find the file already present and continue without hand-dropping.
 #
 # Requirements:
-#   - /etc/puppet_role file present (delivered by MDM Custom Attribute)
+#   - /etc/puppet_role file present (delivered by a pkg when the host is ADDED to its SimpleMDM group -- NOT a Custom Attribute)
 #   - Dev - SCEP MDM profile pushed; SCEP cert in /Library/Keychains/System.keychain
 #   - host source IP in trusted_source_cidrs at the LB (MDC1 worker network)
 #

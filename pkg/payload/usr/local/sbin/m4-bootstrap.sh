@@ -16,7 +16,7 @@
 # then the driver self-removes.
 #
 # Prereqs delivered separately by MDM/operator:
-#   - /etc/puppet_role              (MDM Custom Attribute)
+#   - /etc/puppet_role              (delivered by a pkg when the host is ADDED to its SimpleMDM group -- NOT a Custom Attribute)
 #   - "Dev - SCEP" mobileconfig     (MDM Custom Profile — issues a step-ca
 #                                    client cert into System.keychain used to
 #                                    auto-fetch vault.yaml from forge)
@@ -71,7 +71,7 @@ done
 echo "admin SecureToken ENABLED — proceeding."
 
 #------------------------------------------------------------------------------
-# 2. Wait for /etc/puppet_role (MDM Custom Attribute file)
+# 2. Wait for /etc/puppet_role (delivered by a pkg when the host is ADDED to its SimpleMDM group -- NOT a Custom Attribute)
 #------------------------------------------------------------------------------
 echo "Waiting for /etc/puppet_role..."
 for _ in $(seq 1 60); do

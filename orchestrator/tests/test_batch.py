@@ -1,0 +1,246 @@
+"""`reprovision batch` — host-file parsing, exit-code classification, concurrency bound."""
+
+from __future__ import annotations
+
+import subprocess
+import threading
+from unittest.mock import patch
+
+import pytest
+
+from orchestrator import batch
+from orchestrator.errors import ReprovisionError
+
+
+# --- host file parsing ---
+
+
+def test_read_host_file_skips_comments_and_blanks(tmp_path):
+    f = tmp_path / "hosts.txt"
+    f.write_text(
+        "# batch 1 — rack 4\n"
+        "macmini-m4-201\n"
+        "\n"
+        "  macmini-m4-202  \n"
+        "macmini-m4-203  # was DOA, reseated\n"
+    )
+    assert batch.read_host_file(str(f)) == ["macmini-m4-201", "macmini-m4-202", "macmini-m4-203"]
+
+
+def test_read_host_file_aborts_on_a_bad_hostname(tmp_path):
+    # Fail-fast: a typo in a 55-line file is a file to fix, not 54 hosts to provision while
+    # one line silently does nothing.
+    f = tmp_path / "hosts.txt"
+    f.write_text("macmini-m4-201\nmacmini-m4-2o2\nmacmini-m4-203\n")
+    with pytest.raises(ReprovisionError, match="line 2"):
+        batch.read_host_file(str(f))
+
+
+def test_read_host_file_rejects_shell_metacharacters(tmp_path):
+    f = tmp_path / "hosts.txt"
+    f.write_text("macmini-m4-201; touch /tmp/pwned\n")
+    with pytest.raises(ReprovisionError, match="unusable hostnames"):
+        batch.read_host_file(str(f))
+
+
+def test_read_host_file_dedupes(tmp_path):
+    f = tmp_path / "hosts.txt"
+    f.write_text("macmini-m4-201\nmacmini-m4-202\nmacmini-m4-201\n")
+    assert batch.read_host_file(str(f)) == ["macmini-m4-201", "macmini-m4-202"]
+
+
+def test_read_host_file_rejects_an_empty_list(tmp_path):
+    f = tmp_path / "hosts.txt"
+    f.write_text("# nothing here\n")
+    with pytest.raises(ReprovisionError, match="no hostnames"):
+        batch.read_host_file(str(f))
+
+
+def test_read_host_file_missing_file():
+    with pytest.raises(ReprovisionError, match="can't read host file"):
+        batch.read_host_file("/nonexistent/hosts.txt")
+
+
+# --- child command construction ---
+
+
+def test_child_cmd_provision_includes_the_gate_flags():
+    cmd = batch._child_cmd(
+        "macmini-m4-201", "provision", expected_os="15.3", allow_sip_enabled=True, wait=False
+    )
+    assert cmd[1:] == ["provision", "macmini-m4-201", "--no-wait", "--expected-os", "15.3", "--allow-sip-enabled"]
+
+
+def test_child_cmd_passes_quarantine_on_register_through():
+    cmd = batch._child_cmd(
+        "macmini-m4-201",
+        "provision",
+        expected_os="",
+        allow_sip_enabled=False,
+        wait=True,
+        quarantine_on_register=True,
+    )
+    assert "--quarantine-on-register" in cmd
+
+
+def test_child_cmd_mint_takes_no_gate_flags():
+    # mint runs BEFORE the Recovery trip and the OS update, so gating it on either would
+    # deadlock the intended order: Recovery needs a volume owner, which is what mint creates.
+    cmd = batch._child_cmd("macmini-m4-201", "mint", expected_os="15.3", allow_sip_enabled=False, wait=True)
+    assert cmd[1:] == ["mint", "macmini-m4-201"]
+
+
+def test_child_cmd_preflight_is_read_only():
+    cmd = batch._child_cmd("macmini-m4-201", "preflight", expected_os="", allow_sip_enabled=False, wait=True)
+    assert cmd[1] == "preflight"
+
+
+def test_run_batch_rejects_an_unknown_action():
+    with pytest.raises(ReprovisionError, match="unknown batch action"):
+        batch.run_batch(["macmini-m4-201"], action="wipe")
+
+
+# --- classification ---
+
+
+def _fake_subprocess(codes: dict[str, int], output: dict[str, str] | None = None):
+    """Stand in for subprocess.run: exit code (and log text) keyed by hostname in argv."""
+    output = output or {}
+
+    def _run(cmd, stdout=None, stderr=None, timeout=None, check=False):
+        host = next(c for c in cmd if c.startswith("macmini-"))
+        if stdout is not None and host in output:
+            stdout.write(output[host].encode())
+            stdout.flush()
+        return subprocess.CompletedProcess(args=cmd, returncode=codes[host], stdout=None, stderr=None)
+
+    return _run
+
+
+def test_batch_classifies_ok_skipped_and_failed(tmp_path):
+    hosts = ["macmini-m4-201", "macmini-m4-202", "macmini-m4-203"]
+    codes = {"macmini-m4-201": 0, "macmini-m4-202": 2, "macmini-m4-203": 1}
+    output = {
+        "macmini-m4-202": "▲ macmini-m4-202: macOS 26.1, expected 15.3\n",
+        "macmini-m4-203": "✗ password login denied (wrong admin password?)\n",
+    }
+    rows: list = []
+    with patch("orchestrator.batch.subprocess.run", side_effect=_fake_subprocess(codes, output)), \
+         patch("orchestrator.batch._log_dir", return_value=tmp_path), \
+         patch("orchestrator.batch.ui.batch_summary", side_effect=lambda r, **kw: rows.extend(r)):
+        failed = batch.run_batch(hosts, action="provision", concurrency=3)
+
+    # exit 2 is "come back later", so it must NOT count toward the failure exit code.
+    assert failed == 1
+    assert [(h, state) for h, state, _detail, _t in rows] == [
+        ("macmini-m4-201", "ok"),
+        ("macmini-m4-202", "skipped"),
+        ("macmini-m4-203", "failed"),
+    ]
+    # The reason survives into the summary table so the operator doesn't have to open 55 logs.
+    assert "macOS 26.1" in dict((h, d) for h, _s, d, _t in rows)["macmini-m4-202"]
+
+
+def test_batch_reports_in_the_operator_supplied_order(tmp_path):
+    # Completion order is nondeterministic; the report must be diffable against the host file.
+    hosts = [f"macmini-m4-2{n:02d}" for n in range(1, 8)]
+    codes = dict.fromkeys(hosts, 0)
+    rows: list = []
+    with patch("orchestrator.batch.subprocess.run", side_effect=_fake_subprocess(codes)), \
+         patch("orchestrator.batch._log_dir", return_value=tmp_path), \
+         patch("orchestrator.batch.ui.batch_summary", side_effect=lambda r, **kw: rows.extend(r)):
+        batch.run_batch(hosts, action="preflight", concurrency=4)
+    assert [h for h, _s, _d, _t in rows] == hosts
+
+
+def test_batch_writes_one_log_per_host(tmp_path):
+    hosts = ["macmini-m4-201", "macmini-m4-202"]
+    with patch("orchestrator.batch.subprocess.run", side_effect=_fake_subprocess(dict.fromkeys(hosts, 0))), \
+         patch("orchestrator.batch._log_dir", return_value=tmp_path), \
+         patch("orchestrator.batch.ui.batch_summary"):
+        batch.run_batch(hosts, action="preflight")
+    for host in hosts:
+        log = tmp_path / f"{host}.log"
+        assert log.exists()
+        assert host in log.read_text()  # the invocation is recorded at the top
+
+
+def test_batch_honours_the_concurrency_bound(tmp_path):
+    # The ceiling is MDC1 network/imaging throughput; exceeding it is what took hosts offline
+    # in bulk on previous rollouts.
+    hosts = [f"macmini-m4-2{n:02d}" for n in range(1, 13)]
+    lock = threading.Lock()
+    in_flight = 0
+    peak = 0
+
+    def _run(cmd, stdout=None, stderr=None, timeout=None, check=False):
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        try:
+            threading.Event().wait(0.02)
+        finally:
+            with lock:
+                in_flight -= 1
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=None, stderr=None)
+
+    with patch("orchestrator.batch.subprocess.run", side_effect=_run), \
+         patch("orchestrator.batch._log_dir", return_value=tmp_path), \
+         patch("orchestrator.batch.ui.batch_summary"):
+        batch.run_batch(hosts, action="preflight", concurrency=3)
+
+    assert peak <= 3
+
+
+def test_batch_survives_one_host_timing_out(tmp_path):
+    hosts = ["macmini-m4-201", "macmini-m4-202"]
+
+    def _run(cmd, stdout=None, stderr=None, timeout=None, check=False):
+        host = next(c for c in cmd if c.startswith("macmini-"))
+        if host == "macmini-m4-201":
+            raise subprocess.TimeoutExpired(cmd, timeout or 1)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=None, stderr=None)
+
+    rows: list = []
+    with patch("orchestrator.batch.subprocess.run", side_effect=_run), \
+         patch("orchestrator.batch._log_dir", return_value=tmp_path), \
+         patch("orchestrator.batch.ui.batch_summary", side_effect=lambda r, **kw: rows.extend(r)):
+        failed = batch.run_batch(hosts, action="provision", concurrency=2, per_host_timeout=1)
+
+    assert failed == 1
+    by_host = {h: (state, detail) for h, state, detail, _t in rows}
+    assert by_host["macmini-m4-201"][0] == "failed"
+    assert "timed out" in by_host["macmini-m4-201"][1]
+    assert by_host["macmini-m4-202"][0] == "ok"  # the healthy host still completed
+
+
+def test_batch_extends_the_timeout_for_the_registration_watch(tmp_path):
+    # The child now has more to do; a timeout sized for bootstrap alone would kill it mid-watch.
+    seen: dict[str, int] = {}
+
+    def _run(cmd, stdout=None, stderr=None, timeout=None, check=False):
+        seen["timeout"] = timeout
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=None, stderr=None)
+
+    with patch("orchestrator.batch.subprocess.run", side_effect=_run), \
+         patch("orchestrator.batch._log_dir", return_value=tmp_path), \
+         patch("orchestrator.batch.ui.batch_summary"):
+        batch.run_batch(["macmini-m4-201"], action="provision", quarantine_on_register=True)
+    with_watch = seen["timeout"]
+
+    with patch("orchestrator.batch.subprocess.run", side_effect=_run), \
+         patch("orchestrator.batch._log_dir", return_value=tmp_path), \
+         patch("orchestrator.batch.ui.batch_summary"):
+        batch.run_batch(["macmini-m4-201"], action="provision", quarantine_on_register=False)
+
+    assert with_watch > seen["timeout"]
+
+
+def test_batch_dry_run_executes_nothing(tmp_path):
+    with patch("orchestrator.batch.subprocess.run") as run, \
+         patch("orchestrator.batch._log_dir", return_value=tmp_path) as log_dir:
+        failed = batch.run_batch(["macmini-m4-201"], action="provision", dry_run=True)
+    assert failed == 0
+    run.assert_not_called()
+    log_dir.assert_not_called()  # no log directory created for a dry run

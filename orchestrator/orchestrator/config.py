@@ -29,7 +29,12 @@ class Settings(BaseSettings):
     # SimpleMDM
     simplemdm_api_key: str = Field(default="")
     # Shared op:// ref (no gcloud). Override with a Secret Manager id if you prefer that backend.
-    simplemdm_api_key_ref: str = Field(default="op://RelOps/SimpleMDM API admin/password")
+    # NB: the item is "SimpleMDM API admin VNC", not "SimpleMDM API admin". The shorter name
+    # was the default here and no longer exists in the vault, so `reprovision check` failed for
+    # every operator with `isn't an item in the "RelOps" vault`. Verified 2026-08-10: this ref
+    # returns a key that GETs /api/v1/account with HTTP 200. (GCP Secret Manager id
+    # `simplemdm-api-token` also works, if you'd rather resolve it through gcloud.)
+    simplemdm_api_key_ref: str = Field(default="op://RelOps/SimpleMDM API admin VNC/password")
 
     # SSH to host
     ssh_admin_user: str = Field(default="admin")
@@ -56,6 +61,34 @@ class Settings(BaseSettings):
     wipe_max_wait_seconds: int = Field(default=1800)
     bootstrap_poll_seconds: int = Field(default=30)
     bootstrap_max_wait_seconds: int = Field(default=3600)
+
+    # --- Fresh-host provisioning (no EACS) ---
+    # Target OS for a fresh DEP host. The MDM installs it as an in-place update *before* the
+    # host is moved into the bootstrap group; step_preflight refuses to provision a host that
+    # isn't there yet, because a mid-bootstrap OS install takes the box down for 25-45 min
+    # (seen on ~12 of 25 hosts during the 2026-05-12 batch). Matched as an exact version or a
+    # prefix, so "15.3" accepts 15.3 and 15.3.1 but not 15.30 / 15.4.
+    provision_expected_os: str = Field(default="15.3")
+    # How long preflight waits for sshd before calling a host "not up yet" (and skipping it,
+    # rather than blocking a batch slot for the full 15-minute DEP-convergence window).
+    preflight_sshd_wait_seconds: int = Field(default=60)
+    # Default fan-out for `reprovision batch`. 3 matches the reprovision runner's
+    # RUNNER_MAX_CONCURRENT: the ceiling here is MDC1 network/imaging, not local CPU.
+    batch_max_concurrent: int = Field(default=3)
+    # `provision --quarantine-on-register`: a fresh worker can't be quarantined before it
+    # exists in TC (quarantineWorker 404s), so we watch for it and quarantine on sight. Poll
+    # tightly — generic-worker can claim a task within about a minute of the sentinel, and
+    # this interval IS the exposure window. Registration itself trails the sentinel, so the
+    # wait only needs to cover worker-runner starting generic-worker, not a puppet run.
+    quarantine_on_register_poll_seconds: int = Field(default=5)
+    quarantine_on_register_max_wait_seconds: int = Field(default=900)
+    # How long to wait for the bootstrap pkg to land before concluding the host is in the wrong
+    # SimpleMDM group. Short by design: the point is to fail in minutes instead of burning the
+    # full bootstrap_max_wait_seconds on a sentinel that was never going to appear. Long enough
+    # to absorb a pending MDM check-in right after a group move (check-in on these boxes is
+    # often boot-only).
+    bootstrap_pkg_poll_seconds: int = Field(default=10)
+    bootstrap_pkg_max_wait_seconds: int = Field(default=300)
 
     # (The bootstrap is delivered as a signed PKG / managed install, not a triggered
     # script-job, so there's no bootstrap_script_id anymore.)

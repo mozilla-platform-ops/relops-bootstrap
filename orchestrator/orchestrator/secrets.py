@@ -48,6 +48,17 @@ def _op_read(ref: str) -> str:
         raise SecretResolutionError(
             f"1Password CLI (`op`) isn't installed — `brew install 1password-cli` — needed to read {ref}."
         ) from None
+    except subprocess.TimeoutExpired:
+        # `op` blocks on a biometric / desktop-app approval prompt that never gets answered --
+        # commonly the first read of a session, or any read from a context with no TTY (the
+        # batch driver's subprocesses, the runner's LaunchDaemon). Without this the timeout
+        # escaped as a raw traceback, straight past `check`'s promise to turn credential
+        # problems into one clean line.
+        raise SecretResolutionError(
+            f"timed out reading {ref} from 1Password after 30s — `op` is probably waiting on a "
+            "biometric/desktop-app approval. Approve it, or run  op read <ref>  once by hand to "
+            "prime the session, then retry."
+        ) from None
     except subprocess.CalledProcessError as e:
         detail = _last_line(e.stderr)
         low = detail.lower()
@@ -75,6 +86,12 @@ def _gcloud_secret(secret_id: str, project: str) -> str:
             timeout=30,
             check=True,
         )
+    except subprocess.TimeoutExpired:
+        # Same failure shape as `op`: a hung auth refresh must not escape as a traceback.
+        raise SecretResolutionError(
+            f"timed out reading secret '{secret_id}' from GCP Secret Manager after 30s — "
+            "check `gcloud auth login` and network reachability."
+        ) from None
     except FileNotFoundError:
         raise SecretResolutionError(
             f"gcloud isn't installed — needed to read Secret Manager id '{secret_id}'."

@@ -173,6 +173,72 @@ def waiting(desc: str, *, eta_seconds: int | None = None):
         yield tick
 
 
+def provisioned(hostname: str, elapsed_seconds: float, *, waited: bool, quarantined: bool = False) -> None:
+    """Closing line for the fresh-host path.
+
+    States the pool status explicitly either way. Unquarantined is the default and the
+    surprising case — a fresh box was never quarantined, so it starts claiming work as soon as
+    generic-worker registers, and that's something the operator should be told rather than
+    left to infer.
+    """
+    stripes = "".join(f"[{c}]█[/]" for c in PALETTE)
+    tail = "bootstrap complete" if waited else "credentials in place — sentinel not yet confirmed"
+    console.print()
+    console.print(f"  {stripes}  [bold green]{hostname} provisioned[/] [dim]in {_mmss(elapsed_seconds)} · {tail}[/]")
+    console.print(
+        "  [dim]fresh DEP host: preflight → SecureToken → Bootstrap Token → self-provision"
+        " (mTLS vault · puppet · Taskcluster)[/]"
+    )
+    if quarantined:
+        console.print(
+            f"  [dim]quarantined on registration — validate, then[/] reprovision unquarantine {hostname}"
+        )
+    else:
+        console.print(
+            "  [dim]note: NOT quarantined — it claims work as soon as generic-worker registers[/]"
+        )
+    console.print()
+
+
+def batch_summary(rows: list[tuple[str, str, str, str]], *, log_dir: str, elapsed_seconds: float) -> None:
+    """Final table for a batch run: one row per host, ordered as given.
+
+    rows are (hostname, state, detail, duration) where state is one of ok/skipped/failed.
+    """
+    from rich.table import Table
+
+    style = {"ok": "green", "skipped": "yellow", "failed": "red"}
+    mark = {"ok": "✓", "skipped": "▲", "failed": "✗"}
+
+    table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+    table.add_column("", width=1)
+    table.add_column("host")
+    table.add_column("result")
+    table.add_column("elapsed", justify="right")
+    table.add_column("detail", overflow="fold")
+    for host, state, detail, duration in rows:
+        color = style.get(state, "white")
+        table.add_row(
+            f"[{color}]{mark.get(state, '·')}[/]",
+            host,
+            f"[{color}]{state}[/]",
+            f"[dim]{duration}[/]",
+            f"[dim]{detail}[/]",
+        )
+
+    counts = {k: sum(1 for r in rows if r[1] == k) for k in ("ok", "skipped", "failed")}
+    stripes = "".join(f"[{c}]█[/]" for c in PALETTE)
+    console.print()
+    console.print(table)
+    console.print()
+    console.print(
+        f"  {stripes}  [bold]{counts['ok']} ok[/] · [yellow]{counts['skipped']} skipped[/]"
+        f" · [red]{counts['failed']} failed[/] [dim]· {_mmss(elapsed_seconds)} wall clock[/]"
+    )
+    console.print(f"  [dim]per-host logs: {log_dir}[/]")
+    console.print()
+
+
 def summary(hostname: str, elapsed_seconds: float, *, quarantined: bool) -> None:
     stripes = "".join(f"[{c}]█[/]" for c in PALETTE)
     state = "still quarantined" if quarantined else "returned to service"

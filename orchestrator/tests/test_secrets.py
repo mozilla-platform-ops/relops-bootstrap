@@ -99,3 +99,27 @@ def test_simplemdm_api_key_raises_when_unresolved():
         with pytest.raises(RuntimeError):
             secrets.simplemdm_api_key()
     secrets.simplemdm_api_key.cache_clear()
+
+
+def test_op_timeout_becomes_a_clean_error_not_a_traceback():
+    # `op` blocks on an unanswered biometric/desktop-app approval -- common on the first read
+    # of a session, and guaranteed anywhere there's no TTY (batch subprocesses, the runner's
+    # LaunchDaemon). This escaped as a raw TimeoutExpired traceback, straight past `check`'s
+    # promise to render credential problems as one clean line.
+    import subprocess as sp
+
+    from orchestrator.secrets import SecretResolutionError, _op_read
+
+    with patch("orchestrator.secrets.subprocess.run", side_effect=sp.TimeoutExpired(["op"], 30)):
+        with pytest.raises(SecretResolutionError, match="timed out reading"):
+            _op_read("op://RelOps/Some Item/password")
+
+
+def test_gcloud_timeout_becomes_a_clean_error_too():
+    import subprocess as sp
+
+    from orchestrator.secrets import SecretResolutionError, _gcloud_secret
+
+    with patch("orchestrator.secrets.subprocess.run", side_effect=sp.TimeoutExpired(["gcloud"], 30)):
+        with pytest.raises(SecretResolutionError, match="timed out reading secret"):
+            _gcloud_secret("some-secret", "relops-bootstrap")
