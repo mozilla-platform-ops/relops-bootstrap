@@ -71,6 +71,7 @@ def test_already_a_member_is_a_no_op():
     ctx = workflow.resolve_offline(HOST)
     with patch("orchestrator.workflow.simplemdm.get_assignment_group", return_value=_group(device_ids=(555,))), \
          patch("orchestrator.workflow.ssh.platform_serial", return_value="W4LT930Y9Q"), \
+         patch("orchestrator.workflow.ssh.file_exists", return_value=True), \
          patch("orchestrator.workflow.simplemdm.find_device_by_serial", return_value={"id": 555}), \
          patch("orchestrator.workflow.simplemdm.add_device_to_assignment_group") as add, \
          patch("orchestrator.workflow.simplemdm.push_apps") as push:
@@ -246,3 +247,86 @@ def test_find_device_by_serial_requires_an_exact_match():
     with patch("orchestrator.clients.simplemdm._request", return_value=resp):
         assert simplemdm.find_device_by_serial("W4LT930Y9Q") == want
         assert simplemdm.find_device_by_serial("NOPE") is None
+
+
+# --- quarantine-on-register must be driven from HERE, not from a later provision ---
+
+
+def _patched(member: bool, pkg: bool = True):
+    """Context managers for a step_add_to_group call with no real IO."""
+    ids = (555,) if member else (999,)
+    return [
+        patch("orchestrator.workflow.simplemdm.get_assignment_group", return_value=_group(device_ids=ids)),
+        patch("orchestrator.workflow.ssh.platform_serial", return_value="W4LT930Y9Q"),
+        patch("orchestrator.workflow.ssh.file_exists", return_value=pkg),
+        patch("orchestrator.workflow.simplemdm.find_device_by_serial", return_value={"id": 555}),
+        patch("orchestrator.workflow.simplemdm.add_device_to_assignment_group"),
+        patch("orchestrator.workflow.simplemdm.push_apps"),
+    ]
+
+
+def _run(member: bool, *, qor: bool, pkg: bool = True):
+    import contextlib
+
+    ctx = workflow.resolve_offline(HOST)
+    with contextlib.ExitStack() as st:
+        for cm in _patched(member, pkg):
+            st.enter_context(cm)
+        watch = st.enter_context(patch("orchestrator.workflow.step_quarantine_on_register"))
+        workflow.step_add_to_group(ctx, group_id=BOOTSTRAP_GID, quarantine_on_register=qor)
+    return watch
+
+
+def test_starts_the_registration_watch_after_adding():
+    assert _run(member=False, qor=True).call_count == 1
+
+
+def test_starts_the_watch_even_when_the_host_was_already_a_member():
+    """An already-member host may still be mid-bootstrap and about to register. Returning early
+    without watching is how a host goes live unheld.
+    """
+    assert _run(member=True, qor=True).call_count == 1
+
+
+def test_no_watch_unless_asked():
+    assert _run(member=False, qor=False).call_count == 0
+
+
+def test_watch_budget_spans_the_whole_bootstrap_not_just_registration():
+    """The default budget (900s) is sized for a watch started AFTER bootstrap. From here the watch
+    also covers pkg install, puppet, reboots and sentinel — ~30 min on wave 1 — so a default-sized
+    budget would expire before there was anything to quarantine, and the host would go live unheld.
+    """
+    from orchestrator.config import get_settings
+
+    s = get_settings()
+    watch = _run(member=False, qor=True)
+    budget = watch.call_args.kwargs["max_wait_seconds"]
+    assert budget >= s.bootstrap_max_wait_seconds
+    assert budget > s.quarantine_on_register_max_wait_seconds
+
+
+def test_warns_when_a_member_never_received_the_pkg():
+    """Membership does not prove push_apps ever ran; this path skips it."""
+    import contextlib
+
+    ctx = workflow.resolve_offline(HOST)
+    with contextlib.ExitStack() as st:
+        for cm in _patched(True, pkg=False):
+            st.enter_context(cm)
+        warn = st.enter_context(patch("orchestrator.workflow.ui.warn"))
+        workflow.step_add_to_group(ctx, group_id=BOOTSTRAP_GID)
+    assert warn.call_count == 1
+    assert "never ran" in warn.call_args.args[0]
+
+
+def test_batch_forwards_the_flag_and_extends_the_timeout():
+    """A child killed by the batch timeout mid-watch leaves the host live and unheld."""
+    from orchestrator import batch as b
+
+    cmd = b._child_cmd("macmini-m4-241", "add-to-group", expected_os="15.3",
+                       allow_sip_enabled=True, wait=True, quarantine_on_register=True)
+    assert "--quarantine-on-register" in cmd
+    plain = b._child_cmd("macmini-m4-241", "add-to-group", expected_os="15.3",
+                         allow_sip_enabled=True, wait=True, quarantine_on_register=False)
+    assert "--quarantine-on-register" not in plain

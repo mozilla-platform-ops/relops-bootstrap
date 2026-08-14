@@ -292,7 +292,12 @@ def _resolve_mdm_device(ctx: HostContext) -> dict:
     )
 
 
-def step_add_to_group(ctx: HostContext, *, group_id: int | None = None) -> None:
+def step_add_to_group(
+    ctx: HostContext,
+    *,
+    group_id: int | None = None,
+    quarantine_on_register: bool = False,
+) -> None:
     """ADD the host to the bootstrap assignment group — the action that starts everything.
 
     This was the last manual touch in the path: mint → os-update → preflight → *click in the
@@ -326,14 +331,33 @@ def step_add_to_group(ctx: HostContext, *, group_id: int | None = None) -> None:
     device_id = int(device["id"])
 
     if device_id in simplemdm.assignment_group_device_ids(gid):
-        ui.ok(f"already in {name} — nothing to do")
-        return
+        ui.ok(f"already in {name} — no add needed")
+        # Membership does NOT prove the pkg was ever pushed: this path skips push_apps, so a host
+        # added by hand in the UI (or added while push failed) can sit in the group forever with
+        # nothing installed. We don't push here — push_apps hits every member of the group and
+        # would re-run the postinstall on hosts that are mid-bootstrap — so just say so loudly.
+        if not ssh.file_exists(ctx.fqdn, BOOTSTRAP_PKG_PAYLOAD):
+            ui.warn(
+                f"in the group but {BOOTSTRAP_PKG_PAYLOAD} is missing — the managed install never "
+                "ran on this host. Push the group's apps from SimpleMDM, or remove and re-add it."
+            )
+    else:
+        ui.wire(f"POST /assignment_groups/{gid}/devices/{device_id}   (additive; never a move)")
+        simplemdm.add_device_to_assignment_group(gid, device_id)
+        ui.wire(f"POST /assignment_groups/{gid}/push_apps")
+        simplemdm.push_apps(gid)
+        ui.ok(f"added to {name} and pushed — the bootstrap pkg should land shortly")
 
-    ui.wire(f"POST /assignment_groups/{gid}/devices/{device_id}   (additive; never a move)")
-    simplemdm.add_device_to_assignment_group(gid, device_id)
-    ui.wire(f"POST /assignment_groups/{gid}/push_apps")
-    simplemdm.push_apps(gid)
-    ui.ok(f"added to {name} and pushed — the bootstrap pkg should land shortly")
+    if quarantine_on_register:
+        # Budget must span the WHOLE bootstrap, not just the registration gap: pkg install,
+        # puppet, several reboots, sentinel, then worker start. Wave 1 measured ~30 min from the
+        # group add to the worker appearing, against a default watch budget of 900s — so the
+        # default would have expired well before there was anything to quarantine.
+        s2 = get_settings()
+        step_quarantine_on_register(
+            ctx,
+            max_wait_seconds=s2.bootstrap_max_wait_seconds + s2.quarantine_on_register_max_wait_seconds,
+        )
 
 
 def step_wait_for_bootstrap_pkg(ctx: HostContext) -> None:
@@ -683,8 +707,16 @@ def step_wait_for_sentinel(ctx: HostContext) -> None:
     ui.ok(f"bootstrap complete — {SENTINEL} present")
 
 
-def step_quarantine_on_register(ctx: HostContext) -> None:
+def step_quarantine_on_register(ctx: HostContext, *, max_wait_seconds: int | None = None) -> None:
     """Wait for a fresh worker to appear in Taskcluster, then quarantine it on sight.
+
+    `max_wait_seconds` overrides the default budget. The default is sized for a watch started
+    once bootstrap is already finished (the `provision` path), where registration is a minute or
+    so away. Started from `add-to-group` the watch instead spans the ENTIRE bootstrap — pkg
+    install, puppet, several reboots, sentinel, worker start — which measured ~30 min on wave 1,
+    so that caller passes a much larger budget. Getting this wrong is not a harmless timeout: the
+    watch would give up before the worker registered and the host would go live unheld, which is
+    the exact failure this step exists to prevent.
 
     A fresh DEP host is not registered in TC, and `queue.quarantineWorker` 404s on a worker
     that doesn't exist yet — that's why the reprovision flow skips quarantine for unregistered
@@ -711,11 +743,13 @@ def step_quarantine_on_register(ctx: HostContext) -> None:
             "refusing to wait for a registration we couldn't act on"
         )
 
+    budget = max_wait_seconds or s.quarantine_on_register_max_wait_seconds
     pools = candidate_pools(ctx.role)
     ui.step("QUARANTINE ON REGISTER", "hold the fresh worker out of the pool the moment it appears")
     ui.wire(f"queue.getWorker {' | '.join(pools)} / {ctx.worker_group} / {ctx.hostname}  (poll)")
+    ui.info(f"watch budget {budget}s")
 
-    deadline = time.monotonic() + s.quarantine_on_register_max_wait_seconds
+    deadline = time.monotonic() + budget
     found_pool: str | None = None
     with ui.waiting("waiting for the worker to register with Taskcluster") as tick:
         while time.monotonic() < deadline:
@@ -727,9 +761,9 @@ def step_quarantine_on_register(ctx: HostContext) -> None:
 
     if not found_pool:
         raise ReprovisionError(
-            f"{ctx.hostname} never registered in {' or '.join(pools)} within "
-            f"{s.quarantine_on_register_max_wait_seconds}s — bootstrap finished but the worker "
-            "didn't come up; check worker-runner and /var/tmp/semaphore/run-buildbot on the host"
+            f"{ctx.hostname} never registered in {' or '.join(pools)} within {budget}s — the "
+            "worker didn't come up; check worker-runner and /var/tmp/semaphore/run-buildbot on "
+            "the host. NB: the host may still register later and would then be UNHELD."
         )
 
     ctx.worker_pool_id = found_pool

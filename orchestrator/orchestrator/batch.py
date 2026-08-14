@@ -131,7 +131,10 @@ def _child_cmd(
         # No gate flags: nothing here inspects the OS version or SIP state. It does need SSH,
         # though — the host's serial is the only join key to its SimpleMDM device record, since a
         # DEP arrival enrolls as "Mac mini" and never learns its DHCP-assigned hostname.
-        return [exe, "add-to-group", host]
+        cmd = [exe, "add-to-group", host]
+        if quarantine_on_register:
+            cmd.append("--quarantine-on-register")
+        return cmd
     else:
         cmd = [exe, "provision", host]
         if not wait:
@@ -240,9 +243,15 @@ def run_batch(
             # download runs detached and outlives this call by design.
             per_host_timeout = 600
         elif action == "add-to-group":
-            # Three SimpleMDM calls and no SSH at all. The only reason this isn't seconds is the
-            # 429 backoff in the client.
+            # Three SimpleMDM calls plus one SSH round-trip for the serial; seconds, bar the 429
+            # backoff. With --quarantine-on-register it instead blocks for the whole bootstrap,
+            # so the timeout has to cover that or the child gets killed mid-watch and the host
+            # goes live unheld — the failure the flag exists to prevent.
             per_host_timeout = 300
+            if quarantine_on_register:
+                per_host_timeout = (
+                    s.bootstrap_max_wait_seconds + s.quarantine_on_register_max_wait_seconds + 300
+                )
         else:
             per_host_timeout = 1800
 
@@ -265,6 +274,12 @@ def run_batch(
         ui.info("launches the upgrade and returns; hosts reboot on their own — sweep with --action preflight after")
     if action == "add-to-group":
         ui.info("ADD only, never a move; already-member hosts are skipped — then wait for the pkg to land")
+        ui.info(
+            "watching for registration and quarantining on sight (blocks for the whole bootstrap)"
+            if quarantine_on_register
+            else "NOT quarantining: the bootstrap is autonomous, so these hosts will go live and "
+            "claim production work unvalidated — pass --quarantine-on-register for fresh hardware"
+        )
     if action == "provision":
         ui.info(
             "hosts will be quarantined on registration"
