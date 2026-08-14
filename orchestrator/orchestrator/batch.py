@@ -45,7 +45,7 @@ EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_NOT_READY = 2
 
-ACTIONS = ("preflight", "mint", "os-update", "add-to-group", "provision")
+ACTIONS = ("preflight", "mint", "os-update", "add-to-group", "validate", "provision")
 
 
 @dataclass
@@ -127,6 +127,10 @@ def _child_cmd(
         # No gate flags: mint runs BEFORE the Recovery trip and the OS update, because Recovery
         # needs a volume owner and mint is what creates one. Gating it would deadlock the order.
         return [exe, "mint", host]
+    elif action == "validate":
+        # Read-only fitness check; no gate flags, and it inspects the RUNNING host rather than
+        # gating on a target version, so --expected-os doesn't apply.
+        return [exe, "validate", host]
     elif action == "add-to-group":
         # No gate flags: nothing here inspects the OS version or SIP state. It does need SSH,
         # though — the host's serial is the only join key to its SimpleMDM device record, since a
@@ -242,6 +246,8 @@ def run_batch(
             # Launch-and-return: staging the script plus the started-cleanly check. The ~14GB
             # download runs detached and outlives this call by design.
             per_host_timeout = 600
+        elif action == "validate":
+            per_host_timeout = 300
         elif action == "add-to-group":
             # Three SimpleMDM calls plus one SSH round-trip for the serial; seconds, bar the 429
             # backoff. With --quarantine-on-register it instead blocks for the whole bootstrap,
@@ -259,7 +265,9 @@ def run_batch(
     # "gate: macOS 15.3 · SIP must be disabled" on every action was actively misleading: on a
     # `--action mint` run over SIP-on hosts it read as though SIP state had been validated and
     # passed, when mint is handed neither flag and checks neither thing.
-    if action in ("mint", "add-to-group"):
+    if action == "validate":
+        gate_note = "read-only fitness check on already-bootstrapped hosts"
+    elif action in ("mint", "add-to-group"):
         gate_note = f"no OS/SIP gate — {action} doesn't inspect the running OS"
     elif action == "os-update":
         gate_note = f"target macOS {expected_os} · SIP not checked"
@@ -272,6 +280,8 @@ def run_batch(
         ui.info("--no-wait: mint + escrow only; sweep sentinels afterwards")
     if action == "os-update":
         ui.info("launches the upgrade and returns; hosts reboot on their own — sweep with --action preflight after")
+    if action == "validate":
+        ui.info("exit 2 = not bootstrapped yet (skipped) · exit 1 = bootstrapped but UNFIT to take work")
     if action == "add-to-group":
         ui.info("ADD only, never a move; already-member hosts are skipped — then wait for the pkg to land")
         ui.info(

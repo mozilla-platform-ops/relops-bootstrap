@@ -122,7 +122,7 @@ def batch(
     action: str = typer.Option(
         "provision",
         "--action",
-        help="What to run per host: preflight | mint | os-update | add-to-group | provision.",
+        help="What to run per host: preflight | mint | os-update | add-to-group | validate | provision.",
     ),
     concurrency: int = typer.Option(
         0, "--concurrency", "-j", help="How many hosts in flight (default 3 — MDC1 throughput, not CPU)."
@@ -237,6 +237,26 @@ def add_to_group(
         workflow.resolve_offline(hostname),
         group_id=group_id or None,
         quarantine_on_register=quarantine_on_register,
+    )
+
+
+@_app.command()
+def validate(
+    hostname: str,
+    expected_refresh_hz: float = typer.Option(
+        0.0,
+        "--expected-refresh-hz",
+        help="Required display refresh rate (default: settings.validate_expected_refresh_hz, 60).",
+    ),
+) -> None:
+    """Read-only fitness check on a bootstrapped host — run this before unquarantining it.
+
+    Checks the things that can be perfect everywhere else and still fail every task: the display
+    mode (a KVM at 75Hz makes mozharness halt before any test runs — see m4-242, 15 tasks lost),
+    the last puppet run, and the worker. Exits 2 if the host hasn't bootstrapped yet, 1 if unfit.
+    """
+    workflow.step_validate(
+        workflow.resolve_offline(hostname), expected_refresh_hz=expected_refresh_hz or None
     )
 
 

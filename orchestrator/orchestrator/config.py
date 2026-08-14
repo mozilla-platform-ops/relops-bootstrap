@@ -101,6 +101,14 @@ class Settings(BaseSettings):
     # override.
     bootstrap_group_id: int = Field(default=2417981)
 
+    # `validate` refuses a host whose main display isn't at this refresh rate. 60.0 because that is
+    # what mozharness's own pre-test check enforces — matching it means validate agrees with what CI
+    # will decide, rather than inventing a second standard. A KVM presenting 75Hz made m4-242 fail
+    # 15 consecutive production tasks in ~43s each (2026-08-14) without ever running a test.
+    # Resolution is deliberately NOT gated: it varies legitimately across the fleet, so validate
+    # reports it and only hard-fails on the thing CI actually rejects.
+    validate_expected_refresh_hz: float = Field(default=60.0)
+
     # Hostname -> puppet role mapping
     # Loaded from a per-fleet JSON/YAML file outside this code so it can be edited
     # without redeploying the CLI. For now we default to pattern-matching on hostname.

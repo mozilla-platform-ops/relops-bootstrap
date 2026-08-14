@@ -360,6 +360,83 @@ def step_add_to_group(
         )
 
 
+def step_validate(ctx: HostContext, *, expected_refresh_hz: float | None = None) -> None:
+    """Read-only fitness check on a bootstrapped host: is it actually able to run tasks?
+
+    This fills the gap the quarantine message already promises. `--quarantine-on-register` holds a
+    fresh host "pending validation", but nothing validated anything — so the only way a host proved
+    itself unfit was by failing real work. macmini-m4-242 destroyed 15 production tasks (mochitest,
+    jsreftest, web-platform-tests) at ~43s each before anyone looked, because its KVM presented
+    1280x1024@75Hz and mozharness fatally halts a pre-test refresh-rate check at anything but 60Hz.
+    Every other signal on that host was perfect: puppet green, sentinel present, worker up, disk
+    fine, semaphores byte-identical to a working host.
+
+    Deliberately runs AFTER bootstrap, not as part of preflight: reading the display needs the
+    logged-in cltbld session, and on a fresh host cltbld does not exist until puppet creates it. A
+    preflight version would silently pass exactly the hosts it was meant to catch.
+
+    Read-only — safe on live workers. Raises NotReadyError (exit 2, "skipped") when the host hasn't
+    bootstrapped yet, and ReprovisionError (exit 1) when it has and is unfit.
+    """
+    s = get_settings()
+    want_hz = expected_refresh_hz or s.validate_expected_refresh_hz
+    ui.step("VALIDATE", "is this host fit to take work? (read-only)")
+
+    if not ssh.file_exists(ctx.fqdn, SENTINEL):
+        raise NotReadyError(
+            f"{ctx.hostname}: {SENTINEL} missing — host hasn't finished bootstrapping, nothing to "
+            "validate yet"
+        )
+
+    problems: list[str] = []
+
+    # The display check first: it's the one that passes every other signal and still eats tasks.
+    ui.wire(f"ssh admin@{ctx.hostname} launchctl asuser $(id -u cltbld) … CGDisplayModeGetRefreshRate")
+    mode = ssh.display_mode(ctx.fqdn)
+    if mode is None:
+        # Unknown, not fine. A host whose GUI session we can't reach can't run tests either.
+        problems.append(
+            "couldn't read the display mode — no cltbld GUI session? Without it mozharness's "
+            "pre-test refresh-rate check can't pass either"
+        )
+    else:
+        hz, w, h = mode
+        if abs(hz - want_hz) < 0.5:
+            ui.ok(f"display {w}x{h} @ {hz:.2f}Hz")
+        else:
+            problems.append(
+                f"display is {w}x{h} @ {hz:.2f}Hz, expected {want_hz:.2f}Hz — mozharness halts every "
+                "task on this before running a single test. Usually the KVM isn't set correctly."
+            )
+
+    puppet_ok = ssh.run(
+        ctx.fqdn,
+        "sudo grep -o '\"success\": [a-z]*' /opt/puppet_environments/last_run_metadata.json "
+        "2>/dev/null | head -1 | awk '{print $2}'",
+        check=False,
+    ).stdout.decode(errors="replace").strip()
+    if puppet_ok == "true":
+        ui.ok("last puppet run succeeded")
+    else:
+        problems.append(f"last puppet run reported success={puppet_ok or 'unknown'}")
+
+    worker_up = ssh.run(
+        ctx.fqdn, "pgrep -f 'start-worker ' >/dev/null && echo up || echo down", check=False
+    ).stdout.decode(errors="replace").strip()
+    if worker_up == "up":
+        ui.ok("generic-worker is running")
+    else:
+        # Not fatal on its own: these hosts reboot between tasks, so a down worker can just mean
+        # we caught it mid-cycle. Report it without failing the host on timing alone.
+        ui.warn("generic-worker isn't running right now (may be mid-reboot between tasks)")
+
+    if problems:
+        raise ReprovisionError(
+            f"{ctx.hostname} is NOT fit to take work:\n  - " + "\n  - ".join(problems)
+        )
+    ui.ok(f"{ctx.hostname} looks fit — safe to unquarantine")
+
+
 def step_wait_for_bootstrap_pkg(ctx: HostContext) -> None:
     """Confirm the bootstrap pkg actually landed, before committing to the long sentinel wait.
 

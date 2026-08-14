@@ -215,6 +215,45 @@ def secure_token_status(hostname: str) -> str:
     return cp.stdout.decode(errors="replace").strip()
 
 
+def display_mode(hostname: str, *, session_user: str = "cltbld") -> tuple[float, int, int] | None:
+    """(refresh_hz, width, height) of the main display, or None if it can't be read.
+
+    Must run INSIDE the logged-in GUI session. Over a plain SSH login as admin, CoreGraphics has no
+    window server to talk to and answers `refresh=0.0, 0x0` — not an error, just zeros, which would
+    sail past a naive check. So we hop into the console user's session with `launchctl asuser`, the
+    same technique the Safari automation uses.
+
+    Returns None rather than raising when the session isn't there (no such user yet, nobody logged
+    in, PyObjC missing). Callers must treat None as "unknown", never as "fine": on a host that has
+    not bootstrapped, `cltbld` doesn't exist at all.
+
+    Reads what mozharness reads, so this agrees with what CI will decide about the host.
+    """
+    cp = run(
+        hostname,
+        "uid=$(id -u " + shlex.quote(session_user) + " 2>/dev/null) || exit 9; "
+        '[ -n "$uid" ] || exit 9; '
+        "sudo launchctl asuser \"$uid\" /usr/local/bin/python3 -c "
+        "'import Quartz;"
+        "d=Quartz.CGMainDisplayID();m=Quartz.CGDisplayCopyDisplayMode(d);"
+        'print("%.2f %d %d" % (Quartz.CGDisplayModeGetRefreshRate(m),'
+        "Quartz.CGDisplayModeGetPixelWidth(m),Quartz.CGDisplayModeGetPixelHeight(m)))'",
+        check=False,
+    )
+    for line in reversed(cp.stdout.decode(errors="replace").strip().splitlines()):
+        parts = line.split()
+        if len(parts) == 3:
+            try:
+                hz, w, h = float(parts[0]), int(parts[1]), int(parts[2])
+            except ValueError:
+                continue
+            # All-zero means we asked from outside the session; that's "unknown", not 0Hz.
+            if (hz, w, h) == (0.0, 0, 0):
+                return None
+            return hz, w, h
+    return None
+
+
 def platform_serial(hostname: str) -> str:
     """Hardware serial number, or '' if unreachable.
 
