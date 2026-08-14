@@ -69,7 +69,17 @@ ADMIN_PASSWORD="INSERT_HERE"
 # Need ~14GB zip + ~14GB pkg + the expanded installer app.
 REQUIRED_GB=45
 
-exec >> "$LOG" 2>&1
+# Log to BOTH the on-box file and stdout.
+#
+# The on-box log is ground truth because SimpleMDM's job-status API is unreliable
+# here (it reports `pending` after a script has already run). But a plain
+# `exec >> "$LOG"` sends everything to the file and nothing to stdout, so a
+# SimpleMDM run records `job_status: "1", job_response: "\n"` and the reason is
+# only readable by SSHing to the host — exactly what you cannot do on a fresh
+# batch with no forward DNS. Seen 2026-08-13 on a 15.2 arrival: correct refusal,
+# zero diagnostic. When driven over SSH this also puts the reason in the
+# orchestrator's output instead of only on the host.
+exec > >(/usr/bin/tee -a "$LOG") 2>&1
 echo "=== macos-upgrade start $(date) (target ${TARGET_VERSION}) ==="
 
 if [[ $EUID -ne 0 ]]; then
@@ -84,8 +94,22 @@ fi
 # authenticating startosinstall -- while the unreachable cleanup left a
 # LaunchDaemon re-firing that failure on every subsequent boot. Cost per host:
 # 14GB and an hour, to learn something knowable in a millisecond.
-if [[ "$ADMIN_PASSWORD" == "INSERT_HERE" || -z "$ADMIN_PASSWORD" ]]; then
-  echo "[ERROR] ADMIN_PASSWORD is still the placeholder — refusing to run."
+#
+# The comparison is case-INSENSITIVE and covers the obvious separator variants.
+# It used to match only the exact string "INSERT_HERE", and a real paste on
+# 2026-08-14 carried lowercase `insert_here`, which went straight through. It was
+# then caught by the `dscl . -authonly` check below — so nothing was lost — but the
+# reported error was "the supplied password is not valid for admin", which sends
+# you looking at the fleet's mixed-password history instead of at the script.
+#
+# /bin/bash on macOS is 3.2, so no ${var,,}; tr instead.
+_pw_lc=$(printf '%s' "$ADMIN_PASSWORD" | /usr/bin/tr '[:upper:]' '[:lower:]')
+if [[ -z "$ADMIN_PASSWORD" \
+   || "$_pw_lc" == "insert_here" \
+   || "$_pw_lc" == "insert-here" \
+   || "$_pw_lc" == "insert here" \
+   || "$_pw_lc" == "changeme" ]]; then
+  echo "[ERROR] ADMIN_PASSWORD is still the placeholder (got: '${ADMIN_PASSWORD}') — refusing to run."
   echo "        Replace INSERT_HERE with the fixed DEP admin password before firing this,"
   echo "        or drive it via \`reprovision batch --action os-update\`, which substitutes"
   echo "        the credential from the vault at run time and never stores it in SimpleMDM."
@@ -142,36 +166,57 @@ fi
 #                       normal contended case here, and must be retried
 # --speed-limit/-time   fail a transfer stalled under 10KB/s for 5 min rather
 #                       than hanging on a half-open socket indefinitely
-echo "[INFO] downloading $REMOTE_URL"
-if ! /usr/bin/curl -L --fail -C - \
-      --retry 10 --retry-delay 30 --retry-max-time 7200 \
-      --retry-all-errors --retry-connrefused \
-      --speed-limit 10240 --speed-time 300 \
-      -o "$ZIP_PATH" "$REMOTE_URL"; then
-  echo "[ERROR] download failed after retries — mirror saturated or unreachable."
-  echo "        Partial file kept at $ZIP_PATH; a re-run resumes from there."
-  exit 1
-fi
+# Skip the whole fetch+install if the installer app is already on disk.
+#
+# The only previous short-circuit was "already at the target OS", so ANY retry
+# re-downloaded the full ~14GB even though the installer was sitting right there:
+# the zip and pkg get deleted after a successful install, but the app is kept, and
+# nothing looked at it. Observed on macmini-m4-240 (2026-08-14) — a retry after the
+# bootout bug cost a second full transfer for no reason.
+#
+# That matters because retries are normal at wave scale, and this mirror is
+# single-threaded with a listen backlog of 5. At 49 hosts a free retry versus a
+# 14GB retry is the difference between re-firing at stragglers casually and having
+# to schedule it.
+#
+# --no-progress-meter keeps curl's percentage spam out of the log. Without it a
+# single run wrote ~48KB of "% Total % Received" noise, which is unreadable when
+# you are triaging a wave and grepping these logs.
+if [[ -x "$APP_PATH/Contents/Resources/startosinstall" ]]; then
+  echo "[INFO] installer already present at $APP_PATH — skipping download and pkg install"
+  /bin/rm -f "$ZIP_PATH" "$PKG_PATH"
+else
+  echo "[INFO] downloading $REMOTE_URL"
+  if ! /usr/bin/curl -L --fail -C - --no-progress-meter \
+        --retry 10 --retry-delay 30 --retry-max-time 7200 \
+        --retry-all-errors --retry-connrefused \
+        --speed-limit 10240 --speed-time 300 \
+        -o "$ZIP_PATH" "$REMOTE_URL"; then
+    echo "[ERROR] download failed after retries — mirror saturated or unreachable."
+    echo "        Partial file kept at $ZIP_PATH; a re-run resumes from there."
+    exit 1
+  fi
 
-echo "[INFO] unzipping"
-if ! /usr/bin/unzip -o "$ZIP_PATH" -d /private/tmp/ || [[ ! -f "$PKG_PATH" ]]; then
-  echo "[ERROR] unzip failed or $PKG_PATH missing — treating the download as corrupt."
-  /bin/rm -f "$ZIP_PATH" "$PKG_PATH"   # force a clean re-fetch next run
-  exit 1
-fi
+  echo "[INFO] unzipping"
+  if ! /usr/bin/unzip -o "$ZIP_PATH" -d /private/tmp/ || [[ ! -f "$PKG_PATH" ]]; then
+    echo "[ERROR] unzip failed or $PKG_PATH missing — treating the download as corrupt."
+    /bin/rm -f "$ZIP_PATH" "$PKG_PATH"   # force a clean re-fetch next run
+    exit 1
+  fi
 
-echo "[INFO] installing pkg"
-if ! /usr/sbin/installer -pkg "$PKG_PATH" -target /; then
-  echo "[ERROR] installer failed."
-  exit 1
-fi
+  echo "[INFO] installing pkg"
+  if ! /usr/sbin/installer -pkg "$PKG_PATH" -target /; then
+    echo "[ERROR] installer failed."
+    exit 1
+  fi
 
-if [[ ! -x "$APP_PATH/Contents/Resources/startosinstall" ]]; then
-  echo "[ERROR] $APP_PATH/Contents/Resources/startosinstall missing after install."
-  exit 1
-fi
+  if [[ ! -x "$APP_PATH/Contents/Resources/startosinstall" ]]; then
+    echo "[ERROR] $APP_PATH/Contents/Resources/startosinstall missing after install."
+    exit 1
+  fi
 
-/bin/rm -f "$ZIP_PATH" "$PKG_PATH"
+  /bin/rm -f "$ZIP_PATH" "$PKG_PATH"
+fi
 
 #-----------------------------------------------------------------------------
 # 2. Stage the credential — root-only, and short-lived by construction
@@ -200,9 +245,20 @@ STARTOSINSTALL="$APP_PATH/Contents/Resources/startosinstall"
 # early on failure, so anything cleaned up *after* it never gets cleaned up at
 # all -- which is how the previous version left the fleet admin password on
 # disk permanently and re-fired this daemon on every subsequent boot.
+#
+# Do NOT add 'launchctl bootout system/com.mozilla.upgrade' here. That boots out
+# the job whose ProgramArguments IS this script, so launchd SIGTERMs us on the
+# spot -- after the credential, the plist and this file are already deleted, and
+# before startosinstall is ever called. There is nothing left to retry, and the
+# only trace is a bare "=== upgrade trigger <date> ===" with silence after it.
+# Cost when it happened on macmini-m4-240 (2026-08-14): a full 14GB download, the
+# pkg install and a reboot, to end up still on 15.2 with the trigger gone.
+#
+# Removing the plist is sufficient on its own -- launchd will not re-fire the job
+# on the next boot without it, and this process exits normally when the script
+# ends. No bootout required.
 PASSWORD=\$(/bin/cat "$CRED_FILE" 2>/dev/null)
 /bin/rm -f "$CRED_FILE" "$LAUNCHD_PLIST"
-/bin/launchctl bootout system/com.mozilla.upgrade 2>/dev/null || true
 /bin/rm -f "\$0"
 
 if [[ -z "\$PASSWORD" ]]; then
