@@ -255,6 +255,43 @@ def step_preflight(
         ui.warn(f"sentinel {SENTINEL} already present — this host has bootstrapped before")
 
 
+def _resolve_mdm_device(ctx: HostContext) -> dict:
+    """Find the host's SimpleMDM device record. Serial over SSH first, name as a fallback.
+
+    Hostname is NOT a usable key on fresh hardware. A DEP arrival enrolls as `Mac mini` (with a
+    `device_name` like `Mac mini (39)`); the hostname is assigned by DHCP and never written into
+    the device record, because nothing in ronin_puppet runs `scutil --set`. Searching the API for
+    `macmini-m4-241` therefore returns a clean, entirely misleading zero hits — which is exactly
+    what happened to the first four hosts of wave 1 (2026-08-14): all four "skipped" as
+    not-enrolled when they were enrolled, on 15.3, and answering SSH.
+
+    So we ask the host for its serial, which is unique and present from enrollment. The name
+    fallback exists for hosts that HAVE been renamed (every already-provisioned r8 shows
+    `name='macmini-r8-118'`), so a re-run against the existing fleet still resolves without SSH.
+    """
+    serial = ssh.platform_serial(ctx.fqdn)
+    if serial:
+        ui.info(f"serial {serial} (from the host — SimpleMDM doesn't know its hostname)")
+        device = simplemdm.find_device_by_serial(serial)
+        if device is not None:
+            return device
+        raise NotReadyError(
+            f"{ctx.hostname}: serial {serial} isn't in SimpleMDM — the host is up but not enrolled. "
+            "Check the DEP/ADE assignment for this serial."
+        )
+
+    # No SSH. Fall back to name, which only works post-rename.
+    device = simplemdm.find_device_by_name(ctx.hostname)
+    if device is not None:
+        return device
+    raise NotReadyError(
+        f"{ctx.hostname}: can't reach the host over SSH to read its serial, and no SimpleMDM "
+        f"device is named {ctx.hostname!r}. Fresh DEP arrivals enroll as 'Mac mini', so the "
+        "hostname is not a usable lookup key — bring SSH up (admin key / relops_key_admin) and "
+        "retry, or pass the device explicitly."
+    )
+
+
 def step_add_to_group(ctx: HostContext, *, group_id: int | None = None) -> None:
     """ADD the host to the bootstrap assignment group — the action that starts everything.
 
@@ -285,11 +322,7 @@ def step_add_to_group(ctx: HostContext, *, group_id: int | None = None) -> None:
             "deliver no bootstrap pkg. Check the group in SimpleMDM before running this."
         )
 
-    device = simplemdm.find_device_by_name(ctx.hostname)
-    if device is None:
-        raise NotReadyError(
-            f"{ctx.hostname}: no SimpleMDM device with that name — has it finished DEP enrolling?"
-        )
+    device = _resolve_mdm_device(ctx)
     device_id = int(device["id"])
 
     if device_id in simplemdm.assignment_group_device_ids(gid):

@@ -76,6 +76,21 @@ def find_device_by_name(name: str) -> dict | None:
     return None
 
 
+def find_device_by_serial(serial: str) -> dict | None:
+    """Returns the device record for a hardware serial, or None.
+
+    Prefer this over find_device_by_name for anything touching fresh hardware. A DEP arrival is
+    named `Mac mini` in SimpleMDM until something renames it, so name lookup finds either nothing
+    or the wrong box — a search for "Mac mini" returns every unnamed device in the fleet. The
+    serial is unique and present from enrollment.
+    """
+    r = _request("GET", "/devices", params={"search": serial})
+    for d in r.json().get("data", []):
+        if d.get("attributes", {}).get("serial_number") == serial:
+            return d
+    return None
+
+
 def get_device(device_id: int) -> dict:
     return _request("GET", f"/devices/{device_id}").json()["data"]
 

@@ -70,7 +70,8 @@ def test_the_client_exposes_no_way_to_remove_or_move_a_device():
 def test_already_a_member_is_a_no_op():
     ctx = workflow.resolve_offline(HOST)
     with patch("orchestrator.workflow.simplemdm.get_assignment_group", return_value=_group(device_ids=(555,))), \
-         patch("orchestrator.workflow.simplemdm.find_device_by_name", return_value={"id": 555}), \
+         patch("orchestrator.workflow.ssh.platform_serial", return_value="W4LT930Y9Q"), \
+         patch("orchestrator.workflow.simplemdm.find_device_by_serial", return_value={"id": 555}), \
          patch("orchestrator.workflow.simplemdm.add_device_to_assignment_group") as add, \
          patch("orchestrator.workflow.simplemdm.push_apps") as push:
         workflow.step_add_to_group(ctx, group_id=BOOTSTRAP_GID)
@@ -81,7 +82,8 @@ def test_already_a_member_is_a_no_op():
 def test_adds_and_pushes_when_not_a_member():
     ctx = workflow.resolve_offline(HOST)
     with patch("orchestrator.workflow.simplemdm.get_assignment_group", return_value=_group(device_ids=(999,))), \
-         patch("orchestrator.workflow.simplemdm.find_device_by_name", return_value={"id": 555}), \
+         patch("orchestrator.workflow.ssh.platform_serial", return_value="W4LT930Y9Q"), \
+         patch("orchestrator.workflow.simplemdm.find_device_by_serial", return_value={"id": 555}), \
          patch("orchestrator.workflow.simplemdm.add_device_to_assignment_group") as add, \
          patch("orchestrator.workflow.simplemdm.push_apps") as push:
         workflow.step_add_to_group(ctx, group_id=BOOTSTRAP_GID)
@@ -110,8 +112,9 @@ def test_unknown_device_is_not_ready_not_a_failure():
     """
     ctx = workflow.resolve_offline(HOST)
     with patch("orchestrator.workflow.simplemdm.get_assignment_group", return_value=_group()), \
+         patch("orchestrator.workflow.ssh.platform_serial", return_value=""), \
          patch("orchestrator.workflow.simplemdm.find_device_by_name", return_value=None), \
-         pytest.raises(NotReadyError, match="DEP enrolling"):
+         pytest.raises(NotReadyError, match="not a usable lookup key"):
         workflow.step_add_to_group(ctx, group_id=BOOTSTRAP_GID)
 
 
@@ -183,3 +186,63 @@ def test_every_client_call_goes_through_the_retrying_wrapper():
     body = src.split("def _request", 1)[1].split("\ndef ", 1)[1]  # everything after _request
     for verb in ("httpx.get", "httpx.post", "httpx.put", "httpx.delete", "httpx.request"):
         assert verb not in body, f"{verb} used outside _request — it would skip 429 backoff"
+
+
+# --- device resolution: hostname is NOT a usable key on fresh hardware ---
+
+
+def test_resolves_by_serial_from_the_host_not_by_hostname():
+    """The bug that made wave 1's first batch skip all four hosts.
+
+    A DEP arrival enrolls as `Mac mini`; the hostname is DHCP-assigned and never written into the
+    SimpleMDM record. Searching by hostname returns a clean zero hits, so all four hosts reported
+    "has it finished DEP enrolling?" while being enrolled, on 15.3, and answering SSH.
+    """
+    ctx = workflow.resolve_offline(HOST)
+    rec = {"id": 1962219, "attributes": {"name": "Mac mini", "serial_number": "W4LT930Y9Q"}}
+    with patch("orchestrator.workflow.ssh.platform_serial", return_value="W4LT930Y9Q"), \
+         patch("orchestrator.workflow.simplemdm.find_device_by_serial", return_value=rec) as by_serial, \
+         patch("orchestrator.workflow.simplemdm.find_device_by_name") as by_name:
+        assert workflow._resolve_mdm_device(ctx) is rec
+    by_serial.assert_called_once_with("W4LT930Y9Q")
+    by_name.assert_not_called()  # name lookup must not be the primary path
+
+
+def test_falls_back_to_name_when_ssh_is_unavailable():
+    """Already-provisioned hosts DO carry their hostname (every r8 shows name='macmini-r8-118'),
+    so a re-run against the existing fleet still resolves with no SSH.
+    """
+    ctx = workflow.resolve_offline(HOST)
+    rec = {"id": 477149, "attributes": {"name": HOST}}
+    with patch("orchestrator.workflow.ssh.platform_serial", return_value=""), \
+         patch("orchestrator.workflow.simplemdm.find_device_by_name", return_value=rec):
+        assert workflow._resolve_mdm_device(ctx) is rec
+
+
+def test_a_reachable_host_with_an_unenrolled_serial_says_so():
+    ctx = workflow.resolve_offline(HOST)
+    with patch("orchestrator.workflow.ssh.platform_serial", return_value="NOTENROLLED1"), \
+         patch("orchestrator.workflow.simplemdm.find_device_by_serial", return_value=None), \
+         pytest.raises(NotReadyError, match="isn't in SimpleMDM"):
+        workflow._resolve_mdm_device(ctx)
+
+
+def test_no_ssh_and_no_name_match_explains_why_hostname_cannot_work():
+    ctx = workflow.resolve_offline(HOST)
+    with patch("orchestrator.workflow.ssh.platform_serial", return_value=""), \
+         patch("orchestrator.workflow.simplemdm.find_device_by_name", return_value=None), \
+         pytest.raises(NotReadyError, match="not a usable lookup key"):
+        workflow._resolve_mdm_device(ctx)
+
+
+def test_find_device_by_serial_requires_an_exact_match():
+    """`search` is fuzzy — searching a serial could return neighbours. Only an exact
+    serial_number match may be returned, or we'd add the wrong physical machine to a group.
+    """
+    other = {"id": 1, "attributes": {"serial_number": "W4LT930Y9QXX"}}
+    want = {"id": 2, "attributes": {"serial_number": "W4LT930Y9Q"}}
+    resp = httpx.Response(200, json={"data": [other, want]},
+                          request=httpx.Request("GET", "https://a.simplemdm.com/api/v1/devices"))
+    with patch("orchestrator.clients.simplemdm._request", return_value=resp):
+        assert simplemdm.find_device_by_serial("W4LT930Y9Q") == want
+        assert simplemdm.find_device_by_serial("NOPE") is None
