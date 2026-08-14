@@ -93,6 +93,14 @@ class Settings(BaseSettings):
     # (The bootstrap is delivered as a signed PKG / managed install, not a triggered
     # script-job, so there's no bootstrap_script_id anymore.)
 
+    # The SimpleMDM assignment group `add-to-group` puts hosts into. Membership here IS the
+    # bootstrap trigger, so this is the one number that decides what a wave does. Default is
+    # gecko-t-osx-1500-m4-bootstrap (an exact clone of 2377013: 7 apps + 10 profiles incl.
+    # Dev - SCEP). Configurable because the next fleet will have its own group; the production
+    # groups are separately blocked in clients.simplemdm.PROTECTED_GROUP_IDS, which this cannot
+    # override.
+    bootstrap_group_id: int = Field(default=2417981)
+
     # Hostname -> puppet role mapping
     # Loaded from a per-fleet JSON/YAML file outside this code so it can be edited
     # without redeploying the CLI. For now we default to pattern-matching on hostname.

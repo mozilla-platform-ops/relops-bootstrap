@@ -120,7 +120,9 @@ def preflight(
 def batch(
     hosts_file: str = typer.Argument(..., help="File with one short hostname per line ('#' comments ok)."),
     action: str = typer.Option(
-        "provision", "--action", help="What to run per host: preflight | mint | os-update | provision."
+        "provision",
+        "--action",
+        help="What to run per host: preflight | mint | os-update | add-to-group | provision.",
     ),
     concurrency: int = typer.Option(
         0, "--concurrency", "-j", help="How many hosts in flight (default 3 — MDC1 throughput, not CPU)."
@@ -203,6 +205,22 @@ def escrow_bst(hostname: str) -> None:
 @_app.command()
 def wait_sentinel(hostname: str) -> None:
     workflow.step_wait_for_sentinel(workflow.resolve_offline(hostname))  # SSH-only; see mint()
+
+
+@_app.command()
+def add_to_group(
+    hostname: str,
+    group_id: int = typer.Option(
+        0, "--group-id", help="Assignment group to ADD to (default: settings.bootstrap_group_id)."
+    ),
+) -> None:
+    """ADD the host to the SimpleMDM bootstrap group — the action that triggers provisioning.
+
+    Additive only: never moves or unassigns, because moving a host out of a group strips that
+    group's profiles (m4-214 lost Skip Setup Assistant and FDA that way). Idempotent — a host
+    already in the group is left alone. Production groups are refused outright.
+    """
+    workflow.step_add_to_group(workflow.resolve_offline(hostname), group_id=group_id or None)
 
 
 @_app.command()
