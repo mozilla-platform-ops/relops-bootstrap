@@ -12,6 +12,10 @@ can't Erase-All-Content-and-Settings it again, can't escrow trust, and can't boo
 headless. `reprovision` automates the whole dance, including the one step everyone assumes
 needs a human at the keyboard: **minting the first SecureToken**.
 
+> 🧑‍🚀 **Provisioning a wave right now? Start with the [Runbook](../docs/RUNBOOK.md).**
+> Copy-paste sequences, the per-action `-j` table, and the failure modes written symptom-first —
+> the 75Hz KVM trap, the two ways Safari wedges, and why `ok` doesn't mean the work happened.
+
 ---
 
 ## The pipeline
@@ -143,15 +147,31 @@ sudo bash -c 'set -a; . /var/root/reprovision-runner/runner.env; set +a;
 Both share the same core — **mint → escrow BST → signed-PKG bootstrap → sentinel**. They
 differ only at the front.
 
-### Reprovision an existing host → back to prod  *(what `run` does; proven on m4-80/m4-81)*
+### 🔄 Reprovision an existing host → back to prod  *(what `run` does)*
 
 Preconditions: host already in the SimpleMDM group (SCEP / CLT / `relops_key_admin` /
 bootstrap PKG / DEP fixed-pw), **BST escrowed**, quarantined.
 
 ```bash
-reprovision run macmini-m4-80
+reprovision add-to-group macmini-m4-211   # ⚠️ REQUIRED FIRST for a prod-group host
+reprovision run          macmini-m4-211
 # quarantine → drain → wipe (EACS) → wait-reenroll → mint → escrow-bst → wait-sentinel
+reprovision validate     macmini-m4-211   # ← the gate
+reprovision unquarantine macmini-m4-211
 ```
+
+> ⚠️ **`run` has no group-membership step.** It assumes the bootstrap PKG arrives "during DEP
+> convergence", which only happens if the host already belongs to a group carrying that PKG —
+> and **production groups do not.** Skip the `add-to-group` and the wipe succeeds, then
+> `wait-sentinel` polls for a full hour for something that can never be written. `add-to-group`
+> is additive and idempotent, so running it first is always safe.
+>
+> 🔥 **The host comes back SIP-ON.** EACS re-enables SIP regardless of its prior state, so don't
+> infer post-wipe SIP from what you saw before — that's how m4-214 surprised us.
+>
+> 🎭 Expect the Safari automation to need a nudge on a reprovisioned host: `cltbld` is recreated
+> by puppet, so it gets a fresh **MiniBuddy** first-login assistant that steals focus from the UI
+> scripting. See the [Runbook](../docs/RUNBOOK.md#safari-wedge).
 
 Stays quarantined by default. If TC creds are unavailable, skip the TC-dependent front and
 run from `wipe` (the box is already quarantined):
@@ -174,28 +194,46 @@ reprovision provision macmini-m4-201
 # preflight → mint → escrow-bst → bootstrap-pkg → wait-sentinel
 ```
 
-For a hardware refresh where a tech racks the minis and disables SIP in the same visit,
-everything after that visit is remote:
+### 🌊 A whole wave, start to finish
 
-1. **Assign** the machines (by serial) to DEP/ADE and to the **intake** group — the group that
-   carries DEP account-setup, `relops-ssh` and the OS-install job, but *not* the bootstrap PKG.
-   Make sure DHCP reservations exist first: nothing in puppet sets the macOS hostname, so a
-   worker registers under whatever name DHCP hands it.
-2. **At the rack:** power on → DEP enrolls (Setup Assistant skipped) → `csrutil disable`.
-3. **MDM:** in-place update to the target OS. Stagger it — the installer download is what
-   saturates the link.
-4. `reprovision batch hosts.txt --action preflight` — read-only; tells you which hosts actually
-   came out at the target OS with SIP off, *before* you commit to anything.
-5. **Move the passing hosts into the bootstrap group** — membership installs the signed PKG, so
-   the move *is* the trigger. Keeping the PKG out of the intake group is what stops an OS
-   install from landing on top of a converging puppet run.
-6. `reprovision batch hosts.txt --action provision -j 3 --quarantine-on-register`.
+This is the sequence that put 37 hosts into production on 2026-08-14. Nothing here needs a
+second trip to the rack, and **SIP stays enabled** — no Recovery visit required.
 
-> **If the tech can't disable SIP at the rack**, it's because Recovery authenticates against a
-> **volume owner** and a DEP host with Setup Assistant skipped has none until an interactive
-> login. Fix without a second trip: `reprovision batch hosts.txt --action mint` (remote, creates
-> the volume owner), then Recovery. `mint` is idempotent, so `provision` re-running it later is
-> a no-op — which is why it's safe to run early.
+```bash
+HOSTS=~/Desktop/wave.txt
+
+reprovision batch $HOSTS --action mint      -j3          # ① SecureToken (idempotent)
+reprovision batch $HOSTS --action os-update  -j3          # ② in-place upgrade, ~35 min
+reprovision batch $HOSTS --action preflight --allow-sip-enabled -j3   # ③ read-only gate
+reprovision batch $HOSTS --action add-to-group --quarantine-on-register -j2   # ④ the GO
+reprovision batch $HOSTS --action validate  -j3          # ⑤ fitness — do not skip
+reprovision unquarantine macmini-m4-XXX                  # ⑥ release what passed
+```
+
+**Prerequisite that isn't ours:** DHCP reservations for every MAC before racking. Nothing in
+puppet sets the macOS hostname — no `scutil --set` anywhere — so **DHCP decides `worker_id`**.
+
+**④ is the single "go" action.** Group membership delivers the bootstrap PKG, `/etc/puppet_role`,
+the CLT, the admin key and passwordless sudo *all at once*, then the host provisions itself
+unattended. It is not one gate among several — before it, inspecting a host tells you almost
+nothing.
+
+**⑤ is not optional.** `validate` is the only step that catches a host which is green on every
+other signal and still fails 100% of its tasks. On 2026-08-14 it found **31 of 33** hosts unfit
+on a display fault that puppet, the sentinel, the worker and the disk all reported as healthy.
+
+> 🎚️ **Mind `-j` per action — it means something different each time.** `os-update` is
+> launch-and-return, so the **hosts-file length** is the real concurrency, not `-j`.
+> `add-to-group` is SimpleMDM-bound and wants **`-j2`**. Full table and the `-j12` incident:
+> [Runbook → Concurrency](../docs/RUNBOOK.md#concurrency).
+
+> 🔑 **SecureToken arrival is inconsistent**, so always run ① rather than assuming: hosts
+> 240–244 needed a manual interactive login, 245–254 arrived with tokens already granted, and of
+> 255–288 only two needed minting. `mint` is idempotent, so it's free when unnecessary.
+>
+> If a tech *does* need Recovery (e.g. to disable SIP), note Recovery authenticates against a
+> **volume owner**, and a DEP host with Setup Assistant skipped has none until an interactive
+> login. `mint` creates one remotely — run it first and skip the second trip.
 
 A fresh host was never quarantined, so by default it **starts claiming work as soon as
 generic-worker registers.** To hold it out of the pool:
@@ -218,13 +256,16 @@ Fails closed: without TC credentials it refuses **up front**, rather than spendi
 bootstrap window to discover it can't quarantine anything. Validate, then
 `reprovision unquarantine <host>`.
 
-### Batches
+### 📦 Batches
 
 ```bash
-reprovision batch hosts.txt --action preflight            # read-only readiness sweep
-reprovision batch hosts.txt --action mint                 # before the Recovery trip
+reprovision batch hosts.txt --action preflight             # read-only readiness sweep
+reprovision batch hosts.txt --action mint                  # SecureToken, idempotent
+reprovision batch hosts.txt --action os-update             # in-place OS upgrade (launch-and-return)
+reprovision batch hosts.txt --action add-to-group -j2      # the GO — SimpleMDM-bound, keep it low
+reprovision batch hosts.txt --action validate              # fitness check before release
 reprovision batch hosts.txt --action provision -j 3 \
-    --quarantine-on-register                              # the real run
+    --quarantine-on-register                               # fresh-host all-in-one
 ```
 
 `hosts.txt` is one short hostname per line, `#` comments allowed. Each host runs as its own
@@ -245,6 +286,30 @@ picks them up — every action is idempotent:
 Concurrency defaults to **3**, matching the runner's `RUNNER_MAX_CONCURRENT`: the ceiling is
 MDC1 network and imaging throughput, not local CPU. Pushing past it is what took ~12 of 25
 hosts offline simultaneously on the 2026-05-12 batch.
+
+> 🎚️ **But `-j` is not one knob.** Each action is bound by a different resource, so the safe
+> value differs — and two of them will mislead you:
+>
+> - **`os-update` ignores `-j` entirely.** It's launch-and-return (~10s/host), so `-j` paces only
+>   the launches while the ~14GB download runs detached. **The hosts-file length is the real
+>   concurrency.** 33 hosts means 33 simultaneous pulls no matter what you pass.
+> - **`add-to-group` wants `-j2`.** It makes 3 SimpleMDM calls per host, and the API's rate
+>   limiter is unforgiving. At `-j12` the 429 retry budget was exhausted in ~64s.
+>
+> The full table, plus why `add-to-group --quarantine-on-register` couples two different
+> bottlenecks to one `-j` and how to split them:
+> [Runbook → Concurrency](../docs/RUNBOOK.md#concurrency).
+
+> 🔬 **`ok` means the command succeeded, not that the work happened.** For `os-update`, `ok`
+> means *the upgrade launched* — verify with `pgrep -x curl` plus growth of
+> `/private/tmp/InstallAssistant-*.zip`. For `add-to-group`, an add can succeed while the
+> follow-up `push_apps` fails, so the ✗ list **understates** what changed — query group
+> membership to get the truth. `validate` is the one action whose `ok` is self-verifying.
+
+**Credentials are resolved once in the parent** and handed to children via `REPROVISION_*`.
+Before that, each child hit 1Password independently and a 10-host batch lost **9 of 10** to
+`op` timeouts. Standalone (non-`batch`) commands still resolve their own, so pre-resolve into
+env when looping over many hosts by hand.
 
 ---
 
@@ -293,9 +358,11 @@ direct `REPROVISION_*` value always wins over its `_REF`.
 | `reprovision run <host>` | Full pipeline, **including an EACS wipe**. `--unquarantine` returns it to service at the end. |
 | `reprovision provision <host>` | Fresh DEP host → prod. **No wipe in this path.** `--no-wait` stops after the BST escrow. |
 | `reprovision preflight <host>` | Read-only readiness check (OS version, SIP, SecureToken, BST). Needs no SimpleMDM/TC credential. |
+| 🚀 `reprovision add-to-group <host>` | **ADD** the host to the SimpleMDM bootstrap group — the action that triggers the whole bootstrap. Additive only, never a move. Idempotent. Refuses production groups. `--quarantine-on-register` starts the registration watch here, where it belongs. |
+| ✅ `reprovision validate <host>` | Read-only **fitness** check on a bootstrapped host — display mode (60Hz), last puppet run, worker. **Run this before every unquarantine.** Exit 2 = not bootstrapped yet, exit 1 = bootstrapped but UNFIT. |
 | `reprovision quarantine-on-register <host>` | Watch for a fresh worker to register, then quarantine it on sight. |
 | `reprovision wait-bootstrap-pkg <host>` | Confirm the signed PKG landed — i.e. the host is in the bootstrap group. |
-| `reprovision batch <file>` | Run `--action preflight\|mint\|provision` across a host list, `-j` at a time, one log per host. |
+| `reprovision batch <file>` | Run `--action preflight\|mint\|os-update\|add-to-group\|validate\|provision` across a host list, `-j` at a time, one log per host. |
 | `reprovision quarantine <host>` | Quarantine in Taskcluster. |
 | `reprovision drain <host>` | Wait for the current task to finish. |
 | `reprovision wipe <host>` | EACS via SimpleMDM (`DoNotObliterate`, BST-guarded). |
@@ -320,7 +387,9 @@ skipped separately from failed, which is what makes "38 ok, 15 not ready, 2 brok
 | `-j` / `REPROVISION_BATCH_MAX_CONCURRENT` | `3` |
 | `REPROVISION_PREFLIGHT_SSHD_WAIT_SECONDS` | `60` |
 | `REPROVISION_QUARANTINE_ON_REGISTER_POLL_SECONDS` | `5` (this interval *is* the exposure window) |
-| `REPROVISION_QUARANTINE_ON_REGISTER_MAX_WAIT_SECONDS` | `900` |
+| `REPROVISION_QUARANTINE_ON_REGISTER_MAX_WAIT_SECONDS` | `900` — ⚠️ sized for a watch started *after* bootstrap. Driving the watch by hand from group-add needs **5400**, or it expires before there is anything to quarantine |
+| `REPROVISION_VALIDATE_EXPECTED_REFRESH_HZ` | `60.0` — matches what mozharness itself enforces, so `validate` agrees with CI rather than inventing a second standard |
+| `REPROVISION_BOOTSTRAP_GROUP_ID` | `2417981` (`gecko-t-osx-1500-m4-bootstrap`). Production groups are separately blocked in `clients.simplemdm.PROTECTED_GROUP_IDS`, which this **cannot** override |
 | `REPROVISION_BOOTSTRAP_PKG_MAX_WAIT_SECONDS` | `300` — how long to wait for the PKG before calling it a group problem |
 
 ### Wrong-group detection
