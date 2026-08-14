@@ -128,8 +128,9 @@ def _child_cmd(
         # needs a volume owner and mint is what creates one. Gating it would deadlock the order.
         return [exe, "mint", host]
     elif action == "add-to-group":
-        # No gate flags: this is a SimpleMDM API call about a device record, not an SSH check
-        # against the running OS. It works on a host that isn't even reachable yet.
+        # No gate flags: nothing here inspects the OS version or SIP state. It does need SSH,
+        # though — the host's serial is the only join key to its SimpleMDM device record, since a
+        # DEP arrival enrolls as "Mac mini" and never learns its DHCP-assigned hostname.
         return [exe, "add-to-group", host]
     else:
         cmd = [exe, "provision", host]

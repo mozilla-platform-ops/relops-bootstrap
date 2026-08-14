@@ -215,6 +215,25 @@ def secure_token_status(hostname: str) -> str:
     return cp.stdout.decode(errors="replace").strip()
 
 
+def platform_serial(hostname: str) -> str:
+    """Hardware serial number, or '' if unreachable.
+
+    This is the only reliable join key between a hostname and a SimpleMDM device record. A fresh
+    DEP arrival is named `Mac mini` in SimpleMDM (with a `device_name` like `Mac mini (39)`) — the
+    hostname appears nowhere in the record, because the hostname comes from DHCP and nothing in
+    ronin_puppet ever runs `scutil --set`. So the host has to tell us who it is.
+
+    `ioreg` rather than `system_profiler`: it's near-instant, needs no sudo, and doesn't spin up
+    the whole SPHardwareDataType collector.
+    """
+    cp = run(
+        hostname,
+        "/usr/sbin/ioreg -l | /usr/bin/awk -F'\"' '/IOPlatformSerialNumber/{print $4}'",
+        check=False,
+    )
+    return cp.stdout.decode(errors="replace").strip()
+
+
 def run(hostname: str, command: str, *, stdin: bytes | None = None, check: bool = True) -> subprocess.CompletedProcess:
     """Run `command` over SSH on hostname. Returns CompletedProcess.
 
