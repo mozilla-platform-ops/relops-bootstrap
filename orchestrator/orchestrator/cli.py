@@ -213,14 +213,31 @@ def add_to_group(
     group_id: int = typer.Option(
         0, "--group-id", help="Assignment group to ADD to (default: settings.bootstrap_group_id)."
     ),
+    quarantine_on_register: bool = typer.Option(
+        False,
+        "--quarantine-on-register",
+        help="Watch for the host to register in Taskcluster and quarantine it on sight. "
+        "Use this for fresh hosts — the bootstrap is autonomous, so without it the worker goes "
+        "live and starts claiming production work unvalidated.",
+    ),
 ) -> None:
     """ADD the host to the SimpleMDM bootstrap group — the action that triggers provisioning.
 
     Additive only: never moves or unassigns, because moving a host out of a group strips that
     group's profiles (m4-214 lost Skip Setup Assistant and FDA that way). Idempotent — a host
     already in the group is left alone. Production groups are refused outright.
+
+    With --quarantine-on-register the command blocks after the add, watching for the worker and
+    quarantining it the moment it appears. That watch has to start HERE rather than in a later
+    `provision` call: adding the host to the group triggers a fully autonomous bootstrap, and on
+    wave 1 all four hosts finished, registered and began claiming autoland tasks before anyone
+    ran provision. macmini-m4-242 failed 15 production tasks that way.
     """
-    workflow.step_add_to_group(workflow.resolve_offline(hostname), group_id=group_id or None)
+    workflow.step_add_to_group(
+        workflow.resolve_offline(hostname),
+        group_id=group_id or None,
+        quarantine_on_register=quarantine_on_register,
+    )
 
 
 @_app.command()
