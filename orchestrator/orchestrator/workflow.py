@@ -255,6 +255,54 @@ def step_preflight(
         ui.warn(f"sentinel {SENTINEL} already present — this host has bootstrapped before")
 
 
+def step_add_to_group(ctx: HostContext, *, group_id: int | None = None) -> None:
+    """ADD the host to the bootstrap assignment group — the action that starts everything.
+
+    This was the last manual touch in the path: mint → os-update → preflight → *click in the
+    SimpleMDM UI* → provision. Adding a host to the bootstrap group delivers the bootstrap pkg,
+    /etc/puppet_role, the CLT, the admin key and passwordless sudo all at once, so it is a single
+    "go" action rather than one of several gates. That also means a mis-click is expensive, which
+    is why it's worth automating across a 49-host wave rather than repeating it by hand.
+
+    Idempotent: a host already in the group is reported and left alone, so re-running a batch after
+    a partial failure costs nothing. Additive only — see add_device_to_assignment_group.
+    """
+    s = get_settings()
+    gid = group_id or s.bootstrap_group_id
+    ui.step("ADD TO GROUP", f"SimpleMDM assignment group {gid} — this is what triggers the bootstrap")
+
+    group = simplemdm.get_assignment_group(gid)
+    name = group.get("attributes", {}).get("name", "?")
+    napps = len(group.get("relationships", {}).get("apps", {}).get("data", []))
+    ui.info(f"group {gid} = {name} ({napps} apps)")
+
+    # Verify the group can actually bootstrap anything before we hand it a host. A group with no
+    # apps attached delivers no pkg, and the host would then sit until step_wait_for_bootstrap_pkg
+    # times out an hour later pointing at the wrong culprit.
+    if napps == 0:
+        raise ReprovisionError(
+            f"assignment group {gid} ({name}) has no apps attached — adding a host to it would "
+            "deliver no bootstrap pkg. Check the group in SimpleMDM before running this."
+        )
+
+    device = simplemdm.find_device_by_name(ctx.hostname)
+    if device is None:
+        raise NotReadyError(
+            f"{ctx.hostname}: no SimpleMDM device with that name — has it finished DEP enrolling?"
+        )
+    device_id = int(device["id"])
+
+    if device_id in simplemdm.assignment_group_device_ids(gid):
+        ui.ok(f"already in {name} — nothing to do")
+        return
+
+    ui.wire(f"POST /assignment_groups/{gid}/devices/{device_id}   (additive; never a move)")
+    simplemdm.add_device_to_assignment_group(gid, device_id)
+    ui.wire(f"POST /assignment_groups/{gid}/push_apps")
+    simplemdm.push_apps(gid)
+    ui.ok(f"added to {name} and pushed — the bootstrap pkg should land shortly")
+
+
 def step_wait_for_bootstrap_pkg(ctx: HostContext) -> None:
     """Confirm the bootstrap pkg actually landed, before committing to the long sentinel wait.
 
