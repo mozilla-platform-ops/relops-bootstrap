@@ -120,7 +120,7 @@ def preflight(
 def batch(
     hosts_file: str = typer.Argument(..., help="File with one short hostname per line ('#' comments ok)."),
     action: str = typer.Option(
-        "provision", "--action", help="What to run per host: preflight | mint | provision."
+        "provision", "--action", help="What to run per host: preflight | mint | os-update | provision."
     ),
     concurrency: int = typer.Option(
         0, "--concurrency", "-j", help="How many hosts in flight (default 3 — MDC1 throughput, not CPU)."

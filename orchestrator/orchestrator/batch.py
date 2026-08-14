@@ -237,9 +237,19 @@ def run_batch(
         else:
             per_host_timeout = 1800
 
-    sip_note = "SIP-on allowed" if allow_sip_enabled else "SIP must be disabled"
+    # Describe the gates this action ACTUALLY enforces, per _child_cmd. Printing a blanket
+    # "gate: macOS 15.3 · SIP must be disabled" on every action was actively misleading: on a
+    # `--action mint` run over SIP-on hosts it read as though SIP state had been validated and
+    # passed, when mint is handed neither flag and checks neither thing.
+    if action == "mint":
+        gate_note = "no OS/SIP gate — mint runs before both"
+    elif action == "os-update":
+        gate_note = f"target macOS {expected_os} · SIP not checked"
+    else:
+        sip_note = "SIP-on allowed" if allow_sip_enabled else "SIP must be disabled"
+        gate_note = f"gate: macOS {expected_os} · {sip_note}"
     ui.step("BATCH", f"{action} × {len(hosts)} host(s), {concurrency} at a time")
-    ui.info(f"gate: macOS {expected_os} · {sip_note} · per-host timeout {_mmss(per_host_timeout)}")
+    ui.info(f"{gate_note} · per-host timeout {_mmss(per_host_timeout)}")
     if action == "provision" and not wait:
         ui.info("--no-wait: mint + escrow only; sweep sentinels afterwards")
     if action == "os-update":
