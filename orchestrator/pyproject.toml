@@ -54,5 +54,6 @@ include = ["orchestrator*"]
 orchestrator = ["data/*.sh"]
 
 [tool.pytest.ini_options]
+markers = ["real_prewarm: exercise _prewarm_secret_env itself (opts out of the autouse stub)"]
 asyncio_mode = "auto"
 testpaths = ["tests"]

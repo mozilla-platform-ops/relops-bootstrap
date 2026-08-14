@@ -165,14 +165,65 @@ def _last_meaningful_line(text: str) -> str:
     return lines[-1] if lines else ""
 
 
-def _run_one(host: str, cmd: list[str], log_dir: Path, timeout: int) -> HostResult:
+def _prewarm_secret_env() -> dict[str, str]:
+    """Resolve every secret ONCE in the parent and hand the values to children via env.
+
+    Each host runs as its own `reprovision` subprocess, and each of those independently resolved
+    every secret it needed from 1Password. A 10-host batch therefore fired 10+ `op read` calls
+    within a few seconds, and 1Password's desktop integration drops under that: batch-3 mint lost
+    **9 of 10 hosts** to "couldn't read op://... " / "timed out reading op://..." on 2026-08-14,
+    with nothing wrong with any host. Earlier batches lost preflight and add-to-group runs the same
+    way. It was the single biggest source of failed hosts across the wave.
+
+    `_resolve()` prefers a direct env value over the ref, so populating REPROVISION_* here means the
+    children never call `op` at all. Best-effort per secret: a batch action that doesn't need the
+    Taskcluster credential shouldn't fail because that credential wouldn't resolve, and any secret
+    we skip just falls back to the child resolving it itself.
+
+    Trade-off, deliberately taken: this puts secret material in the child's environment, readable by
+    other processes of the same user. The alternative is the status quo, where the same material is
+    read N times over a channel that demonstrably fails mid-wave. Single-operator laptop use, and
+    the children already hold these values in memory.
+    """
+    from . import secrets as _secrets
+
+    wanted = {
+        "REPROVISION_SSH_ADMIN_KEY": _secrets.ssh_admin_key,
+        "REPROVISION_SSH_ADMIN_PASSWORD": _secrets.ssh_admin_password,
+        "REPROVISION_SIMPLEMDM_API_KEY": _secrets.simplemdm_api_key,
+    }
+    out: dict[str, str] = {}
+    for var, getter in wanted.items():
+        try:
+            val = getter()
+        except Exception as e:  # noqa: BLE001 - any resolution failure is non-fatal here
+            ui.warn(f"{var}: not pre-warmed ({type(e).__name__}) — children will resolve it themselves")
+            continue
+        if val:
+            out[var] = val
+    try:
+        cid, token = _secrets.tc_credentials()
+        if cid and token:
+            out["REPROVISION_TC_CLIENT_ID"] = cid
+            out["REPROVISION_TC_ACCESS_TOKEN"] = token
+    except Exception:  # noqa: BLE001 - optional; only quarantine/drain need it
+        pass
+    return out
+
+
+def _run_one(
+    host: str, cmd: list[str], log_dir: Path, timeout: int, env: dict[str, str] | None = None
+) -> HostResult:
     log_path = log_dir / f"{host}.log"
     started = time.monotonic()
     with log_path.open("wb") as log:
         log.write(f"$ {' '.join(cmd)}\n\n".encode())
         log.flush()
         try:
-            cp = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, timeout=timeout, check=False)
+            child_env = {**os.environ, **(env or {})}
+            cp = subprocess.run(
+                cmd, stdout=log, stderr=subprocess.STDOUT, timeout=timeout, check=False, env=child_env
+            )
             code = cp.returncode
         except subprocess.TimeoutExpired:
             log.write(f"\n\nBATCH: killed after {timeout}s\n".encode())
@@ -306,13 +357,19 @@ def run_batch(
     log_dir = _log_dir()
     ui.info(f"logs: {log_dir}")
 
+    # Resolve secrets once, here, before any child starts. See _prewarm_secret_env: N children
+    # each hitting 1Password is what lost 9 of 10 hosts on batch-3 mint.
+    secret_env = _prewarm_secret_env()
+    if secret_env:
+        ui.info(f"pre-warmed {len(secret_env)} credential(s) — children won't call 1Password")
+
     results: dict[str, HostResult] = {}
     started = time.monotonic()
     done = 0
     total = len(hosts)
 
     def _work(host: str) -> HostResult:
-        return _run_one(host, _cmd_for(host), log_dir, per_host_timeout)
+        return _run_one(host, _cmd_for(host), log_dir, per_host_timeout, secret_env)
 
     # Progress is one line per completion rather than a live table: a batch runs for hours,
     # often over ssh or in a scrollback someone reads later, and an overwritten live region

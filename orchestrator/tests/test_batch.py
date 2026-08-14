@@ -12,6 +12,21 @@ from orchestrator import batch
 from orchestrator.errors import ReprovisionError
 
 
+@pytest.fixture(autouse=True)
+def _no_prewarm(request):
+    """run_batch resolves secrets once up front; unit tests must not call 1Password to do it.
+
+    Tests of _prewarm_secret_env itself opt out with @pytest.mark.real_prewarm — otherwise this
+    fixture shadows the function under test and they assert against the mock (which is exactly
+    how two of them first passed vacuously).
+    """
+    if request.node.get_closest_marker("real_prewarm"):
+        yield
+        return
+    with patch("orchestrator.batch._prewarm_secret_env", return_value={}):
+        yield
+
+
 # --- host file parsing ---
 
 
@@ -107,7 +122,7 @@ def _fake_subprocess(codes: dict[str, int], output: dict[str, str] | None = None
     """Stand in for subprocess.run: exit code (and log text) keyed by hostname in argv."""
     output = output or {}
 
-    def _run(cmd, stdout=None, stderr=None, timeout=None, check=False):
+    def _run(cmd, stdout=None, stderr=None, timeout=None, check=False, env=None):
         host = next(c for c in cmd if c.startswith("macmini-"))
         if stdout is not None and host in output:
             stdout.write(output[host].encode())
@@ -173,7 +188,7 @@ def test_batch_honours_the_concurrency_bound(tmp_path):
     in_flight = 0
     peak = 0
 
-    def _run(cmd, stdout=None, stderr=None, timeout=None, check=False):
+    def _run(cmd, stdout=None, stderr=None, timeout=None, check=False, env=None):
         nonlocal in_flight, peak
         with lock:
             in_flight += 1
@@ -196,7 +211,7 @@ def test_batch_honours_the_concurrency_bound(tmp_path):
 def test_batch_survives_one_host_timing_out(tmp_path):
     hosts = ["macmini-m4-201", "macmini-m4-202"]
 
-    def _run(cmd, stdout=None, stderr=None, timeout=None, check=False):
+    def _run(cmd, stdout=None, stderr=None, timeout=None, check=False, env=None):
         host = next(c for c in cmd if c.startswith("macmini-"))
         if host == "macmini-m4-201":
             raise subprocess.TimeoutExpired(cmd, timeout or 1)
@@ -219,7 +234,7 @@ def test_batch_extends_the_timeout_for_the_registration_watch(tmp_path):
     # The child now has more to do; a timeout sized for bootstrap alone would kill it mid-watch.
     seen: dict[str, int] = {}
 
-    def _run(cmd, stdout=None, stderr=None, timeout=None, check=False):
+    def _run(cmd, stdout=None, stderr=None, timeout=None, check=False, env=None):
         seen["timeout"] = timeout
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=None, stderr=None)
 
@@ -300,3 +315,51 @@ def test_action_help_lists_every_supported_action():
     help_text = inspect.signature(cli.batch).parameters["action"].default.help
     for a in batch.ACTIONS:
         assert a in help_text, f"--action help omits {a!r}"
+
+
+# --- secrets are resolved once in the parent, not N times in the children ---
+
+
+def test_prewarm_puts_resolved_secrets_in_the_child_env(tmp_path):
+    """N children each calling `op` is what lost 9 of 10 hosts on batch-3 mint.
+
+    _resolve() prefers a direct env value over the op:// ref, so populating REPROVISION_* in the
+    child env means the children never invoke `op` at all.
+    """
+    seen = {}
+
+    def _run(cmd, stdout=None, stderr=None, timeout=None, check=False, env=None):
+        seen.update(env or {})
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=None, stderr=None)
+
+    with patch("orchestrator.batch.subprocess.run", side_effect=_run), \
+         patch("orchestrator.batch._log_dir", return_value=tmp_path), \
+         patch("orchestrator.batch.ui.batch_summary"), \
+         patch("orchestrator.batch._prewarm_secret_env", return_value={"REPROVISION_SSH_ADMIN_KEY": "k"}):
+        batch.run_batch(["macmini-m4-245"], action="preflight")
+    assert seen.get("REPROVISION_SSH_ADMIN_KEY") == "k"
+    assert "PATH" in seen, "child env must inherit os.environ, not replace it"
+
+
+@pytest.mark.real_prewarm
+def test_prewarm_is_best_effort_and_never_aborts_the_batch():
+    """A batch action that doesn't need a given credential must not fail because it wouldn't
+    resolve — and a secret we skip just falls back to the child resolving it itself.
+    """
+    boom = Exception("1Password desktop app not running")
+    with patch("orchestrator.secrets.ssh_admin_key", side_effect=boom), \
+         patch("orchestrator.secrets.ssh_admin_password", side_effect=boom), \
+         patch("orchestrator.secrets.simplemdm_api_key", side_effect=boom), \
+         patch("orchestrator.secrets.tc_credentials", side_effect=boom), \
+         patch("orchestrator.batch.ui.warn"):
+        assert batch._prewarm_secret_env() == {}
+
+
+@pytest.mark.real_prewarm
+def test_prewarm_skips_empty_values():
+    with patch("orchestrator.secrets.ssh_admin_key", return_value=""), \
+         patch("orchestrator.secrets.ssh_admin_password", return_value="pw"), \
+         patch("orchestrator.secrets.simplemdm_api_key", return_value=""), \
+         patch("orchestrator.secrets.tc_credentials", return_value=("", "")):
+        env = batch._prewarm_secret_env()
+    assert env == {"REPROVISION_SSH_ADMIN_PASSWORD": "pw"}
