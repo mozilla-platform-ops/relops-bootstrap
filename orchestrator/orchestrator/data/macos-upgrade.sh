@@ -2,7 +2,16 @@
 #
 # simplemdm-macos-upgrade.sh — in-place macOS upgrade for DEP-enrolled M4 minis.
 #
-# SOURCE OF TRUTH for **SimpleMDM script 8903**. Edit here, then paste into
+# SOURCE OF TRUTH for the SimpleMDM upgrade script job.
+#
+# !! CONFIRM THE SCRIPT ID BEFORE PASTING !!  Script **8903** is the BROKEN
+# original (placeholder left in, cleanup that can never run, password written
+# world-readable). The hardened replacement is **18176**. Paste this body into
+# whichever ID you actually fire and then READ IT BACK in the UI — do not assume.
+# Better still, drive it with `reprovision os-update`, which uses this same file
+# and keeps the credential out of SimpleMDM entirely.
+#
+# Edit here, then paste into
 # SimpleMDM — never the other way round. (Keeping the bootstrap script only in
 # the SimpleMDM UI is what produced the #1260 divergence: the wrong body sat in
 # script 14716 and stranded every EACS at "Waiting for /var/root/vault.yaml".)
