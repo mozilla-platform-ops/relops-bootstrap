@@ -19,12 +19,26 @@ session to type `vault.yaml` into. Every secret read is logged with the
 requesting cert's serial number — *"who pulled what, when"* is a one-liner
 in Cloud Audit Logs.
 
-**Status:** Zero-touch and live for the **m4 pools** (2026-07). One flow, driven by the
+**Status:** Zero-touch and live for the **m4 pools**. One flow, driven by the
 `orchestrator/` CLI (`reprovision`): quarantine → drain → EACS wipe → DEP re-enroll →
 SimpleMDM profiles + signed **bootstrap PKG** → SCEP cert in keychain → auto-mint SecureToken
 + escrow Bootstrap Token → bootstrap PKG fetches `vault.yaml` → puppet → worker re-registered
-in Taskcluster → auto-unquarantine. Proven end-to-end across the m4 staging pool
-(`macmini-m4-111…115`) and verified reprovision-ready on the m4 production pool.
+in Taskcluster → validate → unquarantine.
+
+🏁 **Proven at wave scale (2026-08-14, RELOPS-2515):** 37 hosts taken from DEP arrival to
+production in a day — **SIP enabled throughout**, no Recovery trip, no per-host console work.
+The full operator sequence and every failure mode we hit is in the
+**[🧑‍🚀 Runbook](docs/RUNBOOK.md)**.
+
+```bash
+mint → os-update → preflight → add-to-group → validate → unquarantine
+```
+
+Two of those steps earned their place immediately. **`add-to-group`** automates what used to be
+a hand-click in the SimpleMDM UI — and since group membership delivers the bootstrap PKG,
+`puppet_role`, the CLT, the admin key and passwordless sudo *all at once*, it is the single "go"
+action. **`validate`** is the fitness gate: it caught **31 of 33** hosts unfit on a display fault
+that puppet, the sentinel, the worker and the disk all reported as perfectly healthy.
 
 **Why the SecureToken mint needs an on-network runner.** DEP skips Setup Assistant, so the
 managed admin holds no SecureToken until a PAM (password) login — and Apple only grants the
@@ -172,7 +186,9 @@ silently drops URI SANs with URL-encoded chars (e.g. `Mac%20mini`).
 │   ├── INSTALL-on-worker.md                  ─ install guide + threat-model table
 │   └── fetch-vault-mtls.swift                ─ historical URLSession variant (dead end)
 │
-├── docs/                         📖  rendered walkthrough (index.html + deep-dive.html)
+├── docs/                         📖  RUNBOOK.md ⭐ operator field guide (provision + reprovision,
+│                                    per-action -j table, symptom-first troubleshooting)
+│                                    + rendered walkthrough (index.html + deep-dive.html)
 │                                    + reprovision-architecture.html (one-page flow diagram)
 │                                    + eacs.html (what EACS actually does, button-press → re-enroll)
 ├── .github/workflows/test.yml    ✅  CI: pytest + terraform fmt/validate
@@ -315,6 +331,26 @@ real EACS'd m4 returns the full role-scoped vault.yaml with the broker's
 strict checks all green.
 
 ## 🛠️ Open work
+
+### 🐞 Known bugs, both found at wave scale on 2026-08-14
+
+- 🎚️ **`add-to-group --quarantine-on-register` makes one `-j` serve two bottlenecks.** It couples
+  a SimpleMDM-bound action (3 API calls/host) to a 30-minute Taskcluster-bound wait. Raise `-j`
+  for wall-clock and SimpleMDM 429s; lower it for SimpleMDM and 33 hosts serialize into ~5½ hours.
+  At `-j12` it *looked* like 5 hosts failed — but **12 had already been added to the group** (the
+  add succeeded, the follow-up `push_apps` 429'd), so killing the batch orphaned 12 live
+  bootstraps with no watcher, which would have put them into production unvalidated. **Fix:**
+  rate-limit the SimpleMDM calls independently of `-j`, or split the watch into its own batch
+  action. Workaround in the [Runbook](docs/RUNBOOK.md#j-trap).
+- 🪟 **The Safari automation AppleScript assumes a window exists.** It does `window 1 of process
+  "Safari"` without launching Safari or waiting for a window, so once a session is disturbed every
+  retry fails forever with `Invalid index` — and `open -a Safari` doesn't help, because Safari
+  restores a windowless session. A reboot is the reliable repair. Needs a ronin_puppet fix to
+  launch-and-wait. Also unsuppressed: **`Setup Assistant -MiniBuddy`**, the *per-user* first-login
+  assistant, which `Skip Setup Assistant - All Screens` does **not** cover and which steals focus
+  from the UI scripting on any host where `cltbld` is freshly created.
+
+### 📋 Everything else
 
 - 🪪 **Per-role expansion** — verified live state (2026-07):
   - **Live** (SCEP provisioner + populated `vault-*` secret): `gecko_t_osx_1500_m4`
