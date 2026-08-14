@@ -244,3 +244,59 @@ def test_batch_dry_run_executes_nothing(tmp_path):
     assert failed == 0
     run.assert_not_called()
     log_dir.assert_not_called()  # no log directory created for a dry run
+
+
+# --- the banner must describe the gates the action actually enforces ---
+
+
+def _banner(action: str, *, allow_sip_enabled: bool = False, tmp_path=None) -> str:
+    """Capture the single ui.info() gate line run_batch prints before doing any work."""
+    lines: list[str] = []
+    with patch("orchestrator.batch.subprocess.run",
+               return_value=subprocess.CompletedProcess(args=[], returncode=0)), \
+         patch("orchestrator.batch._log_dir", return_value=tmp_path), \
+         patch("orchestrator.batch.ui.batch_summary"), \
+         patch("orchestrator.batch.ui.step"), \
+         patch("orchestrator.batch.ui.info", side_effect=lambda m: lines.append(m)):
+        batch.run_batch(["macmini-m4-201"], action=action, allow_sip_enabled=allow_sip_enabled)
+    return "\n".join(lines)
+
+
+@pytest.mark.parametrize("action", ["mint", "os-update"])
+def test_banner_does_not_claim_a_sip_gate_for_ungated_actions(action, tmp_path):
+    """mint and os-update are handed no --allow-sip-enabled, so they check no SIP state.
+
+    Printing "SIP must be disabled" on those runs read as though SIP had been validated and
+    passed — badly wrong when driving a deliberately SIP-ON wave (RELOPS-2515, 2026-08-14).
+    """
+    out = _banner(action, tmp_path=tmp_path)
+    assert "SIP must be disabled" not in out
+    assert "SIP-on allowed" not in out
+
+
+@pytest.mark.parametrize("allow,expected", [(False, "SIP must be disabled"), (True, "SIP-on allowed")])
+def test_banner_still_reports_the_sip_gate_where_it_is_real(allow, expected, tmp_path):
+    for action in ("preflight", "provision"):
+        assert expected in _banner(action, allow_sip_enabled=allow, tmp_path=tmp_path)
+
+
+def test_banner_calls_os_update_version_a_target_not_a_gate(tmp_path):
+    # os-update IS the step that reaches the target version, so gating on it would be
+    # self-defeating; _child_cmd passes --expected-os as the destination, not a precondition.
+    out = _banner("os-update", tmp_path=tmp_path)
+    assert "target macOS" in out and "gate:" not in out
+
+
+def test_action_help_lists_every_supported_action():
+    """batch.ACTIONS is the source of truth; the --action help text drifted off it.
+
+    It advertised only preflight|mint|provision, so `--action os-update` looked unsupported
+    even though it works — which is how a wave nearly got driven the long way round.
+    """
+    import inspect
+
+    from orchestrator import cli
+
+    help_text = inspect.signature(cli.batch).parameters["action"].default.help
+    for a in batch.ACTIONS:
+        assert a in help_text, f"--action help omits {a!r}"
