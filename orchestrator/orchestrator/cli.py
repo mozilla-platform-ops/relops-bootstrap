@@ -187,19 +187,22 @@ def wait_reenroll(hostname: str) -> None:
 @_app.command()
 def mint(hostname: str) -> None:
     """Mint the admin SecureToken via an interactive password login (idempotent)."""
-    workflow.step_mint(workflow.resolve(hostname))
+    # resolve_offline: this step is SSH-only (fqdn + hostname). Going through resolve() cost a
+    # SimpleMDM device lookup per host, which at -j3 rate-limited the API and failed a host in
+    # the wave-1 batch (429 on macmini-m4-244, 2026-08-14) for a value the step never reads.
+    workflow.step_mint(workflow.resolve_offline(hostname))
 
 
 @_app.command()
 def escrow_bst(hostname: str) -> None:
     """SSH in and run `sudo profiles install -type bootstraptoken -user admin -password …` (needs mint first)."""
-    workflow.step_escrow_bst(workflow.resolve(hostname))
+    workflow.step_escrow_bst(workflow.resolve_offline(hostname))  # SSH-only; see mint()
 
 
 
 @_app.command()
 def wait_sentinel(hostname: str) -> None:
-    workflow.step_wait_for_sentinel(workflow.resolve(hostname))
+    workflow.step_wait_for_sentinel(workflow.resolve_offline(hostname))  # SSH-only; see mint()
 
 
 @_app.command()
