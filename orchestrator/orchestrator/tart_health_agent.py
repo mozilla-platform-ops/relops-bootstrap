@@ -49,6 +49,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import ssl
@@ -105,7 +106,15 @@ for i in 1 2; do
   echo "slot${i}_state=$($T list 2>/dev/null | awk -v v="$vm" '$1=="local" && $2==v {print $NF}')"
   mac=$(/usr/bin/python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("macAddress",""))' "$HOME/.tart/vms/$vm/config.json" 2>/dev/null)
   [ -n "$mac" ] && echo "slot${i}_worker=mac-$(printf '%%s' "$mac" | awk -F: '{print $4$5$6}' | tr 'A-F' 'a-f')"
-  pid=$(pgrep -f "[t]art run --no-graphics $vm" | head -1)
+  # Match the VM name at end-of-line, NOT "--no-graphics $vm". Enabling
+  # tart.inject_vault fleet-wide (2026-08-17) changed the command line to
+  #   tart run --no-graphics --dir=vault:/Users/admin/.tart-vault/<vm>:ro <vm>
+  # so --no-graphics and the VM name stopped being adjacent, the old pattern matched
+  # nothing, and slot*_etime was never emitted -> tart_run_uptime_s None on 25/26
+  # slots. The reboot-loop check needs that value, so it silently could not fire.
+  # Anchoring on the name is also flag-agnostic, so the next wrapper change cannot
+  # break it the same way.
+  pid=$(pgrep -f "[t]art run .* $vm\$" | head -1)
   [ -n "$pid" ] && echo "slot${i}_etime=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')"
   echo "slot${i}_vault=$(sudo test -s "$HOME/.tart-vault/$vm/vault.yaml" && echo 1 || echo 0)"
   ip=$($T ip "$vm" --wait 5 2>/dev/null | head -1)
@@ -192,17 +201,57 @@ uptime | sed -n 's/.*up \([^,]*\),.*/uptime_raw=\1/p'
 echo "guest_epoch=$(date -u +%s)"
 echo "guest_disk_gib=$(df -g / | awk 'NR==2{print $4}')"
 echo "cfg_worker=$(sudo grep -m1 -oE 'mac-[0-9a-f]+' /opt/worker/generic-worker.conf.yaml 2>/dev/null)"
-echo "guest_up_s=$(( $(date -u +%s) - $(sysctl -n kern.boottime | sed -n 's/.*sec = \([0-9]*\).*/\1/p') ))"
+echo "guest_up_s=$(( $(date -u +%s) - $(sysctl -n kern.boottime | sed -n 's/^{ sec = \([0-9]*\).*/\1/p') ))"
 """
+# NOTE the ANCHOR in that sed. kern.boottime prints
+#   { sec = 1786987025, usec = 7795 } Mon Aug 17 17:17:05 2026
+# and an unanchored `.*sec = ` is greedy, so it matched "usec = " and captured the
+# MICROSECONDS (7795). guest_up_s then came out as `now - 7795`, i.e. ~1.79e9 rather
+# than a few hundred seconds. Measured 2026-08-17: guest_up_s=1786979442 on a guest
+# whose `uptime` said 4 mins; anchored it reads 263, which matches.
+#
+# This mattered more than it looks: evaluate()'s reboot-loop test is
+#   guest_uptime_s < tart_run_uptime_s * REBOOT_LOOP_RATIO
+# and with guest_uptime_s at epoch scale that comparison is never true, so the check
+# that exists specifically to catch a crash-looping guest could never fire.
 
 
 def _guest(host: str, ip: str) -> dict[str, str]:
-    """Collect from inside the guest via the host, using expect for the password login."""
+    """Collect from inside the guest via the host, using expect for the password login.
+
+    Two things here are load-bearing and were both wrong until 2026-08-17, which is why
+    every slot reported guest_reachable:false with no guest fields at all (26/26).
+
+    1. The probe is base64'd rather than interpolated into the spawn line. GUEST_PROBE is
+       multi-line and full of $(...), $4 and [0-9a-f]; dropping that into a Tcl
+       double-quoted argument makes Tcl substitute the $ and treat [ ] as command
+       substitution, and expect died with
+         extra characters after close-quote
+           while executing "spawn ssh ... "uptime | sed -n 's/.*up \\([^,]*\\)...
+       before it ever connected. base64 is alphanumeric plus +/= so nothing in it is
+       special to Tcl OR to the remote shell, whatever we put in the probe later.
+
+    2. The password is matched with a plain glob on its own line, followed by an explicit
+       `expect eof`. The previous single-line braced form
+         expect { -re "(P|p)assword:" { send "admin\\r"; exp_continue } timeout { } eof { } }
+       never sent the password: measured against a real guest it printed the prompt and
+       then sat until the 60s timeout. The multi-line glob form returns all five keys.
+
+    Verified on macmini-m4-236 slot 1: uptime_raw=4 mins, guest_epoch, guest_disk_gib=61,
+    cfg_worker=mac-c51932, guest_up_s=263.
+    """
+    b64 = base64.b64encode(GUEST_PROBE.strip().encode()).decode()
     exp = (
-        "log_user 1\nset timeout 60\n"
-        f'spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR admin@{ip} '
-        f'"{GUEST_PROBE.strip()}"\n'
-        'expect { -re "(P|p)assword:" { send "admin\\r"; exp_continue } timeout { } eof { } }\n'
+        "log_user 1\n"
+        "set timeout 60\n"
+        f"spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f'-o LogLevel=ERROR admin@{ip} "echo {b64} | base64 -d | bash"\n'
+        "expect {\n"
+        '  "assword:" { send "admin\\r" }\n'
+        "  timeout { exit 1 }\n"
+        "  eof { exit 1 }\n"
+        "}\n"
+        "expect eof\n"
     )
     payload = "cat > /tmp/_gp.exp <<'XEOF'\n" + exp + "XEOF\n/usr/bin/expect /tmp/_gp.exp; rm -f /tmp/_gp.exp"
     return _kv(_ssh(host, payload, timeout=150)[0])
