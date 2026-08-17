@@ -202,6 +202,12 @@ echo "guest_epoch=$(date -u +%s)"
 echo "guest_disk_gib=$(df -g / | awk 'NR==2{print $4}')"
 echo "cfg_worker=$(sudo grep -m1 -oE 'mac-[0-9a-f]+' /opt/worker/generic-worker.conf.yaml 2>/dev/null)"
 echo "guest_up_s=$(( $(date -u +%s) - $(sysctl -n kern.boottime | sed -n 's/^{ sec = \([0-9]*\).*/\1/p') ))"
+# worker-runner.sh writes this the first time generic-worker exits 69 and deletes it on
+# any other exit, so its presence means "the last worker exit was the disk-panic path"
+# and its age means how long that has been true. Emitted only when present, so an
+# absent file reads as None rather than 0 (0 would mean "just started looping").
+S=/opt/worker/worker_exit_69
+[ -f "$S" ] && echo "exit69_age_s=$(( $(date -u +%s) - $(stat -f %m "$S") ))"
 """
 # NOTE the ANCHOR in that sed. kern.boottime prints
 #   { sec = 1786987025, usec = 7795 } Mon Aug 17 17:17:05 2026
@@ -343,6 +349,8 @@ def collect_host(host: str, tc: dict[str, dict[str, Any]], probe_guests: bool) -
                 s["configured_worker_id"] = g["cfg_worker"]
             if g.get("guest_epoch", "").isdigit():
                 s["clock_skew_s"] = int(g["guest_epoch"]) - int(datetime.now(timezone.utc).timestamp())
+            if g.get("exit69_age_s", "").lstrip("-").isdigit():
+                s["worker_exit_69_age_s"] = int(g["exit69_age_s"])
             if not g:
                 s["guest_reachable"] = False
         elif ip is None:
