@@ -584,6 +584,124 @@ def step_group_parity(
     )
 
 
+def _resolve_app(spec: str) -> dict:
+    """An app by id, or by a unique substring of its name or bundle identifier."""
+    catalog = simplemdm.apps()
+    if spec.isdigit():
+        for a in catalog:
+            if int(a["id"]) == int(spec):
+                return a
+        raise ReprovisionError(f"no app with id {spec} in this SimpleMDM account")
+
+    needle = spec.lower()
+    hits = [
+        a for a in catalog
+        if needle in (a.get("attributes", {}).get("name") or "").lower()
+        or needle in (a.get("attributes", {}).get("bundle_identifier") or "").lower()
+    ]
+    if not hits:
+        raise ReprovisionError(f"no app matching {spec!r} — check the name or pass the numeric id")
+    if len(hits) > 1:
+        listed = "\n  ".join(
+            f"{a['id']}  {a['attributes'].get('name')!r}  {a['attributes'].get('bundle_identifier')}"
+            for a in hits[:8]
+        )
+        raise ReprovisionError(
+            f"{spec!r} matches {len(hits)} apps — narrow it or pass the id:\n  {listed}"
+        )
+    return hits[0]
+
+
+def step_pkg_audit() -> None:
+    """Which uploaded pkgs are attached to no assignment group? Read-only, API-only.
+
+    Uploading a pkg and attaching it to a group are separate operations in SimpleMDM, and an
+    unattached app is completely inert with nothing surfacing that fact. On 2026-08-19
+    `p_role_tart_worker` was uploaded and left unattached while the eight hosts it was built for
+    carried no role file — invisible until someone thought to check the group's app list by hand.
+
+    CAVEAT: this only looks at assignment groups. An app reaching devices solely through a legacy
+    *device* group would be reported here as an orphan. That is the right default for this fleet —
+    verified 2026-08-19 that the m4 and tart devices all have `device_group_id: None`, so
+    assignment groups are the only live delivery path — but check before acting on a surprise.
+    """
+    ui.step("PKG AUDIT", "uploaded pkgs that no assignment group carries (read-only)")
+
+    carried: dict[int, list[str]] = {}
+    for group in simplemdm.assignment_groups():
+        gname = group.get("attributes", {}).get("name", "?")
+        for app in group.get("relationships", {}).get("apps", {}).get("data", []):
+            carried.setdefault(int(app["id"]), []).append(f"{group['id']} ({gname})")
+
+    catalog = simplemdm.apps()
+    ui.info(f"{len(catalog)} app(s) in the account, {len(carried)} attached to at least one group")
+
+    orphans = [a for a in catalog if int(a["id"]) not in carried]
+    if not orphans:
+        ui.ok("every uploaded pkg is attached to at least one group")
+        return
+
+    ui.warn(f"{len(orphans)} app(s) attached to NOTHING — uploaded but inert:")
+    for a in sorted(orphans, key=lambda a: int(a["id"])):
+        at = a.get("attributes", {})
+        ui.warn(f"    {a['id']}  {at.get('name')!r}  bundle={at.get('bundle_identifier')}")
+    ui.info("attach one with:  reprovision pkg-attach <id> --group-id <group>")
+
+
+def step_pkg_attach(app_spec: str, *, group_id: int | None = None, push: bool = False) -> None:
+    """Attach an uploaded pkg to an assignment group, then VERIFY the group really carries it.
+
+    Verifies by re-reading the group rather than trusting the POST, for the same reason
+    step_add_to_group does: with this API a write returning 2xx is not proof the state changed.
+
+    `push` is OFF by default and that is deliberate. `push_apps` re-pushes EVERY app in the group
+    to EVERY member, so pushing the m4 bootstrap group would re-run the bootstrap pkg's postinstall
+    on hosts that are mid-task. Without a push the pkg still lands, just on each device's next
+    check-in — which on these boxes is often boot-only, so it can take a reboot. Choose knowingly:
+    the count of affected devices is printed either way.
+    """
+    s = get_settings()
+    gid = group_id or s.bootstrap_group_id
+    app = _resolve_app(app_spec)
+    aid = int(app["id"])
+    at = app.get("attributes", {})
+
+    group = simplemdm.get_assignment_group(gid)
+    gname = group.get("attributes", {}).get("name", "?")
+    members = len(simplemdm.assignment_group_device_ids(gid))
+
+    ui.step("PKG ATTACH", "make an uploaded pkg actually reach hosts")
+    ui.info(f"app {aid} = {at.get('name')!r}  bundle={at.get('bundle_identifier')}")
+    ui.info(f"group {gid} = {gname} ({members} device(s))")
+
+    if aid in simplemdm.assignment_group_app_ids(gid):
+        ui.ok(f"already attached to {gname} — no change")
+    else:
+        ui.wire(f"POST /assignment_groups/{gid}/apps/{aid}")
+        simplemdm.add_app_to_assignment_group(gid, aid)
+        if push:
+            ui.warn(
+                f"pushing: re-pushes every app in {gname} to all {members} device(s), including "
+                "any postinstall they run"
+            )
+            ui.wire(f"POST /assignment_groups/{gid}/push_apps")
+            simplemdm.push_apps(gid)
+        else:
+            ui.info(
+                f"not pushing — the pkg lands on each of the {members} device(s) at its next "
+                "check-in (often boot-only). Pass --push to force it now."
+            )
+
+    # Re-read: the POST returning 2xx is not evidence the group changed.
+    after = simplemdm.assignment_group_app_ids(gid)
+    if aid not in after:
+        raise ReprovisionError(
+            f"attach reported success but group {gid} ({gname}) still does not list app {aid}. "
+            "Check the group in SimpleMDM before assuming the pkg will be delivered."
+        )
+    ui.ok(f"verified: {gname} carries app {aid} (group now has {len(after)} app(s))")
+
+
 def step_validate(ctx: HostContext, *, expected_refresh_hz: float | None = None) -> None:
     """Read-only fitness check on a bootstrapped host: is it actually able to run tasks?
 

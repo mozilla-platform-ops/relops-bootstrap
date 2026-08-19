@@ -190,6 +190,42 @@ def push_apps(group_id: int) -> None:
     _request("POST", f"/assignment_groups/{group_id}/push_apps")
 
 
+def apps() -> list[dict]:
+    """Every app (pkg) in the account. One paginated sweep."""
+    return _paginated("/apps")
+
+
+def assignment_group_app_ids(group_id: int) -> list[int]:
+    """App IDs attached to the group.
+
+    NB: relationship IDs come back as ints here, as with devices.
+    """
+    rel = get_assignment_group(group_id).get("relationships", {})
+    return [int(a["id"]) for a in rel.get("apps", {}).get("data", [])]
+
+
+def add_app_to_assignment_group(group_id: int, app_id: int) -> None:
+    """Attach an app to an assignment group. This is what makes an upload do anything.
+
+    Uploading a pkg and attaching it are separate operations in SimpleMDM, and an unattached app
+    is completely inert with nothing surfacing that fact — p_role_tart_worker sat uploaded and
+    unattached on 2026-08-19 while the hosts it was built for went on with no role file.
+
+    Production groups are refused, using the same guard as the device writes. Attaching a NEW app
+    to a live production group pushes it to every member: 2017918 had 130+ devices taking work.
+    That is the "never add the bootstrap pkg to a production group" footgun in its other form, and
+    a change with that blast radius should be made in the UI with a human looking at it.
+    """
+    if group_id in PROTECTED_GROUP_IDS:
+        raise ReprovisionError(
+            f"refusing to attach app {app_id} to assignment group {group_id} "
+            f"({PROTECTED_GROUP_IDS[group_id]}). Attaching an app there pushes it to every member, "
+            "mid-task. Attach to the bootstrap/staging group instead, or do it in the UI "
+            "deliberately."
+        )
+    _request("POST", f"/assignment_groups/{group_id}/apps/{app_id}")
+
+
 def wipe(device_id: int, *, obliteration_behavior: str = "DoNotObliterate") -> None:
     """
     Erase the device. Default `DoNotObliterate` = EACS-only: if Erase All Content & Settings
