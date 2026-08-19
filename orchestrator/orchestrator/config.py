@@ -101,6 +101,24 @@ class Settings(BaseSettings):
     # override.
     bootstrap_group_id: int = Field(default=2417981)
 
+    # The group `group-parity` measures against: a live production group whose devices are known
+    # to work. Read-only here — PROTECTED_GROUP_IDS blocks WRITES to 2017918, and reading it is
+    # precisely how we learn what a working host is supposed to have.
+    reference_group_id: int = Field(default=2017918)
+    # How many reference-group devices to sample for the baseline. The baseline is the
+    # INTERSECTION of their profile sets, so a handful is enough and more only costs API calls:
+    # one atypical prod host can't drag a profile into the baseline, and a profile every sampled
+    # host has is one the fleet genuinely standardises on.
+    group_parity_reference_sample: int = Field(default=5)
+
+    # Fan-out cap for SimpleMDM-bound batch work, independent of --concurrency. `add-to-group`
+    # makes three API calls per host with no SSH to pace it, so the API is the binding resource,
+    # not MDC1 throughput. At -j12 on 2026-08-14 the 429 retry budget blew: 5 hosts reported
+    # failure while 12 had ALREADY been added to the group (the add succeeded, the follow-up
+    # push_apps 429'd), so killing the batch orphaned 12 live bootstraps with no watcher and they
+    # would have gone into production unvalidated.
+    simplemdm_max_concurrent: int = Field(default=2)
+
     # `validate` refuses a host whose main display isn't at this refresh rate. 60.0 because that is
     # what mozharness's own pre-test check enforces — matching it means validate agrees with what CI
     # will decide, rather than inventing a second standard. A KVM presenting 75Hz made m4-242 fail

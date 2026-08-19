@@ -16,12 +16,13 @@ because that's the order you meet them in.
 cd ~/git/relops-bootstrap/orchestrator
 HOSTS=~/Desktop/wave.txt          # one short hostname per line, '#' comments ok
 
+uv run reprovision group-parity                             # ← do the hosts get prod's profiles?
 uv run reprovision batch $HOSTS --action mint         -j3   # SecureToken (idempotent, often a no-op)
 uv run reprovision batch $HOSTS --action os-update    -j3   # in-place upgrade to target OS
 #   ⏳ wait ~35 min: ~14GB download, then startosinstall, then a reboot
 uv run reprovision batch $HOSTS --action preflight --allow-sip-enabled -j3
-uv run reprovision batch $HOSTS --action add-to-group --quarantine-on-register -j2
-#   ⏳ blocks ~30 min per host: this is the bootstrap, and the watch that holds each host
+uv run reprovision batch $HOSTS --action add-to-group --quarantine-on-register
+#   ⏳ two phases, automatically: a paced SimpleMDM add, then every watcher at once (~30 min)
 uv run reprovision batch $HOSTS --action validate     -j3   # ← the gate. Do not skip.
 uv run reprovision unquarantine macmini-m4-XXX              # only what validate passed
 ```
@@ -55,24 +56,48 @@ bound by a different resource.
 | `mint` | 3–4 | SSH | fast; often a no-op when the token already exists |
 | `os-update` | **irrelevant** ⚠️ | the mirror | **launch-and-return** — `-j` paces only the *launches*. The **hosts-file length is the real concurrency.** 33 hosts = 33 simultaneous 14GB pulls |
 | `preflight` | 3–4 | SSH | read-only |
-| `add-to-group` | **2** 🚨 | **SimpleMDM API** | 3 API calls per host. At `-j12` the 429 retry budget blew and hosts failed |
+| `add-to-group` | **2** 🚨 | **SimpleMDM API** | 3 API calls per host. At `-j12` the 429 retry budget blew and hosts failed. Clamped to `REPROVISION_SIMPLEMDM_MAX_CONCURRENT` (2) regardless of `-j` |
+| `quarantine-on-register` | all of them | local process count | an idle poll loop; `-j` does not apply |
 | `validate` | 3 | SSH | read-only |
 | `provision` | 3 | MDC1 imaging throughput | matches the runner's `RUNNER_MAX_CONCURRENT` |
 
 <a id="j-trap"></a>
 
-### 🪤 The `-j` trap that bit us hardest
+### 🪤 The `-j` trap that bit us hardest — now fixed
 
-`add-to-group --quarantine-on-register` couples a **SimpleMDM-bound action** to a
-**30-minute Taskcluster-bound wait**, so one `-j` has to serve both. Raise it for wall-clock
-and you hammer SimpleMDM; lower it for SimpleMDM and 33 hosts serialize into ~5½ hours.
+`add-to-group --quarantine-on-register` used to couple a **SimpleMDM-bound action** to a
+**30-minute Taskcluster-bound wait**, so one `-j` had to serve both. Raise it for wall-clock and
+you hammered SimpleMDM; lower it for SimpleMDM and 33 hosts serialized into ~5½ hours.
+
+**It now splits itself into two phases**, so the command below is all you run:
+
+```bash
+uv run reprovision batch $HOSTS --action add-to-group --quarantine-on-register
+```
+
+Phase 1 adds hosts at the SimpleMDM cap (2), clamping `-j` with a warning if you asked for more.
+Phase 2 then watches every host at once, with the bootstrap-spanning budget passed explicitly —
+no `REPROVISION_QUARANTINE_ON_REGISTER_MAX_WAIT_SECONDS` export needed. Both phases log under one
+batch directory, and a `Ctrl-C` writes `added.txt` naming every host that is bootstrapping
+unwatched, plus the command to re-attach:
+
+```bash
+uv run reprovision batch ~/.local/state/reprovision/batch-<stamp>/added.txt \
+  --action quarantine-on-register
+```
+
+A host whose add *failed* is still watched — the add can succeed while the follow-up `push_apps`
+429s, which is exactly what happened on 2026-08-14.
+
+<details>
+<summary>The old manual workaround, for reference</summary>
 
 At `-j12` on 2026-08-14 it looked like 5 hosts failed. What actually happened: **12 hosts had
 already been added to the group** (the add succeeded, the follow-up `push_apps` 429'd), so
 killing the batch orphaned 12 live bootstraps with no watcher. They'd have gone into
 production unvalidated.
 
-**Workaround until this is fixed** — split it along the resource boundary:
+Split it along the resource boundary by hand:
 
 ```bash
 # 1. the SimpleMDM half, gently
@@ -89,6 +114,8 @@ grep '^macmini' $HOSTS | xargs -P 33 -I{} \
 > registration is a minute away. Started at group-add it must span the **whole** bootstrap
 > (~30 min). Too short and the watch expires before there's anything to quarantine — and the
 > host goes live unheld, i.e. exactly the failure the flag exists to prevent.
+
+</details>
 
 ---
 
@@ -259,6 +286,30 @@ looping over many hosts by hand.
 - ⚠️ **Membership does not prove the PKG was pushed.** The already-a-member path skips
   `push_apps`, so a host added by hand in the UI can sit in the group with nothing installed.
   `add-to-group` warns when the payload is missing.
+- 🧬 **Check profile parity before a wave**, not after the first host hangs:
+
+  ```bash
+  uv run reprovision group-parity                          # the whole bootstrap group
+  uv run reprovision group-parity --host macmini-m4-241    # one host
+  ```
+
+  Read-only, API-only, no SSH unless you pass `--host`. It builds a baseline from the profiles
+  *every* sampled production device shares, then names anything a target device lacks — with the
+  m4-214 story attached for the profiles that caused it.
+
+  It also runs a second, **peer-wise membership pass**: a group that two thirds of these devices
+  are in but some are not means those devices were *moved* rather than added. This catches strictly
+  more than the profile diff, because the groups a mis-clicked host loses are mostly app-bearing —
+  on 2026-08-19 three hosts were missing `Relops Public SSH Key`, `Sudoers`, `Enable SSH` and
+  `DEP Enrollment`, i.e. no admin key, no passwordless sudo and no sshd after their next wipe. Two
+  of them were also in the prod group, so they still received the profiles and a profile-only diff
+  said nothing.
+
+  It compares **effective per-device** profile sets, deliberately. Diffing the assignment groups
+  themselves reports Skip Setup Assistant and the FDA SSH Keygen Wrapper as missing from the
+  bootstrap group — true, and irrelevant: its devices get both from the additive DEP Enrollment
+  group. Don't "simplify" it back to a group-level diff; it would cry wolf on the exact pair from
+  the postmortem.
 
 ---
 

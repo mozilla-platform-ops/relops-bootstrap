@@ -202,10 +202,11 @@ second trip to the rack, and **SIP stays enabled** — no Recovery visit require
 ```bash
 HOSTS=~/Desktop/wave.txt
 
+reprovision group-parity                                 # ⓪ profile parity, before anything
 reprovision batch $HOSTS --action mint      -j3          # ① SecureToken (idempotent)
 reprovision batch $HOSTS --action os-update  -j3          # ② in-place upgrade, ~35 min
 reprovision batch $HOSTS --action preflight --allow-sip-enabled -j3   # ③ read-only gate
-reprovision batch $HOSTS --action add-to-group --quarantine-on-register -j2   # ④ the GO
+reprovision batch $HOSTS --action add-to-group --quarantine-on-register   # ④ the GO (2 phases)
 reprovision batch $HOSTS --action validate  -j3          # ⑤ fitness — do not skip
 reprovision unquarantine macmini-m4-XXX                  # ⑥ release what passed
 ```
@@ -293,12 +294,14 @@ hosts offline simultaneously on the 2026-05-12 batch.
 > - **`os-update` ignores `-j` entirely.** It's launch-and-return (~10s/host), so `-j` paces only
 >   the launches while the ~14GB download runs detached. **The hosts-file length is the real
 >   concurrency.** 33 hosts means 33 simultaneous pulls no matter what you pass.
-> - **`add-to-group` wants `-j2`.** It makes 3 SimpleMDM calls per host, and the API's rate
->   limiter is unforgiving. At `-j12` the 429 retry budget was exhausted in ~64s.
+> - **`add-to-group` is capped at 2 for you.** It makes 3 SimpleMDM calls per host and the API's
+>   rate limiter is unforgiving — at `-j12` the 429 retry budget was exhausted in ~64s. A larger
+>   `-j` is clamped, with a warning.
+> - **`add-to-group --quarantine-on-register` runs as two phases**, because a SimpleMDM-bound add
+>   and a 30-minute Taskcluster-bound watch cannot share one `-j`. The add is paced; the watchers
+>   all start at once.
 >
-> The full table, plus why `add-to-group --quarantine-on-register` couples two different
-> bottlenecks to one `-j` and how to split them:
-> [Runbook → Concurrency](../docs/RUNBOOK.md#concurrency).
+> The full table: [Runbook → Concurrency](../docs/RUNBOOK.md#concurrency).
 
 > 🔬 **`ok` means the command succeeded, not that the work happened.** For `os-update`, `ok`
 > means *the upgrade launched* — verify with `pgrep -x curl` plus growth of
@@ -358,6 +361,7 @@ direct `REPROVISION_*` value always wins over its `_REF`.
 | `reprovision run <host>` | Full pipeline, **including an EACS wipe**. `--unquarantine` returns it to service at the end. |
 | `reprovision provision <host>` | Fresh DEP host → prod. **No wipe in this path.** `--no-wait` stops after the BST escrow. |
 | `reprovision preflight <host>` | Read-only readiness check (OS version, SIP, SecureToken, BST). Needs no SimpleMDM/TC credential. |
+| 🧬 `reprovision group-parity` | Read-only: do a group's hosts get the profiles a working production host gets? Builds a baseline from the profiles every sampled prod device shares and names what a target lacks. Compares **effective per-device** sets, not assignment groups — the bootstrap group carries neither m4-214 profile yet its devices hold both, via the additive DEP Enrollment group. Also flags **membership outliers** — a device missing a group two thirds of its peers are in was moved, not added, and the groups it lost are mostly app-bearing (admin key, sudo, sshd), which a profile diff cannot see. `--host` checks one box; needs only the SimpleMDM API key otherwise. |
 | 🚀 `reprovision add-to-group <host>` | **ADD** the host to the SimpleMDM bootstrap group — the action that triggers the whole bootstrap. Additive only, never a move. Idempotent. Refuses production groups. `--quarantine-on-register` starts the registration watch here, where it belongs. |
 | ✅ `reprovision validate <host>` | Read-only **fitness** check on a bootstrapped host — display mode (60Hz), last puppet run, worker. **Run this before every unquarantine.** Exit 2 = not bootstrapped yet, exit 1 = bootstrapped but UNFIT. |
 | `reprovision quarantine-on-register <host>` | Watch for a fresh worker to register, then quarantine it on sight. |
@@ -387,7 +391,9 @@ skipped separately from failed, which is what makes "38 ok, 15 not ready, 2 brok
 | `-j` / `REPROVISION_BATCH_MAX_CONCURRENT` | `3` |
 | `REPROVISION_PREFLIGHT_SSHD_WAIT_SECONDS` | `60` |
 | `REPROVISION_QUARANTINE_ON_REGISTER_POLL_SECONDS` | `5` (this interval *is* the exposure window) |
-| `REPROVISION_QUARANTINE_ON_REGISTER_MAX_WAIT_SECONDS` | `900` — ⚠️ sized for a watch started *after* bootstrap. Driving the watch by hand from group-add needs **5400**, or it expires before there is anything to quarantine |
+| `REPROVISION_QUARANTINE_ON_REGISTER_MAX_WAIT_SECONDS` | `900` — sized for a watch started *after* bootstrap. Every path that starts the watch earlier now passes a bootstrap-spanning budget explicitly (`--max-wait-seconds`), so you should not need to export this |
+| `REPROVISION_SIMPLEMDM_MAX_CONCURRENT` | `2` — fan-out cap for SimpleMDM-bound batch work, independent of `-j` |
+| `REPROVISION_REFERENCE_GROUP_ID` | `2017918` — the production group `group-parity` measures against (read-only) |
 | `REPROVISION_VALIDATE_EXPECTED_REFRESH_HZ` | `60.0` — matches what mozharness itself enforces, so `validate` agrees with CI rather than inventing a second standard |
 | `REPROVISION_BOOTSTRAP_GROUP_ID` | `2417981` (`gecko-t-osx-1500-m4-bootstrap`). Production groups are separately blocked in `clients.simplemdm.PROTECTED_GROUP_IDS`, which this **cannot** override |
 | `REPROVISION_BOOTSTRAP_PKG_MAX_WAIT_SECONDS` | `300` — how long to wait for the PKG before calling it a group problem |
