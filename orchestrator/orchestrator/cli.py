@@ -256,6 +256,43 @@ def add_to_group(
 
 
 @_app.command()
+def pkg_audit(
+    include_store: bool = typer.Option(
+        False, "--include-store", help="Also consider apple-store apps (noisy; they reach devices "
+        "by other means)."
+    ),
+) -> None:
+    """Which uploaded pkgs is no assignment group carrying? (read-only)
+
+    Uploading a pkg and attaching it are separate steps in SimpleMDM, and an unattached app is
+    inert with nothing surfacing that fact. Run this after any upload. Also flags the same bundle
+    id uploaded twice, where which copy a group carries decides what devices get.
+    """
+    workflow.step_pkg_audit(include_store=include_store)
+
+
+@_app.command()
+def pkg_attach(
+    app: str = typer.Argument(..., help="App id, or a unique substring of its name/bundle id."),
+    group_id: int = typer.Option(
+        0, "--group-id", help="Group to attach to (default: settings.bootstrap_group_id)."
+    ),
+    push: bool = typer.Option(
+        False,
+        "--push",
+        help="Force delivery now. Re-pushes EVERY app in the group to EVERY member, including "
+        "postinstalls — never do this to a group carrying the bootstrap pkg while hosts are busy.",
+    ),
+) -> None:
+    """Attach an uploaded pkg to a group and verify the group really carries it.
+
+    Verifies by re-reading the group, not by trusting the POST. Production groups are refused:
+    attaching a new app there pushes it to every member mid-task.
+    """
+    workflow.step_pkg_attach(app, group_id=group_id or None, push=push)
+
+
+@_app.command()
 def group_parity(
     group_id: int = typer.Option(
         0, "--group-id", help="Group to check (default: settings.bootstrap_group_id)."
