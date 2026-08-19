@@ -612,13 +612,23 @@ def _resolve_app(spec: str) -> dict:
     return hits[0]
 
 
-def step_pkg_audit() -> None:
+def step_pkg_audit(*, include_store: bool = False) -> None:
     """Which uploaded pkgs are attached to no assignment group? Read-only, API-only.
 
     Uploading a pkg and attaching it to a group are separate operations in SimpleMDM, and an
     unattached app is completely inert with nothing surfacing that fact. On 2026-08-19
     `p_role_tart_worker` was uploaded and left unattached while the eight hosts it was built for
     carried no role file — invisible until someone thought to check the group's app list by hand.
+
+    Only `app_type: custom` apps are considered by default — the pkgs we build and upload. The
+    account also holds ~20 `apple store` apps (1Password, Duo, Google Drive, ...) for iOS devices,
+    which legitimately reach devices by other means; including them buried the three real findings
+    in noise on the first run. `include_store` restores the unfiltered view.
+
+    Also reports duplicate bundle identifiers, attached or not: two uploads of the same pkg is its
+    own hazard, because which one a group carries decides what devices get. The r8 role pkg is
+    currently uploaded twice (`-Signed` and `-wrapped`, both
+    `com.github.munki.pkg.p_role_gecko_t_osx_1400_r8`).
 
     CAVEAT: this only looks at assignment groups. An app reaching devices solely through a legacy
     *device* group would be reported here as an orphan. That is the right default for this fleet —
@@ -633,15 +643,48 @@ def step_pkg_audit() -> None:
         for app in group.get("relationships", {}).get("apps", {}).get("data", []):
             carried.setdefault(int(app["id"]), []).append(f"{group['id']} ({gname})")
 
-    catalog = simplemdm.apps()
-    ui.info(f"{len(catalog)} app(s) in the account, {len(carried)} attached to at least one group")
+    everything = simplemdm.apps()
+    catalog = everything if include_store else [
+        a for a in everything if a.get("attributes", {}).get("app_type") == "custom"
+    ]
+    scope = "app(s)" if include_store else "custom pkg(s)"
+    ui.info(
+        f"{len(catalog)} {scope} in the account "
+        f"({len(everything) - len(catalog)} apple-store app(s) excluded), "
+        f"{len(carried)} app(s) attached to at least one group"
+    )
+
+    # Duplicate bundle ids: two uploads of the same pkg, where which one a group carries decides
+    # what devices actually get.
+    by_bundle: dict[str, list[dict]] = {}
+    for a in catalog:
+        bundle = a.get("attributes", {}).get("bundle_identifier") or ""
+        if bundle:
+            by_bundle.setdefault(bundle, []).append(a)
+    # Only duplicates where at least one copy is attached to nothing. Sharing a bundle id across
+    # deliberate per-flavour variants is normal here and all-attached sets are not findings:
+    # com.mozilla.pkg.SignerBootstrap has six copies, one per signer group (vpn/tb/fx/dep/adhoc/
+    # ff-ent), and puppet-agent's ARM and Intel builds share com.puppetlabs.puppet-agent. Flagging
+    # those buried the one real case. A duplicate that includes a stray upload is the smell.
+    dupes = {
+        b: v for b, v in by_bundle.items()
+        if len(v) > 1 and any(int(a["id"]) not in carried for a in v)
+    }
+    if dupes:
+        ui.warn(f"{len(dupes)} bundle id(s) uploaded more than once with a copy attached to nothing:")
+        for bundle, group in sorted(dupes.items()):
+            ui.warn(f"    {bundle}")
+            for a in sorted(group, key=lambda a: int(a["id"])):
+                where = carried.get(int(a["id"]))
+                ui.warn(f"        {a['id']}  {a['attributes'].get('name')!r}  "
+                        f"{'carried by ' + ', '.join(where) if where else 'ATTACHED TO NOTHING'}")
 
     orphans = [a for a in catalog if int(a["id"]) not in carried]
     if not orphans:
-        ui.ok("every uploaded pkg is attached to at least one group")
+        ui.ok(f"every {scope.rstrip('(s)')} is attached to at least one group")
         return
 
-    ui.warn(f"{len(orphans)} app(s) attached to NOTHING — uploaded but inert:")
+    ui.warn(f"{len(orphans)} {scope} attached to NOTHING — uploaded but inert:")
     for a in sorted(orphans, key=lambda a: int(a["id"])):
         at = a.get("attributes", {})
         ui.warn(f"    {a['id']}  {at.get('name')!r}  bundle={at.get('bundle_identifier')}")

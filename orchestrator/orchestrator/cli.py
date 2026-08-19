@@ -256,13 +256,19 @@ def add_to_group(
 
 
 @_app.command()
-def pkg_audit() -> None:
+def pkg_audit(
+    include_store: bool = typer.Option(
+        False, "--include-store", help="Also consider apple-store apps (noisy; they reach devices "
+        "by other means)."
+    ),
+) -> None:
     """Which uploaded pkgs is no assignment group carrying? (read-only)
 
     Uploading a pkg and attaching it are separate steps in SimpleMDM, and an unattached app is
-    inert with nothing surfacing that fact. Run this after any upload.
+    inert with nothing surfacing that fact. Run this after any upload. Also flags the same bundle
+    id uploaded twice, where which copy a group carries decides what devices get.
     """
-    workflow.step_pkg_audit()
+    workflow.step_pkg_audit(include_store=include_store)
 
 
 @_app.command()

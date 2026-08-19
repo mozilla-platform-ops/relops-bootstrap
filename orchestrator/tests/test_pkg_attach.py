@@ -26,8 +26,10 @@ PROD_GID = 2017918
 APP = 690299
 
 
-def _app(app_id=APP, name="p_role_tart_worker-1.0-signed", bundle="com.github.munki.pkg.p_role_tart_worker"):
-    return {"id": app_id, "attributes": {"name": name, "bundle_identifier": bundle}}
+def _app(app_id=APP, name="p_role_tart_worker-1.0-signed",
+         bundle="com.github.munki.pkg.p_role_tart_worker", app_type="custom"):
+    return {"id": app_id,
+            "attributes": {"name": name, "bundle_identifier": bundle, "app_type": app_type}}
 
 
 def _group(gid, name, app_ids=(), device_ids=()):
@@ -142,14 +144,14 @@ def test_an_unknown_numeric_id_is_refused_by_id_not_treated_as_a_substring():
 # --- the orphan audit ---
 
 
-def _audit(catalog, groups):
+def _audit(catalog, groups, include_store=False):
     warned: list[str] = []
     with patch("orchestrator.workflow.simplemdm.apps", return_value=catalog), \
          patch("orchestrator.workflow.simplemdm.assignment_groups", return_value=groups), \
          patch("orchestrator.workflow.ui.warn", side_effect=warned.append), \
          patch("orchestrator.workflow.ui.ok"), patch("orchestrator.workflow.ui.info"), \
          patch("orchestrator.workflow.ui.step"):
-        workflow.step_pkg_audit()
+        workflow.step_pkg_audit(include_store=include_store)
     return "\n".join(warned)
 
 
@@ -170,3 +172,37 @@ def test_audit_counts_an_app_attached_to_any_group_as_carried():
     out = _audit([_app()], [_group(BOOTSTRAP_GID, "bootstrap", app_ids=()),
                             _group(TART_GID, "Tart", app_ids=(APP,))])
     assert out == ""
+
+
+def test_audit_excludes_apple_store_apps_by_default():
+    """The account holds ~39 store apps for iOS devices; they reach devices by other means.
+
+    Including them buried the five real findings on the first live run.
+    """
+    store = _app(660813, "Duo Mobile", "com.duosecurity.DuoMobile", app_type="apple store")
+    out = _audit([store], [])
+    assert "Duo Mobile" not in out
+    assert "Duo Mobile" in _audit([store], [], include_store=True)
+
+
+def test_audit_does_not_flag_duplicates_that_are_all_attached():
+    """Sharing a bundle id across deliberate per-flavour variants is normal here.
+
+    com.mozilla.pkg.SignerBootstrap has six copies, one per signer group. Flagging fully-attached
+    duplicate sets buried the one real case (the r8 role pkg, uploaded twice and attached to
+    nothing).
+    """
+    variants = [_app(624293, "Signer Bootstrap - VPN", "com.mozilla.pkg.SignerBootstrap"),
+                _app(624294, "Signer Bootstrap - TB", "com.mozilla.pkg.SignerBootstrap")]
+    groups = [_group(1903167, "Signers - vpn", app_ids=(624293,)),
+              _group(1903166, "Signers - tb", app_ids=(624294,))]
+    assert _audit(variants, groups) == ""
+
+
+def test_audit_flags_a_duplicate_when_a_copy_is_attached_to_nothing():
+    """The real r8 case: two uploads of the same bundle, neither carried by any group."""
+    dupes = [_app(630818, "r8-1.0-Signed", "com.github.munki.pkg.p_role_gecko_t_osx_1400_r8"),
+             _app(630822, "r8-1.0-wrapped", "com.github.munki.pkg.p_role_gecko_t_osx_1400_r8")]
+    out = _audit(dupes, [])
+    assert "uploaded more than once" in out
+    assert "630818" in out and "630822" in out
