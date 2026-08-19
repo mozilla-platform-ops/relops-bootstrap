@@ -74,14 +74,28 @@ def provision(
 
 
 @_app.command()
-def quarantine_on_register(hostname: str) -> None:
+def quarantine_on_register(
+    hostname: str,
+    max_wait_seconds: int = typer.Option(
+        0,
+        "--max-wait-seconds",
+        help="Watch budget. Default (900s) assumes bootstrap is already finished. Starting the "
+        "watch at group-add needs ~30 min of budget — pass it explicitly rather than exporting "
+        "REPROVISION_QUARANTINE_ON_REGISTER_MAX_WAIT_SECONDS.",
+    ),
+) -> None:
     """Wait for a fresh worker to appear in Taskcluster, then quarantine it on sight.
 
     A worker that isn't registered yet can't be quarantined (`quarantineWorker` 404s), so this
     watches for it. Narrows the window between registration and the first claimed task to
     seconds — it does not eliminate it. Use standalone for hosts already mid-bootstrap.
+
+    A budget that expires before the worker registers is not a harmless timeout: the host then
+    goes live UNHELD, which is the exact failure this command exists to prevent.
     """
-    workflow.step_quarantine_on_register(workflow.resolve_offline(hostname))
+    workflow.step_quarantine_on_register(
+        workflow.resolve_offline(hostname), max_wait_seconds=max_wait_seconds or None
+    )
 
 
 @_app.command()
@@ -122,7 +136,8 @@ def batch(
     action: str = typer.Option(
         "provision",
         "--action",
-        help="What to run per host: preflight | mint | os-update | add-to-group | validate | provision.",
+        help="What to run per host: preflight | mint | os-update | add-to-group | "
+        "quarantine-on-register | validate | provision.",
     ),
     concurrency: int = typer.Option(
         0, "--concurrency", "-j", help="How many hosts in flight (default 3 — MDC1 throughput, not CPU)."
@@ -237,6 +252,42 @@ def add_to_group(
         workflow.resolve_offline(hostname),
         group_id=group_id or None,
         quarantine_on_register=quarantine_on_register,
+    )
+
+
+@_app.command()
+def group_parity(
+    group_id: int = typer.Option(
+        0, "--group-id", help="Group to check (default: settings.bootstrap_group_id)."
+    ),
+    reference_group_id: int = typer.Option(
+        0, "--reference-group-id", help="Group to measure against (default: settings.reference_group_id)."
+    ),
+    reference_sample: int = typer.Option(
+        0, "--reference-sample", help="Reference devices to intersect for the baseline (default 5)."
+    ),
+    max_devices: int = typer.Option(
+        0, "--max-devices", help="Check only the first N devices of the group (default: all)."
+    ),
+    host: str = typer.Option(
+        "", "--host", help="Check one host instead of the whole group (needs SSH, to read its serial)."
+    ),
+) -> None:
+    """Do this group's hosts get the profiles a working production host gets? (read-only)
+
+    Run this BEFORE a wave. A group that receives freshly-erased hosts must carry Skip Setup
+    Assistant and the FDA SSH Keygen Wrapper or every host hangs at the Wi-Fi pane — and that
+    failure presents as "Safari automation is broken", not as a missing profile (m4-214).
+
+    Compares effective per-device profile sets, so it does not flag profiles that reach the hosts
+    by another additive path. Needs only the SimpleMDM API key; writes nothing.
+    """
+    workflow.step_group_parity(
+        group_id=group_id or None,
+        reference_group_id=reference_group_id or None,
+        reference_sample=reference_sample or None,
+        max_devices=max_devices,
+        hostname=host or None,
     )
 
 

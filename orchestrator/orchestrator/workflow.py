@@ -360,6 +360,230 @@ def step_add_to_group(
         )
 
 
+# Profiles whose absence has already cost real debugging time. Matched on a name SUBSTRING, not
+# an id, so the warning survives a profile being rebuilt (which changes its id) or renamed around
+# the stem. Anything missing from the baseline is reported; these get the story attached.
+_LOAD_BEARING_PROFILES: tuple[tuple[str, str], ...] = (
+    (
+        "Skip Setup Assistant",
+        "a freshly-erased host then stops on the 'Select your Wi-Fi network' pane, which nothing "
+        "ever dismisses on an ethernet-only DC machine — and it presents as 'Safari automation is "
+        "broken', not as a stuck Setup Assistant (m4-214, cost most of a day)",
+    ),
+    (
+        "SSH Keygen Wrapper",
+        "Full Disk Access for the SSH keygen wrapper — lost in the same m4-214 incident",
+    ),
+    (
+        "CI Worker Support Binaries",
+        "the PPPC profile granting system-level TCC to the worker support binaries. Under SIP a "
+        "profile is the ONLY way those grants can land, so a SIP-on host without it diverges from "
+        "the prod fleet silently",
+    ),
+)
+
+
+# What share of a group's devices must belong to some OTHER group before a device that doesn't is
+# treated as an outlier rather than as normal variation. Two thirds: high enough that a legitimate
+# split (half a wave earmarked for a different role) isn't flagged, low enough to catch the single
+# mis-clicked host among 40.
+_MEMBERSHIP_QUORUM = 2 / 3
+
+
+def _membership_outliers(
+    gid: int, target_ids: list[int]
+) -> dict[int, tuple[str, list[int]]]:
+    """Devices missing a group that almost all of their peers are in — i.e. moved, not added.
+
+    Profile parity alone under-reports this. A device record does not list its assignment groups,
+    so this inverts the group->devices relationship once and asks the question peer-wise, with no
+    reference group involved: 39 of 40 hosts are in DEP Enrollment, so the 40th is the anomaly.
+
+    Catches strictly more than the profile diff, because the groups a mis-clicked host loses are
+    not only profile-bearing. Found live on 2026-08-19: one bootstrap-group device was in that
+    group ALONE, having lost DEP Enrollment (Skip Setup Assistant, FDA), Relops Public SSH Key,
+    Sudoers and Enable SSH. Without the admin key the orchestrator cannot reach it at all — every
+    step is SSH — so the host is unprovisionable, and no profile-only check would say why.
+    """
+    quorum = len(target_ids) * _MEMBERSHIP_QUORUM
+    out: dict[int, tuple[str, list[int]]] = {}
+    for group in simplemdm.assignment_groups():
+        other = int(group["id"])
+        if other == gid:
+            continue
+        ids = {int(d["id"]) for d in group.get("relationships", {}).get("devices", {}).get("data", [])}
+        if len([d for d in target_ids if d in ids]) < quorum:
+            continue
+        missing = [d for d in target_ids if d not in ids]
+        if missing:
+            out[other] = (group.get("attributes", {}).get("name", "?"), missing)
+    return out
+
+
+def _device_label(device_id: int) -> str:
+    """id + serial + name. A bare device id is not identifying enough to act on.
+
+    A fresh DEP arrival is named "Mac mini", so on 2026-08-19 a device id alone was mistaken for
+    macmini-m4-214 on nothing more than a matching enrollment date. The serial is what an operator
+    can actually search for in the SimpleMDM UI.
+    """
+    try:
+        a = simplemdm.get_device(device_id).get("attributes", {})
+    except ReprovisionError:
+        return f"device {device_id}"
+    name, serial = a.get("name") or "?", a.get("serial_number") or "?"
+    return f"device {device_id} (serial {serial}, named {name!r})"
+
+
+def step_group_parity(
+    *,
+    group_id: int | None = None,
+    reference_group_id: int | None = None,
+    reference_sample: int | None = None,
+    max_devices: int = 0,
+    hostname: str | None = None,
+) -> None:
+    """Do the hosts in the bootstrap group get the profiles a working prod host gets?
+
+    Read-only, API-only: no SSH, no writes, safe on a live fleet. Nothing else in the toolchain
+    answers this, and it is the one question the m4-214 incident turned on — a host missing Skip
+    Setup Assistant and the FDA SSH Keygen Wrapper hung at first boot and presented as a Safari
+    fault. The postmortem's advice was to diff `profiles show -type configuration` against a
+    known-good host by hand, which needs SSH to a box that by definition may not be reachable yet.
+    This asks SimpleMDM instead, before a wave starts.
+
+    The baseline is the INTERSECTION of the profile sets of several sampled reference-group
+    devices, not one sampled host: an intersection can't be skewed by a single atypical prod box,
+    and a profile that every sampled host carries is one the fleet genuinely standardises on.
+
+    Deliberately compares EFFECTIVE per-device sets rather than the groups themselves — see
+    simplemdm.device_profiles. A group-level diff flags the two m4-214 profiles as missing from
+    the bootstrap group, which is true and irrelevant: its devices receive both from the additive
+    DEP Enrollment group. Crying wolf on that exact pair would train the operator to ignore this.
+
+    Raises ReprovisionError (exit 1) when target devices lack baseline profiles.
+    """
+    s = get_settings()
+    gid = group_id or s.bootstrap_group_id
+    ref_gid = reference_group_id or s.reference_group_id
+    n_sample = reference_sample or s.group_parity_reference_sample
+
+    ui.step("GROUP PARITY", "do these hosts get the profiles a working prod host gets? (read-only)")
+
+    if gid == ref_gid:
+        raise ReprovisionError(
+            f"group and reference group are both {gid} — nothing to compare. Pass "
+            "--reference-group-id to measure against a different group."
+        )
+
+    ref_name = simplemdm.get_assignment_group(ref_gid).get("attributes", {}).get("name", "?")
+    ref_devices = simplemdm.assignment_group_device_ids(ref_gid)[:n_sample]
+    if not ref_devices:
+        raise ReprovisionError(
+            f"reference group {ref_gid} ({ref_name}) has no devices — nothing to build a baseline "
+            "from. Point --reference-group-id at a populated production group."
+        )
+
+    baseline: dict[int, str] | None = None
+    for did in ref_devices:
+        profiles = simplemdm.device_profiles(did)
+        baseline = profiles if baseline is None else {i: n for i, n in baseline.items() if i in profiles}
+    assert baseline is not None
+    ui.info(
+        f"baseline: {len(baseline)} profile(s) common to {len(ref_devices)} device(s) "
+        f"in {ref_gid} ({ref_name})"
+    )
+    if not baseline:
+        raise ReprovisionError(
+            f"the {len(ref_devices)} sampled devices in {ref_gid} share no profiles at all — that "
+            "group is too heterogeneous to be a baseline. Sample fewer, or pick another group."
+        )
+
+    # Targets: one named host, or the group's own membership.
+    if hostname:
+        device = _resolve_mdm_device(resolve_offline(hostname))
+        targets = [(hostname, int(device["id"]))]
+        ui.info(f"checking {hostname} (device {targets[0][1]})")
+    else:
+        name = simplemdm.get_assignment_group(gid).get("attributes", {}).get("name", "?")
+        ids = simplemdm.assignment_group_device_ids(gid)
+        if not ids:
+            raise ReprovisionError(f"group {gid} ({name}) has no devices to check")
+        if max_devices:
+            ids = ids[:max_devices]
+        # A DEP arrival is named "Mac mini" in SimpleMDM, so device ids are the only stable label
+        # here. Not worth a GET per device to print a name they mostly don't have yet.
+        # Labelled lazily: naming 40 devices up front costs 40 GETs to print ids the operator
+        # mostly doesn't need. Only devices with a gap get resolved to a serial.
+        targets = [(f"device {i}", i) for i in ids]
+        ui.info(f"checking {len(targets)} device(s) in {gid} ({name})")
+
+    # profile id -> (name, devices lacking it)
+    gaps: dict[int, tuple[str, list[str]]] = {}
+    for label, did in targets:
+        have = simplemdm.device_profiles(did)
+        for pid, pname in baseline.items():
+            if pid not in have:
+                gaps.setdefault(pid, (pname, []))[1].append(label)
+
+    total = len(targets)
+    if gaps:
+        ui.warn(f"{len(gaps)} profile(s) missing from at least one device")
+    else:
+        ui.ok(f"every checked device has all {len(baseline)} baseline profile(s)")
+
+    # Second, independent question: is any device missing a GROUP its peers are all in? Catches
+    # the mis-clicked move, including the app-bearing groups a profile diff cannot see.
+    outliers = _membership_outliers(gid, [did for _label, did in targets]) if not hostname else {}
+    if outliers:
+        ui.warn(f"{len(outliers)} group(s) that most of these devices are in, some are not")
+    elif not hostname:
+        ui.ok("group membership is consistent across the group")
+
+    if not gaps and not outliers:
+        ui.ok("parity: no gap against the prod fleet")
+        return
+
+    sections: list[str] = []
+
+    if gaps:
+        lines = []
+        for pid, (pname, lacking) in sorted(gaps.items(), key=lambda kv: -len(kv[1][1])):
+            why = next((story for stem, story in _LOAD_BEARING_PROFILES if stem in pname), "")
+            line = f"{pname} (profile {pid}) — missing on {len(lacking)}/{total} device(s)"
+            if len(lacking) <= 3:
+                line += "\n      " + "\n      ".join(
+                    _device_label(d) for _l, d in targets if _l in lacking
+                )
+            if why:
+                line += f"\n      ^ {why}"
+            lines.append(line)
+        sections.append(
+            f"profile parity gap against {ref_gid} ({ref_name}):\n  - " + "\n  - ".join(lines)
+        )
+
+    if outliers:
+        lines = []
+        for other, (oname, missing) in sorted(outliers.items(), key=lambda kv: -len(kv[1][1])):
+            lines.append(
+                f"{oname} ({other}) — {total - len(missing)}/{total} of these devices are in it, "
+                f"{len(missing)} are not:\n      "
+                + "\n      ".join(_device_label(d) for d in missing[:5])
+            )
+        sections.append(
+            "group membership outliers — these look MOVED rather than ADDED:\n  - "
+            + "\n  - ".join(lines)
+        )
+
+    raise ReprovisionError(
+        "\n\n".join(sections)
+        + "\n\nFix by attaching the profile to the group in SimpleMDM (a profile reaches devices "
+        "via its own `groups` relationship), or by ADDING the device to the groups it is missing. "
+        "Never MOVE it — a move strips the source group's profiles and apps, which is how this "
+        "state arises in the first place."
+    )
+
+
 def step_validate(ctx: HostContext, *, expected_refresh_hz: float | None = None) -> None:
     """Read-only fitness check on a bootstrapped host: is it actually able to run tasks?
 

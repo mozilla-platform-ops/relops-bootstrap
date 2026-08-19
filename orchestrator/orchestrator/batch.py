@@ -45,7 +45,15 @@ EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_NOT_READY = 2
 
-ACTIONS = ("preflight", "mint", "os-update", "add-to-group", "validate", "provision")
+ACTIONS = (
+    "preflight",
+    "mint",
+    "os-update",
+    "add-to-group",
+    "quarantine-on-register",
+    "validate",
+    "provision",
+)
 
 
 @dataclass
@@ -112,6 +120,7 @@ def _child_cmd(
     allow_sip_enabled: bool,
     wait: bool,
     quarantine_on_register: bool = False,
+    watch_max_wait_seconds: int = 0,
 ) -> list[str]:
     exe = _reprovision_exe()
     if action == "preflight":
@@ -131,6 +140,15 @@ def _child_cmd(
         # Read-only fitness check; no gate flags, and it inspects the RUNNING host rather than
         # gating on a target version, so --expected-os doesn't apply.
         return [exe, "validate", host]
+    elif action == "quarantine-on-register":
+        # Pure Taskcluster polling: no SSH, no SimpleMDM, no gate flags. The budget is passed
+        # explicitly because the default is sized for a watch that starts AFTER bootstrap; a watch
+        # started at group-add has to span the whole thing, and getting that wrong is not a
+        # harmless timeout — the host goes live UNHELD, the exact failure the watch prevents.
+        cmd = [exe, "quarantine-on-register", host]
+        if watch_max_wait_seconds:
+            cmd += ["--max-wait-seconds", str(watch_max_wait_seconds)]
+        return cmd
     elif action == "add-to-group":
         # No gate flags: nothing here inspects the OS version or SIP state. It does need SSH,
         # though — the host's serial is the only join key to its SimpleMDM device record, since a
@@ -252,6 +270,141 @@ def _mmss(seconds: float) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
+def _write_roster(log_dir: Path, hosts: list[str]) -> Path:
+    """Record which hosts are (or may be) in the group, so the watch phase is re-runnable.
+
+    A file rather than a printed list: the resume command is then a real command an operator can
+    paste at 6pm without re-deriving 49 hostnames from scrollback.
+    """
+    roster = log_dir / "added.txt"
+    roster.write_text(
+        "# hosts added to the bootstrap group by this batch — they are bootstrapping NOW.\n"
+        "# Re-attach watchers:  reprovision batch <this file> --action quarantine-on-register\n"
+        + "".join(f"{h}\n" for h in hosts)
+    )
+    return roster
+
+
+def _add_to_group_then_watch(
+    hosts: list[str],
+    *,
+    concurrency: int = 0,
+    expected_os: str = "",
+    allow_sip_enabled: bool = False,
+    per_host_timeout: int = 0,
+    dry_run: bool = False,
+) -> int:
+    """Run the SimpleMDM add and the Taskcluster registration watch as two separate phases.
+
+    `add-to-group --quarantine-on-register` couples an action bound by the SimpleMDM API (three
+    calls per host, no SSH to pace it) to a ~30-minute wait bound by Taskcluster. One
+    `--concurrency` cannot serve both: raise it for wall-clock and you hammer SimpleMDM, lower it
+    for SimpleMDM and 33 hosts serialise into five and a half hours.
+
+    On 2026-08-14 at `-j12` this looked like 5 hosts failing. What actually happened: **12 hosts
+    had already been added to the group** — the POST succeeded and the follow-up `push_apps`
+    429'd — so killing the batch orphaned 12 live, autonomous bootstraps with no watcher. They
+    would have registered and started claiming production work unvalidated. The runbook has
+    carried a two-command workaround for this ever since; this is that workaround, built in.
+
+    Phase 1 is clamped to `simplemdm_max_concurrent`, independent of `--concurrency`. Phase 2 runs
+    every host at once: a watcher is an idle poll loop, so the binding resource is neither the API
+    nor the network but local process count.
+    """
+    s = get_settings()
+    asked = concurrency or s.batch_max_concurrent
+    add_j = min(asked, s.simplemdm_max_concurrent)
+    watch_budget = s.bootstrap_max_wait_seconds + s.quarantine_on_register_max_wait_seconds
+
+    ui.step("BATCH", f"add-to-group then watch × {len(hosts)} host(s), in two phases")
+    ui.info(
+        f"phase 1: add to the group, {add_j} at a time (SimpleMDM-bound) · "
+        f"phase 2: watch for registration, all {len(hosts)} at once (Taskcluster-bound)"
+    )
+    if asked > add_j:
+        ui.warn(
+            f"-j {asked} ignored for the add phase: it is SimpleMDM-bound, clamped to {add_j}. "
+            "At -j12 the 429 retry budget blew and left 12 hosts added-but-unwatched "
+            "(2026-08-14). Raise REPROVISION_SIMPLEMDM_MAX_CONCURRENT if you really mean it."
+        )
+
+    # One directory for both phases, resolved before either starts: an interrupt during phase 1
+    # still has to be able to write the resume roster somewhere findable.
+    root = None if dry_run else _log_dir()
+
+    added: dict[str, HostResult] = {}
+    try:
+        add_failed = run_batch(
+            hosts,
+            action="add-to-group",
+            concurrency=add_j,
+            expected_os=expected_os,
+            allow_sip_enabled=allow_sip_enabled,
+            quarantine_on_register=False,
+            per_host_timeout=per_host_timeout,
+            dry_run=dry_run,
+            results_out=added,
+            log_dir=None if root is None else root / "add",
+            watch_follows=True,
+        )
+    except KeyboardInterrupt:
+        _report_orphans(hosts, added, root)
+        raise
+
+    # Watch every host that MIGHT now be in the group — "ok" and "failed" alike. A failed add is
+    # precisely the 2026-08-14 case: the add landed and the push 429'd, so the host is in the group
+    # and bootstrapping while the batch called it a failure. Only "skipped" (exit 2 — e.g. no SSH,
+    # so its serial was never read) means it was definitely never added. Over-watching wastes an
+    # idle poll loop; under-watching puts an unvalidated host into production.
+    watch = list(hosts) if dry_run else [
+        h for h in hosts if h in added and added[h].state != "skipped"
+    ]
+    if not watch:
+        ui.warn("no host was added to the group — nothing to watch")
+        return add_failed
+
+    if root is not None:
+        ui.info(f"roster: {_write_roster(root, watch)}")
+
+    try:
+        watch_failed = run_batch(
+            watch,
+            action="quarantine-on-register",
+            concurrency=len(watch),
+            per_host_timeout=per_host_timeout or watch_budget + 300,
+            dry_run=dry_run,
+            watch_max_wait_seconds=watch_budget,
+            log_dir=None if root is None else root / "watch",
+        )
+    except KeyboardInterrupt:
+        _report_orphans(watch, added, root)
+        raise
+
+    return add_failed + watch_failed
+
+
+def _report_orphans(
+    hosts: list[str], added: dict[str, HostResult], log_dir: Path | None
+) -> None:
+    """On interrupt, say which hosts are bootstrapping unwatched — and how to re-attach.
+
+    Silence here is what turned a Ctrl-C into 12 unheld production workers.
+    """
+    maybe = [h for h in hosts if h not in added or added[h].state != "skipped"]
+    if not maybe:
+        return
+    ui.err(
+        f"INTERRUPTED with {len(maybe)} host(s) possibly already in the bootstrap group. The "
+        "bootstrap is autonomous: they will finish, register, and claim production work with "
+        "nothing holding them."
+    )
+    if log_dir is None:
+        ui.err("re-attach watchers now:  reprovision batch <hosts> --action quarantine-on-register")
+        return
+    roster = _write_roster(log_dir, maybe)
+    ui.err(f"re-attach watchers now:  reprovision batch {roster} --action quarantine-on-register")
+
+
 def run_batch(
     hosts: list[str],
     *,
@@ -263,6 +416,10 @@ def run_batch(
     quarantine_on_register: bool = False,
     per_host_timeout: int = 0,
     dry_run: bool = False,
+    watch_max_wait_seconds: int = 0,
+    results_out: dict[str, HostResult] | None = None,
+    log_dir: Path | None = None,
+    watch_follows: bool = False,
 ) -> int:
     """Drive `action` across `hosts`. Returns the number of hosts that FAILED (not skipped).
 
@@ -272,9 +429,26 @@ def run_batch(
     if action not in ACTIONS:
         raise ReprovisionError(f"unknown batch action {action!r} — one of {', '.join(ACTIONS)}")
 
+    # One --concurrency cannot serve both halves of this action; split it. See the function.
+    if action == "add-to-group" and quarantine_on_register:
+        return _add_to_group_then_watch(
+            hosts,
+            concurrency=concurrency,
+            expected_os=expected_os,
+            allow_sip_enabled=allow_sip_enabled,
+            per_host_timeout=per_host_timeout,
+            dry_run=dry_run,
+        )
+
     s = get_settings()
     concurrency = concurrency or s.batch_max_concurrent
     expected_os = expected_os or s.provision_expected_os
+    if action == "quarantine-on-register" and not watch_max_wait_seconds:
+        # The child's own default (900s) assumes the watch starts once bootstrap has finished.
+        # Reached through a batch it never does — the operator is attaching watchers to hosts that
+        # are mid-bootstrap — so size it for the whole thing here instead of making the runbook
+        # tell people to export REPROVISION_QUARANTINE_ON_REGISTER_MAX_WAIT_SECONDS=5400.
+        watch_max_wait_seconds = s.bootstrap_max_wait_seconds + s.quarantine_on_register_max_wait_seconds
     def _cmd_for(host: str) -> list[str]:
         return _child_cmd(
             host,
@@ -283,6 +457,7 @@ def run_batch(
             allow_sip_enabled=allow_sip_enabled,
             wait=wait,
             quarantine_on_register=quarantine_on_register,
+            watch_max_wait_seconds=watch_max_wait_seconds,
         )
 
     # A provision blocks on the bootstrap sentinel, so give the child the sentinel budget plus
@@ -297,6 +472,10 @@ def run_batch(
             # Launch-and-return: staging the script plus the started-cleanly check. The ~14GB
             # download runs detached and outlives this call by design.
             per_host_timeout = 600
+        elif action == "quarantine-on-register":
+            # Must outlast the child's own watch budget, or the batch kills the watcher and the
+            # host it was holding goes live unheld.
+            per_host_timeout = watch_max_wait_seconds + 300
         elif action == "validate":
             per_host_timeout = 300
         elif action == "add-to-group":
@@ -318,6 +497,8 @@ def run_batch(
     # passed, when mint is handed neither flag and checks neither thing.
     if action == "validate":
         gate_note = "read-only fitness check on already-bootstrapped hosts"
+    elif action == "quarantine-on-register":
+        gate_note = "Taskcluster-bound watch only — no SimpleMDM call, no SSH, no OS/SIP gate"
     elif action in ("mint", "add-to-group"):
         gate_note = f"no OS/SIP gate — {action} doesn't inspect the running OS"
     elif action == "os-update":
@@ -333,14 +514,23 @@ def run_batch(
         ui.info("launches the upgrade and returns; hosts reboot on their own — sweep with --action preflight after")
     if action == "validate":
         ui.info("exit 2 = not bootstrapped yet (skipped) · exit 1 = bootstrapped but UNFIT to take work")
+    if action == "quarantine-on-register":
+        ui.info(
+            f"watch budget {_mmss(watch_max_wait_seconds)} per host — sized to span a whole "
+            "bootstrap, not just the registration gap"
+        )
     if action == "add-to-group":
         ui.info("ADD only, never a move; already-member hosts are skipped — then wait for the pkg to land")
-        ui.info(
-            "watching for registration and quarantining on sight (blocks for the whole bootstrap)"
-            if quarantine_on_register
-            else "NOT quarantining: the bootstrap is autonomous, so these hosts will go live and "
-            "claim production work unvalidated — pass --quarantine-on-register for fresh hardware"
-        )
+        if quarantine_on_register:
+            ui.info("watching for registration and quarantining on sight (blocks for the whole bootstrap)")
+        elif watch_follows:
+            # Don't cry wolf: the operator DID ask to hold these hosts, and phase 2 does it.
+            ui.info("watchers are attached in phase 2, immediately after this phase completes")
+        else:
+            ui.info(
+                "NOT quarantining: the bootstrap is autonomous, so these hosts will go live and "
+                "claim production work unvalidated — pass --quarantine-on-register for fresh hardware"
+            )
     if action == "provision":
         ui.info(
             "hosts will be quarantined on registration"
@@ -354,7 +544,10 @@ def run_batch(
             ui.wire(" ".join(_cmd_for(host)))
         return 0
 
-    log_dir = _log_dir()
+    # An explicit dir lets a multi-phase run keep every phase under one batch directory, so the
+    # operator has a single place to look and the resume roster sits beside the logs.
+    log_dir = log_dir or _log_dir()
+    log_dir.mkdir(parents=True, exist_ok=True)
     ui.info(f"logs: {log_dir}")
 
     # Resolve secrets once, here, before any child starts. See _prewarm_secret_env: N children
@@ -363,7 +556,10 @@ def run_batch(
     if secret_env:
         ui.info(f"pre-warmed {len(secret_env)} credential(s) — children won't call 1Password")
 
-    results: dict[str, HostResult] = {}
+    # The caller's dict when given one, populated as each host completes rather than at the end:
+    # _add_to_group_then_watch needs to know which hosts are already in the group even if the
+    # operator Ctrl-Cs mid-phase, because those hosts keep bootstrapping either way.
+    results: dict[str, HostResult] = results_out if results_out is not None else {}
     started = time.monotonic()
     done = 0
     total = len(hosts)

@@ -108,6 +108,56 @@ def assignment_group_device_ids(group_id: int) -> list[int]:
     return [int(d["id"]) for d in rel.get("devices", {}).get("data", [])]
 
 
+def _paginated(path: str, *, limit: int = 100) -> list[dict]:
+    """Every page of a SimpleMDM list endpoint, following has_more/starting_after.
+
+    Not optional for correctness: /custom_configuration_profiles returns has_more=True at the
+    default page size on this account, so a single unpaginated GET silently reports a partial
+    profile set — and a parity check built on a partial set reports missing profiles that are
+    simply on page two.
+    """
+    out: list[dict] = []
+    params: dict[str, object] = {"limit": limit}
+    while True:
+        page_json = _request("GET", path, params=params).json()
+        page = page_json.get("data", [])
+        out += page
+        if not page_json.get("has_more") or not page:
+            return out
+        params["starting_after"] = page[-1]["id"]
+
+
+def device_profiles(device_id: int) -> dict[int, str]:
+    """Configuration profiles SimpleMDM considers assigned to this device, {id: name}.
+
+    This is the *effective* set, and that is the whole point. Profiles reach a device by several
+    independent paths — assignment groups, device groups — and only this endpoint composes them.
+    Comparing assignment groups to each other instead is actively misleading: the bootstrap group
+    is NOT attached to "Skip Setup Assistant - All Screens" or the FDA "SSH Keygen Wrapper", yet
+    its devices hold both, because a DEP arrival is still in the additive DEP Enrollment group.
+    A group-level diff therefore flags exactly the two profiles from the m4-214 postmortem as
+    missing when they are in fact delivered — the one false alarm this check cannot afford.
+
+    NB: assignment-group records carry no `profiles` relationship at all (verified 2026-08-19:
+    the keys are apps / device_groups / devices / media). The link lives on the profile side, as
+    `relationships.groups`.
+    """
+    return {
+        int(p["id"]): p.get("attributes", {}).get("name", f"profile {p['id']}")
+        for p in _paginated(f"/devices/{device_id}/profiles")
+    }
+
+
+def assignment_groups() -> list[dict]:
+    """Every assignment group, with its device membership. One paginated sweep.
+
+    Cheaper and more useful than asking per device: a device record does not list the assignment
+    groups it belongs to, so the only way to answer "what groups is this host in?" is to invert
+    this. 47 groups on this account as of 2026-08-19.
+    """
+    return _paginated("/assignment_groups")
+
+
 def add_device_to_assignment_group(group_id: int, device_id: int) -> None:
     """ADD a device to an assignment group. Purely additive — never moves or unassigns.
 
