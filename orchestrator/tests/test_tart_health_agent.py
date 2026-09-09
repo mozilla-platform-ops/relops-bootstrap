@@ -244,3 +244,20 @@ def test_ssh_uses_the_tool_owned_known_hosts():
     argv = " ".join(m.call_args[0][0])
     assert "UserKnownHostsFile=" in argv
     assert "BatchMode=yes" in argv
+
+
+# ---- guest probe: key auth only (bug 2069268) -----------------------------------
+
+def test_guest_probe_uses_key_auth_and_no_password():
+    # Regression guard: the guest login must stay on the dedicated key-only account.
+    # If the previous shared-credential form comes back, the change tracked in
+    # bug 2069268 has been silently undone.
+    with patch.object(agent, "_ssh", return_value=("k=v\n", "")) as m:
+        agent._guest("macmini-m4-185.test", "10.0.0.9")
+    payload = m.call_args[0][1]
+    assert "expect" not in payload, f"expect wrapper is back: {payload}"
+    assert "admin@" not in payload, f"guest login reverted to admin: {payload}"
+    assert "probe@10.0.0.9" in payload, f"probe account not used: {payload}"
+    assert "-i /etc/tart/guest_probe_key" in payload
+    assert "PreferredAuthentications=publickey" in payload
+    assert "BatchMode=yes" in payload
