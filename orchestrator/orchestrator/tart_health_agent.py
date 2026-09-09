@@ -200,7 +200,7 @@ GUEST_PROBE = r"""
 uptime | sed -n 's/.*up \([^,]*\),.*/uptime_raw=\1/p'
 echo "guest_epoch=$(date -u +%s)"
 echo "guest_disk_gib=$(df -g / | awk 'NR==2{print $4}')"
-echo "cfg_worker=$(sudo grep -m1 -oE 'mac-[0-9a-f]+' /opt/worker/generic-worker.conf.yaml 2>/dev/null)"
+echo "cfg_worker=$(sudo -n /usr/bin/grep -m1 workerId /opt/worker/generic-worker.conf.yaml 2>/dev/null | awk '{print $NF}' | tr -d '\",')"
 echo "guest_up_s=$(( $(date -u +%s) - $(sysctl -n kern.boottime | sed -n 's/^{ sec = \([0-9]*\).*/\1/p') ))"
 # worker-runner.sh writes this the first time generic-worker exits 69 and deletes it on
 # any other exit, so its presence means "the last worker exit was the disk-panic path"
@@ -222,44 +222,45 @@ S=/opt/worker/worker_exit_69
 # that exists specifically to catch a crash-looping guest could never fire.
 
 
+GUEST_PROBE_USER = os.environ.get("TART_GUEST_PROBE_USER", "probe")
+GUEST_PROBE_KEY = os.environ.get("TART_GUEST_PROBE_KEY", "/etc/tart/guest_probe_key")
+
+
 def _guest(host: str, ip: str) -> dict[str, str]:
-    """Collect from inside the guest via the host, using expect for the password login.
+    """Collect from inside the guest via the host, over the guest probe key.
 
-    Two things here are load-bearing and were both wrong until 2026-08-17, which is why
-    every slot reported guest_reachable:false with no guest fields at all (26/26).
+    This previously authenticated with a shared credential and drove ssh through
+    expect. It now uses the dedicated `probe` account: key auth only, unprivileged,
+    with a small fixed set of permitted sudo commands (ronin_puppet
+    roles_profiles::profiles::tart_guest_probe). See bug 2069268 for the rationale.
 
-    1. The probe is base64'd rather than interpolated into the spawn line. GUEST_PROBE is
-       multi-line and full of $(...), $4 and [0-9a-f]; dropping that into a Tcl
-       double-quoted argument makes Tcl substitute the $ and treat [ ] as command
-       substitution, and expect died with
-         extra characters after close-quote
-           while executing "spawn ssh ... "uptime | sed -n 's/.*up \\([^,]*\\)...
-       before it ever connected. base64 is alphanumeric plus +/= so nothing in it is
-       special to Tcl OR to the remote shell, whatever we put in the probe later.
+    Dropping expect also removes the failure mode that made this silently useless
+    for months (26/26 slots reporting guest_reachable:false). Both workarounds it
+    needed are gone with it:
 
-    2. The password is matched with a plain glob on its own line, followed by an explicit
-       `expect eof`. The previous single-line braced form
-         expect { -re "(P|p)assword:" { send "admin\\r"; exp_continue } timeout { } eof { } }
-       never sent the password: measured against a real guest it printed the prompt and
-       then sat until the 60s timeout. The multi-line glob form returns all five keys.
+      * Tcl no longer sees the probe at all, so there is nothing to mangle the
+        shell metacharacters in GUEST_PROBE. The base64 hop is kept anyway -- it is
+        still the cheapest way to stop the remote shell reinterpreting the probe.
+      * There is no password prompt left to match, which is what the old
+        single-line `-re` form never managed to do.
 
-    Verified on macmini-m4-236 slot 1: uptime_raw=4 mins, guest_epoch, guest_disk_gib=61,
-    cfg_worker=mac-c51932, guest_up_s=263.
+    Uses sudo on the host because the key is root-owned 0600 and this runs as the
+    host's admin user. That grants nothing the caller does not already have there.
     """
     b64 = base64.b64encode(GUEST_PROBE.strip().encode()).decode()
-    exp = (
-        "log_user 1\n"
-        "set timeout 60\n"
-        f"spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-        f'-o LogLevel=ERROR admin@{ip} "echo {b64} | base64 -d | bash"\n'
-        "expect {\n"
-        '  "assword:" { send "admin\\r" }\n'
-        "  timeout { exit 1 }\n"
-        "  eof { exit 1 }\n"
-        "}\n"
-        "expect eof\n"
+    ssh_to_guest = (
+        "sudo /usr/bin/ssh"
+        f" -i {GUEST_PROBE_KEY}"
+        " -o IdentitiesOnly=yes"
+        " -o PreferredAuthentications=publickey"
+        " -o BatchMode=yes"
+        " -o StrictHostKeyChecking=no"
+        " -o UserKnownHostsFile=/dev/null"
+        " -o LogLevel=ERROR"
+        " -o ConnectTimeout=15"
+        f" {GUEST_PROBE_USER}@{ip}"
     )
-    payload = "cat > /tmp/_gp.exp <<'XEOF'\n" + exp + "XEOF\n/usr/bin/expect /tmp/_gp.exp; rm -f /tmp/_gp.exp"
+    payload = f'{ssh_to_guest} "echo {b64} | base64 -d | bash"'
     return _kv(_ssh(host, payload, timeout=150)[0])
 
 
