@@ -36,10 +36,14 @@ def run(
 
 
 _EXPECTED_OS_OPT = typer.Option(
-    "", "--expected-os", help="Required macOS version (default: REPROVISION_PROVISION_EXPECTED_OS, 15.3)."
+    "",
+    "--expected-os",
+    help="Required macOS version (default: REPROVISION_PROVISION_EXPECTED_OS, 15.3).",
 )
 _ALLOW_SIP_OPT = typer.Option(
-    False, "--allow-sip-enabled", help="Don't require SIP to be disabled (for the SIP-on flow)."
+    False,
+    "--allow-sip-enabled",
+    help="Don't require SIP to be disabled (for the SIP-on flow).",
 )
 _QUARANTINE_ON_REGISTER_OPT = typer.Option(
     False,
@@ -55,7 +59,9 @@ def provision(
     expected_os: str = _EXPECTED_OS_OPT,
     allow_sip_enabled: bool = _ALLOW_SIP_OPT,
     no_wait: bool = typer.Option(
-        False, "--no-wait", help="Stop after mint + BST escrow; don't block on the bootstrap sentinel."
+        False,
+        "--no-wait",
+        help="Stop after mint + BST escrow; don't block on the bootstrap sentinel.",
     ),
     quarantine_on_register: bool = _QUARANTINE_ON_REGISTER_OPT,
 ) -> None:
@@ -132,7 +138,9 @@ def preflight(
 
 @_app.command()
 def batch(
-    hosts_file: str = typer.Argument(..., help="File with one short hostname per line ('#' comments ok)."),
+    hosts_file: str = typer.Argument(
+        ..., help="File with one short hostname per line ('#' comments ok)."
+    ),
     action: str = typer.Option(
         "provision",
         "--action",
@@ -140,13 +148,20 @@ def batch(
         "quarantine-on-register | validate | provision.",
     ),
     concurrency: int = typer.Option(
-        0, "--concurrency", "-j", help="How many hosts in flight (default 3 — MDC1 throughput, not CPU)."
+        0,
+        "--concurrency",
+        "-j",
+        help="How many hosts in flight (default 3 — MDC1 throughput, not CPU).",
     ),
     expected_os: str = _EXPECTED_OS_OPT,
     allow_sip_enabled: bool = _ALLOW_SIP_OPT,
-    no_wait: bool = typer.Option(False, "--no-wait", help="For --action provision: skip the sentinel wait."),
+    no_wait: bool = typer.Option(
+        False, "--no-wait", help="For --action provision: skip the sentinel wait."
+    ),
     quarantine_on_register: bool = _QUARANTINE_ON_REGISTER_OPT,
-    dry_run: bool = typer.Option(False, "--dry-run", help="Print the per-host commands and exit."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print the per-host commands and exit."
+    ),
 ) -> None:
     """Run one action across a list of hosts, a few at a time, with per-host logs.
 
@@ -174,8 +189,12 @@ def batch(
 @_app.command()
 def quarantine(
     hostname: str,
-    until: str = typer.Option("", "--until", help="ISO-8601 quarantineUntil (default: 365 days out)."),
-    info: str = typer.Option("", "--info", help="Audit reason stored as quarantineInfo."),
+    until: str = typer.Option(
+        "", "--until", help="ISO-8601 quarantineUntil (default: 365 days out)."
+    ),
+    info: str = typer.Option(
+        "", "--info", help="Audit reason stored as quarantineInfo."
+    ),
 ) -> None:
     workflow.step_quarantine(workflow.resolve(hostname), until=until or None, info=info)
 
@@ -216,17 +235,33 @@ def escrow_bst(hostname: str) -> None:
     workflow.step_escrow_bst(workflow.resolve_offline(hostname))  # SSH-only; see mint()
 
 
+@_app.command()
+def screencapture_grant(hostname: str) -> None:
+    """Grant Screen Recording (ScreenCapture TCC) to the worker binaries. SIP-on hosts only.
+
+    Re-runnable and idempotent. Skips rather than fails when the host is mid-task, has no
+    console session yet, or is SIP-off (macos_tcc_perms covers those). Needed after every
+    reprovision because EACS re-enables SIP and wipes TCC -- see bug 2073303.
+    """
+    workflow.step_screencapture_grant(
+        workflow.resolve_offline(hostname)
+    )  # SSH-only; see mint()
+
 
 @_app.command()
 def wait_sentinel(hostname: str) -> None:
-    workflow.step_wait_for_sentinel(workflow.resolve_offline(hostname))  # SSH-only; see mint()
+    workflow.step_wait_for_sentinel(
+        workflow.resolve_offline(hostname)
+    )  # SSH-only; see mint()
 
 
 @_app.command()
 def add_to_group(
     hostname: str,
     group_id: int = typer.Option(
-        0, "--group-id", help="Assignment group to ADD to (default: settings.bootstrap_group_id)."
+        0,
+        "--group-id",
+        help="Assignment group to ADD to (default: settings.bootstrap_group_id).",
     ),
     quarantine_on_register: bool = typer.Option(
         False,
@@ -258,8 +293,10 @@ def add_to_group(
 @_app.command()
 def pkg_audit(
     include_store: bool = typer.Option(
-        False, "--include-store", help="Also consider apple-store apps (noisy; they reach devices "
-        "by other means)."
+        False,
+        "--include-store",
+        help="Also consider apple-store apps (noisy; they reach devices "
+        "by other means).",
     ),
 ) -> None:
     """Which uploaded pkgs is no assignment group carrying? (read-only)
@@ -273,9 +310,13 @@ def pkg_audit(
 
 @_app.command()
 def pkg_attach(
-    app: str = typer.Argument(..., help="App id, or a unique substring of its name/bundle id."),
+    app: str = typer.Argument(
+        ..., help="App id, or a unique substring of its name/bundle id."
+    ),
     group_id: int = typer.Option(
-        0, "--group-id", help="Group to attach to (default: settings.bootstrap_group_id)."
+        0,
+        "--group-id",
+        help="Group to attach to (default: settings.bootstrap_group_id).",
     ),
     push: bool = typer.Option(
         False,
@@ -298,16 +339,24 @@ def group_parity(
         0, "--group-id", help="Group to check (default: settings.bootstrap_group_id)."
     ),
     reference_group_id: int = typer.Option(
-        0, "--reference-group-id", help="Group to measure against (default: settings.reference_group_id)."
+        0,
+        "--reference-group-id",
+        help="Group to measure against (default: settings.reference_group_id).",
     ),
     reference_sample: int = typer.Option(
-        0, "--reference-sample", help="Reference devices to intersect for the baseline (default 5)."
+        0,
+        "--reference-sample",
+        help="Reference devices to intersect for the baseline (default 5).",
     ),
     max_devices: int = typer.Option(
-        0, "--max-devices", help="Check only the first N devices of the group (default: all)."
+        0,
+        "--max-devices",
+        help="Check only the first N devices of the group (default: all).",
     ),
     host: str = typer.Option(
-        "", "--host", help="Check one host instead of the whole group (needs SSH, to read its serial)."
+        "",
+        "--host",
+        help="Check one host instead of the whole group (needs SSH, to read its serial).",
     ),
 ) -> None:
     """Do this group's hosts get the profiles a working production host gets? (read-only)
@@ -344,7 +393,8 @@ def validate(
     the last puppet run, and the worker. Exits 2 if the host hasn't bootstrapped yet, 1 if unfit.
     """
     workflow.step_validate(
-        workflow.resolve_offline(hostname), expected_refresh_hz=expected_refresh_hz or None
+        workflow.resolve_offline(hostname),
+        expected_refresh_hz=expected_refresh_hz or None,
     )
 
 
@@ -372,7 +422,9 @@ def demo(
         help="Which replay: reprovision (EACS an existing host) | provision (fresh DEP host) | "
         "batch (the hardware-refresh rollout).",
     ),
-    host: str = typer.Option("", "--host", help="Hostname to show on screen (default: per-flow)."),
+    host: str = typer.Option(
+        "", "--host", help="Hostname to show on screen (default: per-flow)."
+    ),
 ) -> None:
     """Play a safe, no-host replay of a flow — for live demos (touches nothing).
 

@@ -20,7 +20,12 @@ from .config import get_settings
 from .errors import NotReadyError, ReprovisionError
 from .hostnames import validate_short
 from .role_map import role_for_hostname
-from .secrets import simplemdm_api_key, ssh_admin_key, ssh_admin_password, tc_credentials
+from .secrets import (
+    simplemdm_api_key,
+    ssh_admin_key,
+    ssh_admin_password,
+    tc_credentials,
+)
 
 
 @dataclass
@@ -31,8 +36,12 @@ class HostContext:
     worker_pool_id: str  # e.g. releng-hardware/gecko-t-osx-1500-m4
     worker_group: str = "mdc1"
     simplemdm_device_id: int | None = None
-    pre_wipe_enrolled_at: str | None = None  # captured by step_wipe; used to detect a *fresh* re-enroll
-    registered: bool = True  # is the worker currently registered in TC? False => skip quarantine/drain
+    pre_wipe_enrolled_at: str | None = (
+        None  # captured by step_wipe; used to detect a *fresh* re-enroll
+    )
+    registered: bool = (
+        True  # is the worker currently registered in TC? False => skip quarantine/drain
+    )
 
 
 _PROD_POOL_BY_ROLE = {
@@ -130,7 +139,9 @@ def check() -> None:
             ui.err(f"{label}: not configured (empty)")
             problems += 1
         else:
-            ui.warn(f"{label}: not configured (optional — only needed for quarantine/drain)")
+            ui.warn(
+                f"{label}: not configured (optional — only needed for quarantine/drain)"
+            )
 
     _try("admin password", ssh_admin_password)
     _try("admin SSH key", ssh_admin_key)
@@ -139,7 +150,9 @@ def check() -> None:
     _try("Taskcluster token", lambda: tc_credentials()[1], required=False)
 
     if problems:
-        raise ReprovisionError(f"{problems} credential(s) didn't resolve — see the ✗ line(s) above")
+        raise ReprovisionError(
+            f"{problems} credential(s) didn't resolve — see the ✗ line(s) above"
+        )
     ui.ok("all credentials resolve — you're good to go")
 
 
@@ -155,6 +168,7 @@ BOOTSTRAP_PKG_PAYLOAD = "/usr/local/sbin/m4-bootstrap.sh"
 # Where the OS-upgrade script is staged when driven over SSH instead of as an MDM script job.
 # /var/root so it is root-only by location as well as by mode.
 OS_UPGRADE_REMOTE = "/var/root/macos-upgrade.sh"
+SCREENCAPTURE_REMOTE = "/var/root/screencapture-approve.sh"
 
 
 def _os_version_matches(actual: str, expected: str) -> bool:
@@ -194,7 +208,10 @@ def step_preflight(
     """
     s = get_settings()
     expected_os = expected_os or s.provision_expected_os
-    ui.step("PREFLIGHT", "verify the host is at its target OS + SIP state before we commit to it")
+    ui.step(
+        "PREFLIGHT",
+        "verify the host is at its target OS + SIP state before we commit to it",
+    )
 
     ui.wire(f"tcp connect {ctx.fqdn}:22  (fresh DEP hosts come up over ~15 min)")
     try:
@@ -210,7 +227,9 @@ def step_preflight(
     cp = ssh.run(ctx.fqdn, "sw_vers -productVersion", check=False)
     actual_os = cp.stdout.decode(errors="replace").strip()
     if cp.returncode != 0 or not actual_os:
-        raise NotReadyError(f"{ctx.fqdn}: couldn't read the OS version over ssh (admin key installed yet?)")
+        raise NotReadyError(
+            f"{ctx.fqdn}: couldn't read the OS version over ssh (admin key installed yet?)"
+        )
     if not _os_version_matches(actual_os, expected_os):
         raise NotReadyError(
             f"{ctx.fqdn}: macOS {actual_os}, expected {expected_os} — let the MDM in-place update "
@@ -231,7 +250,11 @@ def step_preflight(
             "PPPC/system-DB-read-only branch on a role that has no PPPC profile. Disable SIP in "
             "Recovery first, or pass --allow-sip-enabled if this host is meant to be SIP-on"
         )
-    ui.ok("SIP disabled" if sip_disabled else f"SIP enabled — allowed by request ({sip_raw})")
+    ui.ok(
+        "SIP disabled"
+        if sip_disabled
+        else f"SIP enabled — allowed by request ({sip_raw})"
+    )
 
     # Informational: mint/escrow handle both of these, so they gate nothing. Printed because
     # "already ENABLED / already escrowed" is the difference between a fresh host and one
@@ -240,7 +263,9 @@ def step_preflight(
     ui.info(f"admin SecureToken: {token or 'unknown'} (mint will grant it if needed)")
     cp = ssh.run(ctx.fqdn, "sudo profiles status -type bootstraptoken", check=False)
     escrowed = b"escrowed to server: YES" in cp.stdout
-    ui.info(f"Bootstrap Token escrowed: {'YES' if escrowed else 'no — escrow step will fix'}")
+    ui.info(
+        f"Bootstrap Token escrowed: {'YES' if escrowed else 'no — escrow step will fix'}"
+    )
 
     # Reported, NOT gated. In the intended rollout order the readiness sweep runs BEFORE hosts
     # are moved into the bootstrap group, so the pkg is legitimately absent here and failing on
@@ -252,7 +277,9 @@ def step_preflight(
         " (installed by bootstrap-group membership)"
     )
     if ssh.file_exists(ctx.fqdn, SENTINEL):
-        ui.warn(f"sentinel {SENTINEL} already present — this host has bootstrapped before")
+        ui.warn(
+            f"sentinel {SENTINEL} already present — this host has bootstrapped before"
+        )
 
 
 def _resolve_mdm_device(ctx: HostContext) -> dict:
@@ -271,7 +298,9 @@ def _resolve_mdm_device(ctx: HostContext) -> dict:
     """
     serial = ssh.platform_serial(ctx.fqdn)
     if serial:
-        ui.info(f"serial {serial} (from the host — SimpleMDM doesn't know its hostname)")
+        ui.info(
+            f"serial {serial} (from the host — SimpleMDM doesn't know its hostname)"
+        )
         device = simplemdm.find_device_by_serial(serial)
         if device is not None:
             return device
@@ -311,7 +340,10 @@ def step_add_to_group(
     """
     s = get_settings()
     gid = group_id or s.bootstrap_group_id
-    ui.step("ADD TO GROUP", f"SimpleMDM assignment group {gid} — this is what triggers the bootstrap")
+    ui.step(
+        "ADD TO GROUP",
+        f"SimpleMDM assignment group {gid} — this is what triggers the bootstrap",
+    )
 
     group = simplemdm.get_assignment_group(gid)
     name = group.get("attributes", {}).get("name", "?")
@@ -342,7 +374,9 @@ def step_add_to_group(
                 "ran on this host. Push the group's apps from SimpleMDM, or remove and re-add it."
             )
     else:
-        ui.wire(f"POST /assignment_groups/{gid}/devices/{device_id}   (additive; never a move)")
+        ui.wire(
+            f"POST /assignment_groups/{gid}/devices/{device_id}   (additive; never a move)"
+        )
         simplemdm.add_device_to_assignment_group(gid, device_id)
         ui.wire(f"POST /assignment_groups/{gid}/push_apps")
         simplemdm.push_apps(gid)
@@ -356,7 +390,8 @@ def step_add_to_group(
         s2 = get_settings()
         step_quarantine_on_register(
             ctx,
-            max_wait_seconds=s2.bootstrap_max_wait_seconds + s2.quarantine_on_register_max_wait_seconds,
+            max_wait_seconds=s2.bootstrap_max_wait_seconds
+            + s2.quarantine_on_register_max_wait_seconds,
         )
 
 
@@ -411,7 +446,10 @@ def _membership_outliers(
         other = int(group["id"])
         if other == gid:
             continue
-        ids = {int(d["id"]) for d in group.get("relationships", {}).get("devices", {}).get("data", [])}
+        ids = {
+            int(d["id"])
+            for d in group.get("relationships", {}).get("devices", {}).get("data", [])
+        }
         if len([d for d in target_ids if d in ids]) < quorum:
             continue
         missing = [d for d in target_ids if d not in ids]
@@ -468,7 +506,10 @@ def step_group_parity(
     ref_gid = reference_group_id or s.reference_group_id
     n_sample = reference_sample or s.group_parity_reference_sample
 
-    ui.step("GROUP PARITY", "do these hosts get the profiles a working prod host gets? (read-only)")
+    ui.step(
+        "GROUP PARITY",
+        "do these hosts get the profiles a working prod host gets? (read-only)",
+    )
 
     if gid == ref_gid:
         raise ReprovisionError(
@@ -476,7 +517,9 @@ def step_group_parity(
             "--reference-group-id to measure against a different group."
         )
 
-    ref_name = simplemdm.get_assignment_group(ref_gid).get("attributes", {}).get("name", "?")
+    ref_name = (
+        simplemdm.get_assignment_group(ref_gid).get("attributes", {}).get("name", "?")
+    )
     ref_devices = simplemdm.assignment_group_device_ids(ref_gid)[:n_sample]
     if not ref_devices:
         raise ReprovisionError(
@@ -487,7 +530,11 @@ def step_group_parity(
     baseline: dict[int, str] | None = None
     for did in ref_devices:
         profiles = simplemdm.device_profiles(did)
-        baseline = profiles if baseline is None else {i: n for i, n in baseline.items() if i in profiles}
+        baseline = (
+            profiles
+            if baseline is None
+            else {i: n for i, n in baseline.items() if i in profiles}
+        )
     assert baseline is not None
     ui.info(
         f"baseline: {len(baseline)} profile(s) common to {len(ref_devices)} device(s) "
@@ -505,7 +552,9 @@ def step_group_parity(
         targets = [(hostname, int(device["id"]))]
         ui.info(f"checking {hostname} (device {targets[0][1]})")
     else:
-        name = simplemdm.get_assignment_group(gid).get("attributes", {}).get("name", "?")
+        name = (
+            simplemdm.get_assignment_group(gid).get("attributes", {}).get("name", "?")
+        )
         ids = simplemdm.assignment_group_device_ids(gid)
         if not ids:
             raise ReprovisionError(f"group {gid} ({name}) has no devices to check")
@@ -534,9 +583,15 @@ def step_group_parity(
 
     # Second, independent question: is any device missing a GROUP its peers are all in? Catches
     # the mis-clicked move, including the app-bearing groups a profile diff cannot see.
-    outliers = _membership_outliers(gid, [did for _label, did in targets]) if not hostname else {}
+    outliers = (
+        _membership_outliers(gid, [did for _label, did in targets])
+        if not hostname
+        else {}
+    )
     if outliers:
-        ui.warn(f"{len(outliers)} group(s) that most of these devices are in, some are not")
+        ui.warn(
+            f"{len(outliers)} group(s) that most of these devices are in, some are not"
+        )
     elif not hostname:
         ui.ok("group membership is consistent across the group")
 
@@ -548,9 +603,15 @@ def step_group_parity(
 
     if gaps:
         lines = []
-        for pid, (pname, lacking) in sorted(gaps.items(), key=lambda kv: -len(kv[1][1])):
-            why = next((story for stem, story in _LOAD_BEARING_PROFILES if stem in pname), "")
-            line = f"{pname} (profile {pid}) — missing on {len(lacking)}/{total} device(s)"
+        for pid, (pname, lacking) in sorted(
+            gaps.items(), key=lambda kv: -len(kv[1][1])
+        ):
+            why = next(
+                (story for stem, story in _LOAD_BEARING_PROFILES if stem in pname), ""
+            )
+            line = (
+                f"{pname} (profile {pid}) — missing on {len(lacking)}/{total} device(s)"
+            )
             if len(lacking) <= 3:
                 line += "\n      " + "\n      ".join(
                     _device_label(d) for _l, d in targets if _l in lacking
@@ -559,12 +620,15 @@ def step_group_parity(
                 line += f"\n      ^ {why}"
             lines.append(line)
         sections.append(
-            f"profile parity gap against {ref_gid} ({ref_name}):\n  - " + "\n  - ".join(lines)
+            f"profile parity gap against {ref_gid} ({ref_name}):\n  - "
+            + "\n  - ".join(lines)
         )
 
     if outliers:
         lines = []
-        for other, (oname, missing) in sorted(outliers.items(), key=lambda kv: -len(kv[1][1])):
+        for other, (oname, missing) in sorted(
+            outliers.items(), key=lambda kv: -len(kv[1][1])
+        ):
             lines.append(
                 f"{oname} ({other}) — {total - len(missing)}/{total} of these devices are in it, "
                 f"{len(missing)} are not:\n      "
@@ -595,12 +659,15 @@ def _resolve_app(spec: str) -> dict:
 
     needle = spec.lower()
     hits = [
-        a for a in catalog
+        a
+        for a in catalog
         if needle in (a.get("attributes", {}).get("name") or "").lower()
         or needle in (a.get("attributes", {}).get("bundle_identifier") or "").lower()
     ]
     if not hits:
-        raise ReprovisionError(f"no app matching {spec!r} — check the name or pass the numeric id")
+        raise ReprovisionError(
+            f"no app matching {spec!r} — check the name or pass the numeric id"
+        )
     if len(hits) > 1:
         listed = "\n  ".join(
             f"{a['id']}  {a['attributes'].get('name')!r}  {a['attributes'].get('bundle_identifier')}"
@@ -644,9 +711,13 @@ def step_pkg_audit(*, include_store: bool = False) -> None:
             carried.setdefault(int(app["id"]), []).append(f"{group['id']} ({gname})")
 
     everything = simplemdm.apps()
-    catalog = everything if include_store else [
-        a for a in everything if a.get("attributes", {}).get("app_type") == "custom"
-    ]
+    catalog = (
+        everything
+        if include_store
+        else [
+            a for a in everything if a.get("attributes", {}).get("app_type") == "custom"
+        ]
+    )
     scope = "app(s)" if include_store else "custom pkg(s)"
     ui.info(
         f"{len(catalog)} {scope} in the account "
@@ -667,17 +738,22 @@ def step_pkg_audit(*, include_store: bool = False) -> None:
     # ff-ent), and puppet-agent's ARM and Intel builds share com.puppetlabs.puppet-agent. Flagging
     # those buried the one real case. A duplicate that includes a stray upload is the smell.
     dupes = {
-        b: v for b, v in by_bundle.items()
+        b: v
+        for b, v in by_bundle.items()
         if len(v) > 1 and any(int(a["id"]) not in carried for a in v)
     }
     if dupes:
-        ui.warn(f"{len(dupes)} bundle id(s) uploaded more than once with a copy attached to nothing:")
+        ui.warn(
+            f"{len(dupes)} bundle id(s) uploaded more than once with a copy attached to nothing:"
+        )
         for bundle, group in sorted(dupes.items()):
             ui.warn(f"    {bundle}")
             for a in sorted(group, key=lambda a: int(a["id"])):
                 where = carried.get(int(a["id"]))
-                ui.warn(f"        {a['id']}  {a['attributes'].get('name')!r}  "
-                        f"{'carried by ' + ', '.join(where) if where else 'ATTACHED TO NOTHING'}")
+                ui.warn(
+                    f"        {a['id']}  {a['attributes'].get('name')!r}  "
+                    f"{'carried by ' + ', '.join(where) if where else 'ATTACHED TO NOTHING'}"
+                )
 
     orphans = [a for a in catalog if int(a["id"]) not in carried]
     if not orphans:
@@ -687,11 +763,15 @@ def step_pkg_audit(*, include_store: bool = False) -> None:
     ui.warn(f"{len(orphans)} {scope} attached to NOTHING — uploaded but inert:")
     for a in sorted(orphans, key=lambda a: int(a["id"])):
         at = a.get("attributes", {})
-        ui.warn(f"    {a['id']}  {at.get('name')!r}  bundle={at.get('bundle_identifier')}")
+        ui.warn(
+            f"    {a['id']}  {at.get('name')!r}  bundle={at.get('bundle_identifier')}"
+        )
     ui.info("attach one with:  reprovision pkg-attach <id> --group-id <group>")
 
 
-def step_pkg_attach(app_spec: str, *, group_id: int | None = None, push: bool = False) -> None:
+def step_pkg_attach(
+    app_spec: str, *, group_id: int | None = None, push: bool = False
+) -> None:
     """Attach an uploaded pkg to an assignment group, then VERIFY the group really carries it.
 
     Verifies by re-reading the group rather than trusting the POST, for the same reason
@@ -745,7 +825,9 @@ def step_pkg_attach(app_spec: str, *, group_id: int | None = None, push: bool = 
     ui.ok(f"verified: {gname} carries app {aid} (group now has {len(after)} app(s))")
 
 
-def step_validate(ctx: HostContext, *, expected_refresh_hz: float | None = None) -> None:
+def step_validate(
+    ctx: HostContext, *, expected_refresh_hz: float | None = None
+) -> None:
     """Read-only fitness check on a bootstrapped host: is it actually able to run tasks?
 
     This fills the gap the quarantine message already promises. `--quarantine-on-register` holds a
@@ -776,7 +858,9 @@ def step_validate(ctx: HostContext, *, expected_refresh_hz: float | None = None)
     problems: list[str] = []
 
     # The display check first: it's the one that passes every other signal and still eats tasks.
-    ui.wire(f"ssh admin@{ctx.hostname} launchctl asuser $(id -u cltbld) … CGDisplayModeGetRefreshRate")
+    ui.wire(
+        f"ssh admin@{ctx.hostname} launchctl asuser $(id -u cltbld) … CGDisplayModeGetRefreshRate"
+    )
     mode = ssh.display_mode(ctx.fqdn)
     if mode is None:
         # Unknown, not fine. A host whose GUI session we can't reach can't run tests either.
@@ -794,26 +878,38 @@ def step_validate(ctx: HostContext, *, expected_refresh_hz: float | None = None)
                 "task on this before running a single test. Usually the KVM isn't set correctly."
             )
 
-    puppet_ok = ssh.run(
-        ctx.fqdn,
-        "sudo grep -o '\"success\": [a-z]*' /opt/puppet_environments/last_run_metadata.json "
-        "2>/dev/null | head -1 | awk '{print $2}'",
-        check=False,
-    ).stdout.decode(errors="replace").strip()
+    puppet_ok = (
+        ssh.run(
+            ctx.fqdn,
+            "sudo grep -o '\"success\": [a-z]*' /opt/puppet_environments/last_run_metadata.json "
+            "2>/dev/null | head -1 | awk '{print $2}'",
+            check=False,
+        )
+        .stdout.decode(errors="replace")
+        .strip()
+    )
     if puppet_ok == "true":
         ui.ok("last puppet run succeeded")
     else:
         problems.append(f"last puppet run reported success={puppet_ok or 'unknown'}")
 
-    worker_up = ssh.run(
-        ctx.fqdn, "pgrep -f 'start-worker ' >/dev/null && echo up || echo down", check=False
-    ).stdout.decode(errors="replace").strip()
+    worker_up = (
+        ssh.run(
+            ctx.fqdn,
+            "pgrep -f 'start-worker ' >/dev/null && echo up || echo down",
+            check=False,
+        )
+        .stdout.decode(errors="replace")
+        .strip()
+    )
     if worker_up == "up":
         ui.ok("generic-worker is running")
     else:
         # Not fatal on its own: these hosts reboot between tasks, so a down worker can just mean
         # we caught it mid-cycle. Report it without failing the host on timing alone.
-        ui.warn("generic-worker isn't running right now (may be mid-reboot between tasks)")
+        ui.warn(
+            "generic-worker isn't running right now (may be mid-reboot between tasks)"
+        )
 
     if problems:
         raise ReprovisionError(
@@ -845,7 +941,10 @@ def step_wait_for_bootstrap_pkg(ctx: HostContext) -> None:
         ui.ok("host has already bootstrapped — pkg check not needed")
         return
 
-    ui.step("BOOTSTRAP PKG", "confirm the signed pkg landed — i.e. the host is in the bootstrap group")
+    ui.step(
+        "BOOTSTRAP PKG",
+        "confirm the signed pkg landed — i.e. the host is in the bootstrap group",
+    )
     ui.wire(f"ssh admin@{ctx.hostname} test -f {BOOTSTRAP_PKG_PAYLOAD}")
     deadline = time.monotonic() + s.bootstrap_pkg_max_wait_seconds
     found = False
@@ -878,9 +977,14 @@ def _os_upgrade_script(expected_os: str) -> str:
     from importlib import resources
 
     body = (resources.files("orchestrator") / "data" / "macos-upgrade.sh").read_text()
-    body = body.replace('ADMIN_PASSWORD="INSERT_HERE"', f'ADMIN_PASSWORD={shlex.quote(ssh_admin_password())}')
+    body = body.replace(
+        'ADMIN_PASSWORD="INSERT_HERE"',
+        f"ADMIN_PASSWORD={shlex.quote(ssh_admin_password())}",
+    )
     if expected_os:
-        body = body.replace('TARGET_VERSION="15.3"', f'TARGET_VERSION={shlex.quote(expected_os)}')
+        body = body.replace(
+            'TARGET_VERSION="15.3"', f"TARGET_VERSION={shlex.quote(expected_os)}"
+        )
     return body
 
 
@@ -904,7 +1008,10 @@ def step_os_update(ctx: HostContext, *, expected_os: str = "") -> None:
     """
     s = get_settings()
     expected_os = expected_os or s.provision_expected_os
-    ui.step("OS UPDATE", f"in-place upgrade to macOS {expected_os} — launches, then the host reboots itself")
+    ui.step(
+        "OS UPDATE",
+        f"in-place upgrade to macOS {expected_os} — launches, then the host reboots itself",
+    )
 
     with ui.waiting("waiting for sshd"):
         ssh.wait_for_sshd(ctx.fqdn, timeout=s.preflight_sshd_wait_seconds)
@@ -916,44 +1023,72 @@ def step_os_update(ctx: HostContext, *, expected_os: str = "") -> None:
         return
 
     ui.wire(f"scp → {OS_UPGRADE_REMOTE} (0700, credential substituted from the vault)")
-    ssh.write_file_as_root(ctx.fqdn, OS_UPGRADE_REMOTE, _os_upgrade_script(expected_os).encode(), mode="0700")
+    ssh.write_file_as_root(
+        ctx.fqdn,
+        OS_UPGRADE_REMOTE,
+        _os_upgrade_script(expected_os).encode(),
+        mode="0700",
+    )
 
     # Detached: the download alone outlives any sane ssh timeout, and the script ends in a
     # reboot that would kill the channel anyway. setsid+nohup so it survives our disconnect.
-    ui.wire(f"ssh admin@{ctx.hostname} sudo nohup {OS_UPGRADE_REMOTE} (detached; log /var/log/macos-upgrade.log)")
-    ssh.run(ctx.fqdn, f"sudo /usr/bin/nohup {OS_UPGRADE_REMOTE} >/dev/null 2>&1 & echo launched", check=False)
+    ui.wire(
+        f"ssh admin@{ctx.hostname} sudo nohup {OS_UPGRADE_REMOTE} (detached; log /var/log/macos-upgrade.log)"
+    )
+    ssh.run(
+        ctx.fqdn,
+        f"sudo /usr/bin/nohup {OS_UPGRADE_REMOTE} >/dev/null 2>&1 & echo launched",
+        check=False,
+    )
 
     # Confirm it actually started rather than dying on a precondition — the script's own guards
     # (placeholder credential, no SecureToken, low disk) all fail within a second or two.
     time.sleep(5)
-    cp = ssh.run(ctx.fqdn, "sudo tail -5 /var/log/macos-upgrade.log 2>/dev/null", check=False)
+    cp = ssh.run(
+        ctx.fqdn, "sudo tail -5 /var/log/macos-upgrade.log 2>/dev/null", check=False
+    )
     tail = cp.stdout.decode(errors="replace").strip()
     if "[ERROR]" in tail:
-        raise NotReadyError(f"{ctx.fqdn}: upgrade refused to start —\n    " + tail.replace("\n", "\n    "))
+        raise NotReadyError(
+            f"{ctx.fqdn}: upgrade refused to start —\n    "
+            + tail.replace("\n", "\n    ")
+        )
     ui.ok(f"upgrade launched — macOS {current or 'unknown'} → {expected_os}")
-    ui.info("host downloads ~14GB, installs, then reboots into startosinstall (tens of minutes)")
+    ui.info(
+        "host downloads ~14GB, installs, then reboots into startosinstall (tens of minutes)"
+    )
     ui.info("confirm arrival later with: reprovision batch <file> --action preflight")
 
 
 def step_quarantine(ctx: HostContext, until: str | None = None, info: str = "") -> None:
     if not until:
-        until = (datetime.now(timezone.utc) + timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        until = (datetime.now(timezone.utc) + timedelta(days=365)).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z"
+        )
     ui.step("QUARANTINE", "tell Taskcluster to stop scheduling tasks on this worker")
-    ui.wire(f"PUT queue/v1 quarantineWorker {ctx.worker_pool_id}/{ctx.worker_group}/{ctx.hostname}")
-    taskcluster.quarantine(ctx.worker_pool_id, ctx.worker_group, ctx.hostname, until, info)
+    ui.wire(
+        f"PUT queue/v1 quarantineWorker {ctx.worker_pool_id}/{ctx.worker_group}/{ctx.hostname}"
+    )
+    taskcluster.quarantine(
+        ctx.worker_pool_id, ctx.worker_group, ctx.hostname, until, info
+    )
     ui.ok(f"quarantined until {until[:10]}")
 
 
 def step_drain(ctx: HostContext) -> None:
     s = get_settings()
-    ui.step("DRAIN", "let the worker finish its in-flight task (2 consecutive idle polls)")
+    ui.step(
+        "DRAIN", "let the worker finish its in-flight task (2 consecutive idle polls)"
+    )
     ui.wire(f"queue.getWorker {ctx.hostname} → inspect recentTasks run states")
     deadline = time.monotonic() + s.drain_max_wait_seconds
     consecutive_idle = 0
     drained = False
     with ui.waiting("checking for an active task") as tick:
         while time.monotonic() < deadline:
-            busy = taskcluster.is_currently_busy(ctx.worker_pool_id, ctx.worker_group, ctx.hostname)
+            busy = taskcluster.is_currently_busy(
+                ctx.worker_pool_id, ctx.worker_group, ctx.hostname
+            )
             if not busy:
                 consecutive_idle += 1
                 # Require 2 consecutive idle polls so we don't race a worker that's
@@ -977,7 +1112,10 @@ def step_wipe(ctx: HostContext) -> None:
         raise ReprovisionError(f"{ctx.hostname} not found in SimpleMDM")
     # A prior EACS may have rotated this host's SSH key; clear any stale entry from the tool's
     # known_hosts so the verify connection accept-new's the current key instead of failing.
-    ui.step("WIPE · EACS", "Erase All Content & Settings — DoNotObliterate (fails safe, never obliterates)")
+    ui.step(
+        "WIPE · EACS",
+        "Erase All Content & Settings — DoNotObliterate (fails safe, never obliterates)",
+    )
     ssh.forget_host_key(ctx.fqdn)
     # Guard: EACS needs an escrowed Bootstrap Token. Without it, the erase either fails
     # (DoNotObliterate) or full-obliterates into a long headless macOS reinstall. Refuse to
@@ -1020,7 +1158,9 @@ def step_wipe(ctx: HostContext) -> None:
     # (Previously this failed OPEN — warn + proceed — which let a running worker get wiped.)
     ui.wire(f"queue.getWorker {ctx.hostname} → confirm no task in flight")
     try:
-        busy = taskcluster.is_currently_busy(ctx.worker_pool_id, ctx.worker_group, ctx.hostname)
+        busy = taskcluster.is_currently_busy(
+            ctx.worker_pool_id, ctx.worker_group, ctx.hostname
+        )
     except Exception as e:  # noqa: BLE001 — any TC/auth failure → can't verify idle → refuse to wipe
         raise ReprovisionError(
             f"{ctx.hostname}: couldn't confirm the worker is idle via Taskcluster ({e}) — refusing "
@@ -1035,8 +1175,14 @@ def step_wipe(ctx: HostContext) -> None:
     ui.ok("no task in flight")
     # Record the current enrolled_at so wait_for_reenroll can detect a *fresh* enrollment
     # (status alone is unreliable: it stays "enrolled" until the erase actually executes).
-    ctx.pre_wipe_enrolled_at = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {}).get("enrolled_at")
-    ui.wire(f"SimpleMDM POST /devices/{ctx.simplemdm_device_id}/wipe  obliteration_behavior=DoNotObliterate")
+    ctx.pre_wipe_enrolled_at = (
+        simplemdm.get_device(ctx.simplemdm_device_id)
+        .get("attributes", {})
+        .get("enrolled_at")
+    )
+    ui.wire(
+        f"SimpleMDM POST /devices/{ctx.simplemdm_device_id}/wipe  obliteration_behavior=DoNotObliterate"
+    )
     simplemdm.wipe(ctx.simplemdm_device_id)
     ui.ok("erase command accepted by SimpleMDM")
 
@@ -1048,9 +1194,15 @@ def step_wait_for_reenroll(ctx: HostContext) -> None:
     # so we don't false-return on the pre-wipe enrollment (status lags the erase).
     baseline = ctx.pre_wipe_enrolled_at
     if baseline is None:
-        baseline = simplemdm.get_device(ctx.simplemdm_device_id).get("attributes", {}).get("enrolled_at")
+        baseline = (
+            simplemdm.get_device(ctx.simplemdm_device_id)
+            .get("attributes", {})
+            .get("enrolled_at")
+        )
     ui.step("RE-ENROLL", "erase → reboot → DEP re-enrollment · typically ~5 min")
-    ui.wire(f"SimpleMDM GET /devices/{ctx.simplemdm_device_id}  (poll enrolled_at ≠ {baseline})")
+    ui.wire(
+        f"SimpleMDM GET /devices/{ctx.simplemdm_device_id}  (poll enrolled_at ≠ {baseline})"
+    )
     deadline = time.monotonic() + s.wipe_max_wait_seconds
     start = time.monotonic()
     next_poll = 0.0
@@ -1096,7 +1248,10 @@ def step_mint(ctx: HostContext) -> None:
     by A/B on m4-81 (2026-07-02): with this login the bootstrap finishes; without it,
     it wedges at the BST wait-loop and times out. Idempotent — skips if already ENABLED.
     """
-    ui.step("MINT SECURETOKEN", "DEP skips Setup Assistant, so admin has no token until an interactive login")
+    ui.step(
+        "MINT SECURETOKEN",
+        "DEP skips Setup Assistant, so admin has no token until an interactive login",
+    )
     # The box just re-enrolled post-EACS with a fresh host key; forget the old one so the
     # SecureToken status check (which uses ssh.run) doesn't fail on a key mismatch.
     ssh.forget_host_key(ctx.fqdn)
@@ -1105,7 +1260,9 @@ def step_mint(ctx: HostContext) -> None:
     if "ENABLED" in ssh.secure_token_status(ctx.fqdn):
         ui.ok("admin already holds a SecureToken — skipping mint")
         return
-    ui.wire(f"expect: ssh admin@{ctx.hostname} (keyboard-interactive PAM login → grants first SecureToken)")
+    ui.wire(
+        f"expect: ssh admin@{ctx.hostname} (keyboard-interactive PAM login → grants first SecureToken)"
+    )
     ssh.password_login(ctx.fqdn)
     enabled = False
     with ui.waiting("verifying the SecureToken came up ENABLED") as tick:
@@ -1130,8 +1287,12 @@ def step_escrow_bst(ctx: HostContext) -> None:
     exists, so on the pre-minted path this step is what actually escrows the BST.
     """
     s = get_settings()
-    ui.step("ESCROW BOOTSTRAP TOKEN", "escrow the BST so this box is EACS-able next cycle")
-    ui.wire(f"ssh admin@{ctx.hostname} sudo profiles install -type bootstraptoken -user {s.ssh_admin_user} -password ••••••")
+    ui.step(
+        "ESCROW BOOTSTRAP TOKEN", "escrow the BST so this box is EACS-able next cycle"
+    )
+    ui.wire(
+        f"ssh admin@{ctx.hostname} sudo profiles install -type bootstraptoken -user {s.ssh_admin_user} -password ••••••"
+    )
     install_cmd = (
         f"sudo profiles install -type bootstraptoken "
         f"-user {s.ssh_admin_user} -password {shlex.quote(ssh_admin_password())}"
@@ -1140,21 +1301,120 @@ def step_escrow_bst(ctx: HostContext) -> None:
         ssh.run(ctx.fqdn, install_cmd)
     except ReprovisionError as e:
         # ssh.run already scrubs the command (which embeds the password); add a mint hint.
-        raise ReprovisionError(f"{e}\n    (has admin minted a SecureToken? run `reprovision mint` first)") from None
+        raise ReprovisionError(
+            f"{e}\n    (has admin minted a SecureToken? run `reprovision mint` first)"
+        ) from None
     cp = ssh.run(ctx.fqdn, "sudo profiles status -type bootstraptoken")
     if b"escrowed to server: YES" not in cp.stdout:
         raise ReprovisionError(f"BST escrow check failed:\n{cp.stdout.decode()}")
     ui.ok("Bootstrap Token escrowed to server")
 
 
+def _screencapture_script() -> str:
+    """The packaged approval script with the admin credential substituted in.
+
+    Same delivery as _os_upgrade_script: resolved from the vault at fire time and
+    written to the host over ssh, so the password never sits in SimpleMDM and never
+    appears in an argv.
+    """
+    from importlib import resources
+
+    s = get_settings()
+    body = (
+        resources.files("orchestrator") / "data" / "screencapture-approve.sh"
+    ).read_text()
+    body = body.replace(
+        'ADMIN_USER="INSERT_USER_HERE"', f"ADMIN_USER={shlex.quote(s.ssh_admin_user)}"
+    )
+    body = body.replace(
+        'ADMIN_PASSWORD="INSERT_HERE"',
+        f"ADMIN_PASSWORD={shlex.quote(ssh_admin_password())}",
+    )
+    return body
+
+
+def step_screencapture_grant(ctx: HostContext) -> None:
+    """Grant Screen Recording to the worker binaries. SIP-on hosts only; no-op elsewhere.
+
+    Bug 2073303. kTCCServiceScreenCapture is system-scoped, so the grant lives only in
+    the SIP-protected system TCC database. ronin's macos_tcc_perms writes that database
+    directly, which works only while SIP is off; on a SIP-on host the write fails
+    silently and its user-database fallback is inert, because TCC never reads this
+    service from a user database. The host then fails every getDisplayMedia() call with
+    SCStreamErrorUserDeclined (-3801) for its whole life, visible only as an intermittent
+    orange -- 42 of 174 hosts in gecko-t-osx-1500-m4 were in that state, which is what
+    made bug 1937556 look like flakiness for 30 days.
+
+    This belongs in the provisioning path rather than in puppet for two reasons: the
+    approval needs an administrator-authenticated click that puppet has no credential
+    for, and EACS re-enables SIP and wipes TCC, so a reprovisioned host comes back
+    without the grant. Running it here is what stops today's fleet-wide fix decaying
+    one host at a time.
+
+    Exit 3 from the script means "not applicable / not now" (SIP off, host busy, no
+    console session) and is reported, not raised -- the host is still fine to hand back,
+    and the ronin detector (macos_screencapture_check) will keep the gap visible.
+    """
+    ui.step(
+        "SCREEN RECORDING",
+        "grant the worker binaries ScreenCapture TCC (SIP-on hosts only)",
+    )
+    ui.wire(
+        f"scp -> {SCREENCAPTURE_REMOTE} (0700, credential substituted from the vault)"
+    )
+    ssh.write_file_as_root(
+        ctx.fqdn, SCREENCAPTURE_REMOTE, _screencapture_script().encode(), mode="0700"
+    )
+
+    ui.wire(
+        f"ssh admin@{ctx.hostname} sudo {SCREENCAPTURE_REMOTE}  (drives System Settings as cltbld)"
+    )
+    cp = ssh.run(ctx.fqdn, f"sudo {SCREENCAPTURE_REMOTE}; echo rc=$?", check=False)
+    out = cp.stdout.decode(errors="replace").strip()
+    ssh.run(ctx.fqdn, f"sudo rm -f {SCREENCAPTURE_REMOTE}", check=False)
+
+    rc = 1
+    for line in out.splitlines():
+        if line.startswith("rc="):
+            rc = int(line[3:] or 1)
+
+    if rc == 0:
+        ui.ok("Screen Recording granted (auth_value 2, flags 0)")
+        return
+    if rc == 3:
+        reason = next(
+            (ln for ln in out.splitlines() if ln.startswith("[SKIP]")),
+            "[SKIP] not applicable",
+        )
+        ui.warn(reason.replace("[SKIP] ", "skipped: "))
+        return
+    raise ReprovisionError(
+        f"{ctx.fqdn}: Screen Recording grant failed -\n    "
+        + out.replace("\n", "\n    ")
+    )
+
+
 def step_wait_for_sentinel(ctx: HostContext) -> None:
     s = get_settings()
-    ui.step("BOOTSTRAP", "the freshly-enrolled host provisions itself — zero operator SSH from here")
-    ui.wire("signed bootstrap PKG (managed install) lands via SimpleMDM during DEP convergence")
-    ui.wire("→ host fetches its vault.yaml over mTLS from the forge LB (step-ca SCEP client cert)")
-    ui.wire(f"→ puppet apply: role {ctx.role} — generic-worker, users, TCC perms, launch daemons")
-    ui.wire("→ generic-worker self-registers with Taskcluster (Hawk) and starts claiming work")
-    ui.wire(f"ssh admin@{ctx.hostname} test -f {SENTINEL}  (poll for the sentinel it writes)")
+    ui.step(
+        "BOOTSTRAP",
+        "the freshly-enrolled host provisions itself — zero operator SSH from here",
+    )
+    ui.wire(
+        "signed bootstrap PKG (managed install) lands via SimpleMDM during DEP convergence"
+    )
+    ui.wire(
+        "→ host fetches its vault.yaml over mTLS from the forge LB (step-ca SCEP client cert)"
+    )
+    ui.wire(
+        f"→ puppet apply: role {ctx.role} — generic-worker, users, TCC perms, launch daemons"
+    )
+    ui.wire(
+        "→ generic-worker self-registers with Taskcluster (Hawk) and starts claiming work"
+    )
+    ui.wire(
+        f"ssh admin@{ctx.hostname} test -f {SENTINEL}  (poll for the sentinel it writes)"
+    )
     deadline = time.monotonic() + s.bootstrap_max_wait_seconds
     found = False
     with ui.waiting("waiting for the bootstrap sentinel") as tick:
@@ -1169,7 +1429,9 @@ def step_wait_for_sentinel(ctx: HostContext) -> None:
     ui.ok(f"bootstrap complete — {SENTINEL} present")
 
 
-def step_quarantine_on_register(ctx: HostContext, *, max_wait_seconds: int | None = None) -> None:
+def step_quarantine_on_register(
+    ctx: HostContext, *, max_wait_seconds: int | None = None
+) -> None:
     """Wait for a fresh worker to appear in Taskcluster, then quarantine it on sight.
 
     `max_wait_seconds` overrides the default budget. The default is sized for a watch started
@@ -1207,18 +1469,27 @@ def step_quarantine_on_register(ctx: HostContext, *, max_wait_seconds: int | Non
 
     budget = max_wait_seconds or s.quarantine_on_register_max_wait_seconds
     pools = candidate_pools(ctx.role)
-    ui.step("QUARANTINE ON REGISTER", "hold the fresh worker out of the pool the moment it appears")
-    ui.wire(f"queue.getWorker {' | '.join(pools)} / {ctx.worker_group} / {ctx.hostname}  (poll)")
+    ui.step(
+        "QUARANTINE ON REGISTER",
+        "hold the fresh worker out of the pool the moment it appears",
+    )
+    ui.wire(
+        f"queue.getWorker {' | '.join(pools)} / {ctx.worker_group} / {ctx.hostname}  (poll)"
+    )
     ui.info(f"watch budget {budget}s")
 
     deadline = time.monotonic() + budget
     found_pool: str | None = None
     with ui.waiting("waiting for the worker to register with Taskcluster") as tick:
         while time.monotonic() < deadline:
-            found_pool = taskcluster.find_registered_pool(pools, ctx.worker_group, ctx.hostname)
+            found_pool = taskcluster.find_registered_pool(
+                pools, ctx.worker_group, ctx.hostname
+            )
             if found_pool:
                 break
-            tick("not in a pool yet — worker-runner starts generic-worker after the sentinel")
+            tick(
+                "not in a pool yet — worker-runner starts generic-worker after the sentinel"
+            )
             time.sleep(s.quarantine_on_register_poll_seconds)
 
     if not found_pool:
@@ -1230,7 +1501,9 @@ def step_quarantine_on_register(ctx: HostContext, *, max_wait_seconds: int | Non
 
     ctx.worker_pool_id = found_pool
     ui.ok(f"registered in {found_pool}")
-    step_quarantine(ctx, info="fresh host — quarantined on registration pending validation")
+    step_quarantine(
+        ctx, info="fresh host — quarantined on registration pending validation"
+    )
 
 
 def step_unquarantine(ctx: HostContext) -> None:
@@ -1240,7 +1513,9 @@ def step_unquarantine(ctx: HostContext) -> None:
     ui.ok("returned to service")
 
 
-def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = False) -> None:
+def reprovision(
+    hostname: str, *, skip_wipe: bool = False, unquarantine: bool = False
+) -> None:
     """Full E2E workflow. skip_wipe lets operators re-run later steps after a wipe.
 
     unquarantine defaults to False: by design a host stays quarantined through wipe +
@@ -1263,7 +1538,7 @@ def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = 
         phases += ["QUARANTINE", "DRAIN"]
     if not skip_wipe:
         phases += ["WIPE", "RE-ENROLL"]
-    phases += ["MINT", "ESCROW BST", "BOOTSTRAP"]
+    phases += ["MINT", "ESCROW BST", "BOOTSTRAP", "SCREEN RECORDING"]
     if unquarantine and ctx.registered:
         phases += ["UNQUARANTINE"]
     ui.flow(phases)
@@ -1272,7 +1547,9 @@ def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = 
         step_quarantine(ctx)
         step_drain(ctx)
     else:
-        ui.warn(f"{ctx.hostname} isn't registered in Taskcluster — skipping quarantine/drain (nothing to drain)")
+        ui.warn(
+            f"{ctx.hostname} isn't registered in Taskcluster — skipping quarantine/drain (nothing to drain)"
+        )
     if not skip_wipe:
         step_wipe(ctx)
         step_wait_for_reenroll(ctx)
@@ -1284,6 +1561,11 @@ def reprovision(hostname: str, *, skip_wipe: bool = False, unquarantine: bool = 
     #    convergence once admin logs in (the mint), so nothing needs to trigger it. We just
     #    wait for the sentinel it writes.
     step_wait_for_sentinel(ctx)
+    # After the bootstrap, because the grant is anchored to the worker binaries and
+    # needs cltbld's console session -- neither exists until puppet has run. EACS wiped
+    # TCC, so without this the host returns to service silently unable to screen-capture
+    # (bug 2073303).
+    step_screencapture_grant(ctx)
     # Default: leave the host quarantined (matches current fleet reality; no un-quarantine
     # key wired). Only return it to service when explicitly asked — the eventual prod flow.
     # Skip if we never quarantined it (host was unregistered at start).
@@ -1351,12 +1633,14 @@ def provision(
 
     phases = ["PREFLIGHT", "MINT", "ESCROW BST"]
     if wait:
-        phases += ["BOOTSTRAP PKG", "BOOTSTRAP"]
+        phases += ["BOOTSTRAP PKG", "BOOTSTRAP", "SCREEN RECORDING"]
     if quarantine_on_register:
         phases.append("QUARANTINE ON REGISTER")
     ui.flow(phases)
 
-    step_preflight(ctx, expected_os=expected_os, require_sip_disabled=require_sip_disabled)
+    step_preflight(
+        ctx, expected_os=expected_os, require_sip_disabled=require_sip_disabled
+    )
     step_mint(ctx)  # mint SecureToken (must precede escrow_bst)
     step_escrow_bst(ctx)
     if wait:
@@ -1366,11 +1650,18 @@ def provision(
         # The bootstrap pkg is a managed install driven by group membership, so there is
         # nothing to trigger — we only wait for the sentinel it writes.
         step_wait_for_sentinel(ctx)
+        # Needs the worker binaries and cltbld's console session, so only after the
+        # bootstrap has run. No-op on SIP-off hosts (bug 2073303).
+        step_screencapture_grant(ctx)
     else:
-        ui.info("--no-wait: credentials are in place; sweep the sentinel later with `wait-sentinel`")
+        ui.info(
+            "--no-wait: credentials are in place; sweep the sentinel later with `wait-sentinel`"
+        )
 
     if quarantine_on_register:
         step_quarantine_on_register(ctx)
 
     elapsed = time.monotonic() - started
-    ui.provisioned(ctx.hostname, elapsed, waited=wait, quarantined=quarantine_on_register)
+    ui.provisioned(
+        ctx.hostname, elapsed, waited=wait, quarantined=quarantine_on_register
+    )
