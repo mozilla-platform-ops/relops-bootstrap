@@ -142,6 +142,18 @@ def test_script_substitutes_the_credential_placeholders():
     assert '[ "$ADMIN_PASSWORD" = "INSERT_HERE" ]' in body
 
 
+def test_script_grants_and_verifies_bash():
+    """RELOPS-2454: the screenshot LaunchAgent runs as /bin/bash, so bash must be both
+    granted and part of the success check. Dropping it from either leaves every failure
+    screenshot on a SIP-on host wallpaper-only, with the step still reporting success.
+    """
+    with patch("orchestrator.workflow.ssh_admin_password", return_value="s3cr3t"):
+        body = workflow._screencapture_script()
+    assert "SCREENSHOT_CLIENT=/bin/bash" in body
+    assert body.count('"${CLIENTS[@]}" "$SCREENSHOT_CLIENT"') == 2  # granted() + verify
+    assert 'keystroke "/bin/bash"' in body
+
+
 def test_step_is_in_both_flows():
     """Regression guard: the grant must not silently drop out of the sequences.
 

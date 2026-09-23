@@ -42,6 +42,17 @@
 # user-approved row, honoured by TCC and durable across reboots.
 #
 # EACS re-enables SIP and wipes TCC, so this has to run on every reprovision.
+#
+# /bin/bash (RELOPS-2454). The failure-screenshot LaunchAgent
+# (ronin macos_screenshot_helper, com.mozilla.screencapture) runs a bash script,
+# so TCC attributes its captures to /bin/bash, not to the worker binaries. Without
+# a /bin/bash grant, screencapture "succeeds" but returns only wallpaper and app
+# menus -- no windows, no menu-bar clock: 475/475 failure screenshots from SIP-on
+# hosts were blank over 2026-09-09..23, against 0/1,542 on SIP-off hosts, where
+# macos_tcc_perms writes the same grant. bash is not listed in the pane until it
+# is added, so it goes in through the "+" button and Go-to-Folder rather than a
+# checkbox; it lands ticked. This gives SIP-on hosts parity with SIP-off. A
+# narrower Developer-ID-signed capture helper is the planned follow-up.
 
 set -u
 
@@ -52,6 +63,7 @@ TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
 OVERRIDES="/Library/Application Support/com.apple.TCC/MDMOverrides.plist"
 SESSION_USER="cltbld"
 CLIENTS=(/usr/local/bin/generic-worker-multiuser /usr/local/bin/start-worker)
+SCREENSHOT_CLIENT=/bin/bash
 
 log()  { echo "[screencapture] $*"; }
 fail() { echo "[ERROR] $*" >&2; exit 1; }
@@ -66,7 +78,7 @@ row() {
 }
 
 granted() {
-    for c in "${CLIENTS[@]}"; do
+    for c in "${CLIENTS[@]}" "$SCREENSHOT_CLIENT"; do
         case "$(row "$c")" in
             2/0|2/4) ;;
             *) return 1 ;;
@@ -81,7 +93,7 @@ granted() {
     skip "SIP is off — macos_tcc_perms already grants this host"
 
 if granted; then
-    log "already granted ($(row "${CLIENTS[0]}"))"
+    log "already granted ($(row "${CLIENTS[0]}"), bash $(row "$SCREENSHOT_CLIENT"))"
     exit 0
 fi
 
@@ -152,9 +164,79 @@ on run argv
         delay 2
       end if
     end repeat
+
+    -- /bin/bash, for the screenshot LaunchAgent. Not listed until added, so add it
+    -- with "+" (the first unlabelled 10x10 button, under Screen & System Audio
+    -- Recording), answer the admin sheet, then Go-to-Folder in the open panel. It
+    -- lands ticked. If it is already listed but unticked, tick it instead.
+    set cb to my findCB(window 1, "bash", 0)
+    if cb is missing value then
+      set plusBtn to my findPlus(window 1, 0)
+      if plusBtn is missing value then error "add (+) button not found"
+      click plusBtn
+      delay 3
+      my answerSheet(adminUser, adminPass)
+      keystroke "g" using {command down, shift down}
+      delay 2
+      keystroke "/bin/bash"
+      delay 2
+      keystroke return
+      delay 2
+      keystroke return
+      delay 5
+      my answerSheet(adminUser, adminPass)
+    else if value of cb is 0 then
+      click cb
+      delay 3
+      my answerSheet(adminUser, adminPass)
+    end if
   end tell
   return "done"
 end run
+
+on answerSheet(adminUser, adminPass)
+  tell application "System Events" to tell process "System Settings"
+    try
+      if (count of sheets of window 1) is 0 then return false
+      tell sheet 1 of window 1
+        try
+          set value of (first text field whose subrole is not "AXSecureTextField") to adminUser
+        end try
+        set pw to (first text field whose subrole is "AXSecureTextField")
+        set focused of pw to true
+        set value of pw to adminPass
+        delay 1
+        keystroke return
+      end tell
+      delay 6
+      return true
+    on error
+      return false
+    end try
+  end tell
+end answerSheet
+
+-- The add/remove buttons under each list carry no name, title or description
+-- beyond "button"; the "+" glyph is 10x10 and the "-" glyph 10x2. The Screen &
+-- System Audio Recording list comes first, so the first 10x10 match is its "+".
+on findPlus(el, depth)
+  if depth > 14 then return missing value
+  tell application "System Events"
+    try
+      set kids to UI elements of el
+    on error
+      return missing value
+    end try
+    repeat with k in kids
+      try
+        if (class of k as string) is "button" and (description of k) is "button" and (size of k) is {10, 10} then return k
+      end try
+      set f to my findPlus(k, depth + 1)
+      if f is not missing value then return f
+    end repeat
+  end tell
+  return missing value
+end findPlus
 
 -- Deliberately NOT `entire contents of window 1`: on macOS 15.3 that returns an
 -- empty list against this pane even when it is loaded. And the left-hand category
@@ -187,7 +269,7 @@ sleep 3; /usr/bin/pkill -x "System Settings" >/dev/null 2>&1
 
 # --- verify ------------------------------------------------------------------
 
-for c in "${CLIENTS[@]}"; do
+for c in "${CLIENTS[@]}" "$SCREENSHOT_CLIENT"; do
     r=$(row "$c")
     case "$r" in
         2/0|2/4) log "granted $c ($r)" ;;
