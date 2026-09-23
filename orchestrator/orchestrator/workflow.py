@@ -1334,7 +1334,7 @@ def _screencapture_script() -> str:
 
 
 def step_screencapture_grant(ctx: HostContext) -> None:
-    """Grant Screen Recording to the worker binaries. SIP-on hosts only; no-op elsewhere.
+    """Grant Screen Recording to the worker binaries and /bin/bash. SIP-on hosts only.
 
     Bug 2073303. kTCCServiceScreenCapture is system-scoped, so the grant lives only in
     the SIP-protected system TCC database. ronin's macos_tcc_perms writes that database
@@ -1344,6 +1344,10 @@ def step_screencapture_grant(ctx: HostContext) -> None:
     SCStreamErrorUserDeclined (-3801) for its whole life, visible only as an intermittent
     orange -- 42 of 174 hosts in gecko-t-osx-1500-m4 were in that state, which is what
     made bug 1937556 look like flakiness for 30 days.
+
+    /bin/bash is for the failure-screenshot LaunchAgent (RELOPS-2454), which runs a bash
+    script and so is attributed to bash, not the worker. Without it every failure
+    screenshot from a SIP-on host is wallpaper-only.
 
     This belongs in the provisioning path rather than in puppet for two reasons: the
     approval needs an administrator-authenticated click that puppet has no credential
@@ -1357,7 +1361,7 @@ def step_screencapture_grant(ctx: HostContext) -> None:
     """
     ui.step(
         "SCREEN RECORDING",
-        "grant the worker binaries ScreenCapture TCC (SIP-on hosts only)",
+        "grant the worker binaries + /bin/bash ScreenCapture TCC (SIP-on hosts only)",
     )
     ui.wire(
         f"scp -> {SCREENCAPTURE_REMOTE} (0700, credential substituted from the vault)"
