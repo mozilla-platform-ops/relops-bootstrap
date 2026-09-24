@@ -157,3 +157,79 @@ def test_max_concurrent_defaults_and_reads_env(monkeypatch):
     assert runner.Config().max_concurrent == 3  # default = staging pool size
     monkeypatch.setenv("RUNNER_MAX_CONCURRENT", "5")
     assert runner.Config().max_concurrent == 5
+
+
+# --- graceful drain: SIGTERM stops claims but lets in-flight jobs finish ---
+
+class _PollCfg(_Cfg):
+    poll = 0.05
+    max_concurrent = 3
+
+
+def test_serve_on_stop_claims_nothing_more_and_waits_for_in_flight_job():
+    """launchd SIGTERMs the runner on every restart (cert renewal, puppet reload). Returning
+    while a job runs would let launchd kill its `reprovision` subprocess mid-EACS."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    started, release, stop = threading.Event(), threading.Event(), threading.Event()
+    jobs = iter([{"id": 1, "short": "macmini-m4-111"}])
+
+    def fake_job(*_a):
+        started.set()
+        release.wait(5)
+
+    def fake_claim(*_a):
+        # Stop lands while the fill pass is still claiming: the next claim must not happen.
+        job = next(jobs, None)
+        if job is None:
+            started.wait(2)
+            stop.set()
+        return job
+
+    with patch("orchestrator.runner._claim", side_effect=fake_claim) as claim, \
+         patch("orchestrator.runner._run_job_guarded", side_effect=fake_job), \
+         ThreadPoolExecutor(max_workers=3) as pool:
+        t = threading.Thread(target=runner._serve, args=(MagicMock(), _PollCfg(), pool, stop))
+        t.start()
+        assert started.wait(2)
+        stop.wait(2)
+        claims_at_stop = claim.call_count
+        t.join(0.3)
+        assert t.is_alive(), "returned while a job was still running"
+        assert claim.call_count == claims_at_stop, "claimed new work after stop"
+        release.set()
+        t.join(2)
+        assert not t.is_alive(), "did not return after the in-flight job finished"
+
+
+def test_serve_returns_promptly_when_stopped_and_idle():
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    stop = threading.Event()
+    stop.set()
+    with patch("orchestrator.runner._claim") as claim, ThreadPoolExecutor(max_workers=1) as pool:
+        runner._serve(MagicMock(), _PollCfg(), pool, stop)
+    claim.assert_not_called()
+
+
+def test_main_installs_a_sigterm_drain_handler(monkeypatch):
+    import signal
+
+    monkeypatch.setenv("HANGAR_API_URL", "http://hangar/api")
+    monkeypatch.setenv("REPROVISION_RUNNER_TOKEN", "t")
+    previous = signal.getsignal(signal.SIGTERM)
+    seen = {}
+
+    def fake_serve(_client, _cfg, _pool, stop):
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+        seen["stopped"] = stop.is_set()
+
+    try:
+        with patch("orchestrator.runner._serve", side_effect=fake_serve), \
+             patch("orchestrator.runner.httpx.Client"):
+            runner.main()
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert seen["stopped"] is True
