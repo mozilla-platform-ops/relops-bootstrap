@@ -263,6 +263,87 @@ def test_wipe_proceeds_with_escrowed_bst():
         wipe.assert_called_once()
 
 
+def _unregistered_ctx():
+    ctx = _ctx()
+    ctx.registered = False
+    return ctx
+
+
+def _ssh_with_pgrep(pgrep_rc: int):
+    """BST check reports escrowed; the unregistered-host pgrep returns `pgrep_rc`."""
+
+    def fake(_host, cmd, **_k):
+        cp = MagicMock()
+        if "pgrep" in cmd:
+            cp.returncode, cp.stdout = pgrep_rc, b""
+        else:
+            cp.returncode, cp.stdout = (
+                0,
+                b"profiles: Bootstrap Token escrowed to server: YES",
+            )
+        return cp
+
+    return patch("orchestrator.workflow.ssh.run", side_effect=fake)
+
+
+@pytest.mark.parametrize(
+    ("pgrep_rc", "why"),
+    [(0, "generic-worker is running"), (255, "couldn't be checked")],
+)
+def test_wipe_refuses_an_unregistered_host_with_a_live_worker(pgrep_rc, why):
+    """Unregistered means no quarantine/drain ran and the busy check asked a pool the worker
+    isn't in (404 = idle). A running generic-worker means it IS registered somewhere unknown;
+    so does being unable to tell. Either way: do not EACS."""
+    with (
+        patch("orchestrator.workflow.ssh.forget_host_key"),
+        _ssh_with_pgrep(pgrep_rc),
+        patch(
+            "orchestrator.workflow.taskcluster.is_currently_busy", return_value=False
+        ),
+        patch("orchestrator.workflow.simplemdm.wipe") as wipe,
+    ):
+        with pytest.raises(ReprovisionError, match=why):
+            workflow.step_wipe(_unregistered_ctx())
+        wipe.assert_not_called()
+
+
+def test_wipe_proceeds_for_an_unregistered_host_with_no_worker_running():
+    """A genuinely fresh host (no generic-worker yet) must still be wipeable."""
+    with (
+        patch("orchestrator.workflow.ssh.forget_host_key"),
+        _ssh_with_pgrep(1),
+        patch(
+            "orchestrator.workflow.taskcluster.is_currently_busy", return_value=False
+        ),
+        patch(
+            "orchestrator.workflow.simplemdm.get_device",
+            return_value={"attributes": {"enrolled_at": "x"}},
+        ),
+        patch("orchestrator.workflow.simplemdm.wipe") as wipe,
+    ):
+        workflow.step_wipe(_unregistered_ctx())
+        wipe.assert_called_once()
+
+
+def test_wipe_does_not_pgrep_a_registered_host():
+    """Registered hosts were quarantined and drained; the extra check is for the unregistered path."""
+    with (
+        _ssh_with_pgrep(0) as run,
+        patch("orchestrator.workflow.ssh.forget_host_key"),
+        patch(
+            "orchestrator.workflow.taskcluster.is_currently_busy", return_value=False
+        ),
+        patch(
+            "orchestrator.workflow.simplemdm.get_device",
+            return_value={"attributes": {"enrolled_at": "x"}},
+        ),
+        patch("orchestrator.workflow.simplemdm.wipe") as wipe,
+    ):
+        workflow.step_wipe(_ctx())
+        wipe.assert_called_once()
+    assert not any("pgrep" in c.args[1] for c in run.call_args_list)
+
+
 # --- reprovision() sequence ---
 
 

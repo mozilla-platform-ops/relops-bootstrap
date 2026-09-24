@@ -353,7 +353,41 @@ def test_provision_no_wait_skips_the_pkg_gate_too():
 def test_candidate_pools_probes_staging_before_prod():
     # The role backs both; staging must be tried first or a staging worker gets quarantined in
     # the wrong pool (the 404 that PR #35 fixed).
-    assert workflow.candidate_pools("gecko_t_osx_1500_m4") == [f"{POOL}-staging", POOL]
+    pools = workflow.candidate_pools("gecko_t_osx_1500_m4")
+    assert pools.index(f"{POOL}-staging") < pools.index(POOL)
+    assert all(p.endswith("-staging") for p in pools[: len(pools) // 2])
+
+
+def test_candidate_pools_covers_the_macos26_pool_and_keeps_1500_as_fallback():
+    """The macOS 26 minis run the 1500 role but register in gecko-t-osx-2600-m4. Missing it made
+    resolve() call them unregistered, which skips quarantine + drain before an EACS."""
+    pools = workflow.candidate_pools("gecko_t_osx_1500_m4")
+    assert "releng-hardware/gecko-t-osx-2600-m4" in pools
+    assert (
+        pools[-1] == POOL
+    )  # resolve() falls back to the last entry for an unregistered host
+
+
+def test_resolve_finds_a_macos26_host_in_the_2600_pool():
+    from taskcluster.exceptions import TaskclusterRestFailure
+
+    def get_worker(pool, _group, _worker):
+        if pool == "releng-hardware/gecko-t-osx-2600-m4":
+            return {"workerId": "macmini-m4-130"}
+        e = TaskclusterRestFailure("not found", None)
+        e.status_code = 404
+        raise e
+
+    with (
+        patch("orchestrator.clients.taskcluster.get_worker", side_effect=get_worker),
+        patch(
+            "orchestrator.workflow.simplemdm.find_device_by_name",
+            return_value={"id": 1},
+        ),
+    ):
+        ctx = workflow.resolve("macmini-m4-130")
+    assert ctx.registered is True
+    assert ctx.worker_pool_id == "releng-hardware/gecko-t-osx-2600-m4"
 
 
 def test_candidate_pools_rejects_an_unmapped_role():
