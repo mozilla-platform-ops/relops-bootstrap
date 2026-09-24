@@ -212,8 +212,21 @@ def test_script_grants_and_verifies_bash():
     with patch("orchestrator.workflow.ssh_admin_password", return_value="s3cr3t"):
         body = workflow._screencapture_script()
     assert "SCREENSHOT_CLIENT=/bin/bash" in body
-    assert body.count('"${CLIENTS[@]}" "$SCREENSHOT_CLIENT"') == 2  # granted() + verify
+    # granted() + verify; the guard keeps an emptied CLIENTS legal under bash 3.2 set -u
+    assert body.count('${CLIENTS[@]+"${CLIENTS[@]}"} "$SCREENSHOT_CLIENT"') == 2
     assert 'keystroke "/bin/bash"' in body
+
+
+def test_unsigned_worker_binaries_still_grant_bash():
+    """Roles without taskcluster_signed_binaries (the staging pools) run ad-hoc worker
+    builds. That used to be a hard fail, which ended every staging reprovision in an
+    error before bash was granted. It must skip only the worker binaries."""
+    with patch("orchestrator.workflow.ssh_admin_password", return_value="s3cr3t"):
+        body = workflow._screencapture_script()
+    assert 'fail "worker binary is not Developer-ID signed' not in body
+    assert "CLIENTS=()" in body and "GRANT_WORKERS=0" in body
+    assert 'osascript - "$creds" "$GRANT_WORKERS"' in body
+    assert "if grantWorkers then set workerNames to" in body
 
 
 def test_step_is_in_both_flows():
