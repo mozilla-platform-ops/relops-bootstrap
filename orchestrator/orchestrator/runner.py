@@ -29,13 +29,16 @@ DoNotObliterate) apply unchanged.
 from __future__ import annotations
 
 import os
+import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 import httpx
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait as futures_wait
 
 from .hostnames import validate_short
 
@@ -211,25 +214,48 @@ def main() -> None:
         f"reprovision-runner [{cfg.runner_id}] → {cfg.api} "
         f"(auth: {auth}, poll {cfg.poll}s, max_concurrent {cfg.max_concurrent})"
     )
+    # SIGTERM drains instead of dying. launchd sends it on every restart -- the step-ca
+    # renewal's `kickstart -k`, a puppet reload's bootout -- and a job's `reprovision`
+    # subprocess dying with the runner strands its host mid-EACS. launchd waits up to the
+    # plist's ExitTimeOut before SIGKILL, so that must cover a whole reprovision.
+    stop = threading.Event()
+
+    def _on_sigterm(_signum, _frame) -> None:
+        print("SIGTERM: no new claims; draining in-flight jobs", flush=True)
+        stop.set()
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
     # httpx.Client is thread-safe (pooled connections), so one client is shared across job
     # threads. Claim up to max_concurrent jobs and run them in parallel — a whole pool of
     # workers reprovisions "at once" instead of serially.
     with httpx.Client(**cfg.client_kwargs) as client, \
             ThreadPoolExecutor(max_workers=cfg.max_concurrent, thread_name_prefix="job") as pool:
-        active: set = set()
-        while True:
-            active = {f for f in active if not f.done()}  # reap finished jobs
-            while len(active) < cfg.max_concurrent:  # fill idle capacity, FIFO
-                try:
-                    job = _claim(client, cfg)
-                except httpx.HTTPError as e:
-                    print(f"claim failed: {e}")
-                    break
-                if not job:
-                    break  # queue empty
-                print(f"claimed job {job['id']} → {job['short']} ({len(active) + 1}/{cfg.max_concurrent} active)")
-                active.add(pool.submit(_run_job_guarded, client, cfg, job))
-            time.sleep(cfg.poll)
+        _serve(client, cfg, pool, stop)
+    print("drained: no jobs in flight, exiting", flush=True)
+
+
+def _serve(client: httpx.Client, cfg: Config, pool: ThreadPoolExecutor, stop: threading.Event) -> None:
+    """Claim and run jobs until `stop` is set, then return once every in-flight job is done."""
+    active: set = set()
+    while True:
+        active = {f for f in active if not f.done()}  # reap finished jobs
+        if stop.is_set():
+            if not active:
+                return
+            futures_wait(active, timeout=cfg.poll)
+            continue
+        # fill idle capacity, FIFO; re-check stop per claim so a SIGTERM mid-pass takes nothing new
+        while len(active) < cfg.max_concurrent and not stop.is_set():
+            try:
+                job = _claim(client, cfg)
+            except httpx.HTTPError as e:
+                print(f"claim failed: {e}")
+                break
+            if not job:
+                break  # queue empty
+            print(f"claimed job {job['id']} → {job['short']} ({len(active) + 1}/{cfg.max_concurrent} active)")
+            active.add(pool.submit(_run_job_guarded, client, cfg, job))
+        stop.wait(cfg.poll)
 
 
 if __name__ == "__main__":
