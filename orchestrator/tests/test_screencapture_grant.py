@@ -69,8 +69,70 @@ def test_skip_conditions_do_not_raise(reason):
             "orchestrator.workflow._screencapture_script", return_value="#!/bin/bash\n"
         ),
         _run_with(f"{reason}\nrc=3"),
+        patch("orchestrator.workflow.time.sleep"),
     ):
         workflow.step_screencapture_grant(_ctx())  # must not raise
+
+
+def _run_sequence(*outputs: str):
+    """Patch ssh so successive payload runs return successive outputs."""
+    it = iter(outputs)
+
+    def fake(_host, cmd, **_k):
+        return _CP(next(it) if "rc=$?" in cmd else "")
+
+    return patch("orchestrator.workflow.ssh.run", side_effect=fake)
+
+
+def test_transient_skip_is_retried_until_granted():
+    """Right after the bootstrap cltbld may not own the console yet. Giving up on the
+    first skip hands the host back with no grant, so wait it out instead."""
+    with (
+        patch("orchestrator.workflow.ssh.write_file_as_root"),
+        patch(
+            "orchestrator.workflow._screencapture_script", return_value="#!/bin/bash\n"
+        ),
+        _run_sequence(
+            "[SKIP] cltbld does not own the console session yet\nrc=3",
+            "[SKIP] cltbld does not own the console session yet\nrc=3",
+            "[screencapture] Screen Recording granted\nrc=0",
+        ),
+        patch("orchestrator.workflow.time.sleep") as sleep,
+        patch("orchestrator.workflow.ui.ok") as ok,
+    ):
+        workflow.step_screencapture_grant(_ctx())
+    assert sleep.call_count == 2
+    ok.assert_called_once()
+
+
+def test_permanent_skip_is_not_retried():
+    """SIP off will not change while we wait; do not burn five minutes on it."""
+    with (
+        patch("orchestrator.workflow.ssh.write_file_as_root") as write,
+        patch(
+            "orchestrator.workflow._screencapture_script", return_value="#!/bin/bash\n"
+        ),
+        _run_with("[SKIP] SIP is off — macos_tcc_perms already grants this host\nrc=3"),
+        patch("orchestrator.workflow.time.sleep") as sleep,
+    ):
+        workflow.step_screencapture_grant(_ctx())
+    sleep.assert_not_called()
+    write.assert_called_once()
+
+
+def test_transient_skip_gives_up_after_the_retry_budget():
+    with (
+        patch("orchestrator.workflow.ssh.write_file_as_root") as write,
+        patch(
+            "orchestrator.workflow._screencapture_script", return_value="#!/bin/bash\n"
+        ),
+        _run_with("[SKIP] host is running a task — retry when idle\nrc=3"),
+        patch("orchestrator.workflow.time.sleep"),
+        patch("orchestrator.workflow.ui.warn") as warn,
+    ):
+        workflow.step_screencapture_grant(_ctx())  # must not raise
+    assert write.call_count == workflow.SCREENCAPTURE_ATTEMPTS
+    warn.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -150,8 +212,21 @@ def test_script_grants_and_verifies_bash():
     with patch("orchestrator.workflow.ssh_admin_password", return_value="s3cr3t"):
         body = workflow._screencapture_script()
     assert "SCREENSHOT_CLIENT=/bin/bash" in body
-    assert body.count('"${CLIENTS[@]}" "$SCREENSHOT_CLIENT"') == 2  # granted() + verify
+    # granted() + verify; the guard keeps an emptied CLIENTS legal under bash 3.2 set -u
+    assert body.count('${CLIENTS[@]+"${CLIENTS[@]}"} "$SCREENSHOT_CLIENT"') == 2
     assert 'keystroke "/bin/bash"' in body
+
+
+def test_unsigned_worker_binaries_still_grant_bash():
+    """Roles without taskcluster_signed_binaries (the staging pools) run ad-hoc worker
+    builds. That used to be a hard fail, which ended every staging reprovision in an
+    error before bash was granted. It must skip only the worker binaries."""
+    with patch("orchestrator.workflow.ssh_admin_password", return_value="s3cr3t"):
+        body = workflow._screencapture_script()
+    assert 'fail "worker binary is not Developer-ID signed' not in body
+    assert "CLIENTS=()" in body and "GRANT_WORKERS=0" in body
+    assert 'osascript - "$creds" "$GRANT_WORKERS"' in body
+    assert "if grantWorkers then set workerNames to" in body
 
 
 def test_step_is_in_both_flows():

@@ -78,7 +78,7 @@ row() {
 }
 
 granted() {
-    for c in "${CLIENTS[@]}" "$SCREENSHOT_CLIENT"; do
+    for c in ${CLIENTS[@]+"${CLIENTS[@]}"} "$SCREENSHOT_CLIENT"; do
         case "$(row "$c")" in
             2/0|2/4) ;;
             *) return 1 ;;
@@ -92,14 +92,23 @@ granted() {
 /usr/bin/csrutil status 2>/dev/null | grep -qi disabled && \
     skip "SIP is off — macos_tcc_perms already grants this host"
 
-if granted; then
-    log "already granted ($(row "${CLIENTS[0]}"), bash $(row "$SCREENSHOT_CLIENT"))"
-    exit 0
+# Ad-hoc worker binaries (Identifier=a.out, no TeamIdentifier) can never satisfy a
+# code requirement, so a grant for them is stored and ignored. Roles without
+# taskcluster_signed_binaries -- the staging pools among them -- run ad-hoc builds.
+# Skip the worker binaries there but still grant /bin/bash: the screenshot
+# LaunchAgent does not depend on how the worker is signed.
+ident=$(/usr/bin/codesign -dvvv "${CLIENTS[0]}" 2>&1 | /usr/bin/awk -F= '/^Identifier=/{print $2; exit}')
+GRANT_WORKERS=1
+if [ "$ident" != "generic-worker-multiuser-darwin-arm64" ]; then
+    log "worker binaries are not Developer-ID signed (Identifier=${ident:-unknown}); granting /bin/bash only"
+    CLIENTS=()
+    GRANT_WORKERS=0
 fi
 
-ident=$(/usr/bin/codesign -dvvv "${CLIENTS[0]}" 2>&1 | /usr/bin/awk -F= '/^Identifier=/{print $2; exit}')
-[ "$ident" = "generic-worker-multiuser-darwin-arm64" ] || \
-    fail "worker binary is not Developer-ID signed (Identifier=${ident:-unknown}); the grant would be stored and ignored"
+if granted; then
+    log "already granted (bash $(row "$SCREENSHOT_CLIENT"))"
+    exit 0
+fi
 
 overrides=$(/usr/bin/plutil -p "$OVERRIDES" 2>/dev/null | /usr/bin/grep -c kTCCServiceScreenCapture)
 [ "$overrides" = "0" ] || \
@@ -129,9 +138,10 @@ sleep 3; /usr/bin/pkill -x "System Settings" >/dev/null 2>&1; sleep 2
 asuser /usr/bin/open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
 sleep 12
 
-asuser /usr/bin/osascript - "$creds" 2>&1 <<'OSA'
+asuser /usr/bin/osascript - "$creds" "$GRANT_WORKERS" 2>&1 <<'OSA'
 on run argv
   set credFile to item 1 of argv
+  set grantWorkers to (item 2 of argv) is "1"
   set adminUser to do shell script "head -1 " & quoted form of credFile
   set adminPass to do shell script "sed -n 2p " & quoted form of credFile
   do shell script "rm -f " & quoted form of credFile
@@ -139,7 +149,9 @@ on run argv
   tell application "System Events" to tell process "System Settings"
     set frontmost to true
     delay 2
-    repeat with nm in {"generic-worker-multiuser", "start-worker"}
+    set workerNames to {}
+    if grantWorkers then set workerNames to {"generic-worker-multiuser", "start-worker"}
+    repeat with nm in workerNames
       set cb to my findCB(window 1, nm as string, 0)
       if cb is missing value then error "checkbox not found: " & (nm as string)
       if value of cb is 0 then
@@ -269,7 +281,7 @@ sleep 3; /usr/bin/pkill -x "System Settings" >/dev/null 2>&1
 
 # --- verify ------------------------------------------------------------------
 
-for c in "${CLIENTS[@]}" "$SCREENSHOT_CLIENT"; do
+for c in ${CLIENTS[@]+"${CLIENTS[@]}"} "$SCREENSHOT_CLIENT"; do
     r=$(row "$c")
     case "$r" in
         2/0|2/4) log "granted $c ($r)" ;;
