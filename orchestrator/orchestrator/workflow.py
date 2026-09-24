@@ -44,9 +44,17 @@ class HostContext:
     )
 
 
-_PROD_POOL_BY_ROLE = {
-    "gecko_t_osx_1500_m4": "releng-hardware/gecko-t-osx-1500-m4",
-    "gecko_t_osx_1400_r8": "releng-hardware/gecko-t-osx-1400-r8",
+# Every prod pool a role's workers can be registered in, primary LAST (it is the fallback
+# for a host registered nowhere). A pool missing here is not a lookup miss but a safety
+# hole: resolve() calls such a host unregistered, and the reprovision flow then skips
+# quarantine + drain and asks the wrong pool whether it is busy -- which 404s as "idle".
+# The macOS 26 minis run the 1500 role but register in gecko-t-osx-2600-m4.
+_PROD_POOLS_BY_ROLE = {
+    "gecko_t_osx_1500_m4": (
+        "releng-hardware/gecko-t-osx-2600-m4",
+        "releng-hardware/gecko-t-osx-1500-m4",
+    ),
+    "gecko_t_osx_1400_r8": ("releng-hardware/gecko-t-osx-1400-r8",),
 }
 
 
@@ -58,10 +66,10 @@ def candidate_pools(role: str) -> list[str]:
     alone can't disambiguate — callers probe these in order against TC. Shared by resolve()
     and the fresh-host quarantine so the two can't drift onto different pool names.
     """
-    base_pool = _PROD_POOL_BY_ROLE.get(role)
-    if not base_pool:
+    prod_pools = _PROD_POOLS_BY_ROLE.get(role)
+    if not prod_pools:
         raise ValueError(f"no worker pool mapping for role '{role}'")
-    return [f"{base_pool}-staging", base_pool]
+    return [f"{p}-staging" for p in prod_pools] + list(prod_pools)
 
 
 def resolve(hostname: str) -> HostContext:
@@ -1176,6 +1184,29 @@ def step_wipe(ctx: HostContext) -> None:
             f"{ctx.hostname} is still running a task — NOT wiping. Quarantine + drain first "
             f"(`reprovision quarantine`, `reprovision drain`) or wait for the task to finish."
         )
+    # An unregistered host was never quarantined or drained, and the busy check above asked
+    # a pool the worker isn't in -- a 404 there reads as idle. That is only safe if nothing is
+    # running a worker: a live generic-worker means it IS registered, in a pool this
+    # orchestrator doesn't know (how the macOS 26 minis would have been wiped mid-task).
+    if not ctx.registered:
+        ui.wire(
+            f"ssh admin@{ctx.hostname} pgrep generic-worker  (unregistered — confirm no live worker)"
+        )
+        cp = ssh.run(
+            ctx.fqdn, "/usr/bin/pgrep -f /usr/local/bin/generic-worker", check=False
+        )
+        if cp.returncode != 1:
+            state = (
+                "generic-worker is running on it"
+                if cp.returncode == 0
+                else f"its worker state couldn't be checked (pgrep exit {cp.returncode})"
+            )
+            raise ReprovisionError(
+                f"{ctx.hostname} is not registered in any known pool "
+                f"({', '.join(candidate_pools(ctx.role))}) but {state} — refusing to wipe. "
+                "It is probably registered in a pool missing from _PROD_POOLS_BY_ROLE; "
+                "add it, then retry."
+            )
     ui.ok("no task in flight")
     # Record the current enrolled_at so wait_for_reenroll can detect a *fresh* enrollment
     # (status alone is unreliable: it stays "enrolled" until the erase actually executes).
