@@ -169,6 +169,10 @@ BOOTSTRAP_PKG_PAYLOAD = "/usr/local/sbin/m4-bootstrap.sh"
 # /var/root so it is root-only by location as well as by mode.
 OS_UPGRADE_REMOTE = "/var/root/macos-upgrade.sh"
 SCREENCAPTURE_REMOTE = "/var/root/screencapture-approve.sh"
+# Skips that clear on their own shortly after the bootstrap, so worth waiting out.
+SCREENCAPTURE_TRANSIENT_SKIPS = ("does not own the console session", "running a task")
+SCREENCAPTURE_ATTEMPTS = 10
+SCREENCAPTURE_RETRY_SECONDS = 30
 
 
 def _os_version_matches(actual: str, expected: str) -> bool:
@@ -1333,6 +1337,29 @@ def _screencapture_script() -> str:
     return body
 
 
+def _run_screencapture_script(ctx: HostContext) -> tuple[int, str]:
+    """Stage the approval script, run it once, remove it. Returns (exit code, output)."""
+    ui.wire(
+        f"scp -> {SCREENCAPTURE_REMOTE} (0700, credential substituted from the vault)"
+    )
+    ssh.write_file_as_root(
+        ctx.fqdn, SCREENCAPTURE_REMOTE, _screencapture_script().encode(), mode="0700"
+    )
+
+    ui.wire(
+        f"ssh admin@{ctx.hostname} sudo {SCREENCAPTURE_REMOTE}  (drives System Settings as cltbld)"
+    )
+    cp = ssh.run(ctx.fqdn, f"sudo {SCREENCAPTURE_REMOTE}; echo rc=$?", check=False)
+    out = cp.stdout.decode(errors="replace").strip()
+    ssh.run(ctx.fqdn, f"sudo rm -f {SCREENCAPTURE_REMOTE}", check=False)
+
+    rc = 1
+    for line in out.splitlines():
+        if line.startswith("rc="):
+            rc = int(line[3:] or 1)
+    return rc, out
+
+
 def step_screencapture_grant(ctx: HostContext) -> None:
     """Grant Screen Recording to the worker binaries and /bin/bash. SIP-on hosts only.
 
@@ -1356,40 +1383,35 @@ def step_screencapture_grant(ctx: HostContext) -> None:
     one host at a time.
 
     Exit 3 from the script means "not applicable / not now" (SIP off, host busy, no
-    console session) and is reported, not raised -- the host is still fine to hand back,
-    and the ronin detector (macos_screencapture_check) will keep the gap visible.
+    console session). "Not now" is retried for a few minutes first: the step runs
+    right after the bootstrap sentinel, when cltbld's autologin session may not own
+    the console yet, and a skip there would hand the host back with no grant at all.
+    Whatever skip remains is reported, not raised -- the host is still fine to hand
+    back, and the ronin detector (macos_screencapture_check) will keep the gap visible.
     """
     ui.step(
         "SCREEN RECORDING",
         "grant the worker binaries + /bin/bash ScreenCapture TCC (SIP-on hosts only)",
     )
-    ui.wire(
-        f"scp -> {SCREENCAPTURE_REMOTE} (0700, credential substituted from the vault)"
-    )
-    ssh.write_file_as_root(
-        ctx.fqdn, SCREENCAPTURE_REMOTE, _screencapture_script().encode(), mode="0700"
-    )
-
-    ui.wire(
-        f"ssh admin@{ctx.hostname} sudo {SCREENCAPTURE_REMOTE}  (drives System Settings as cltbld)"
-    )
-    cp = ssh.run(ctx.fqdn, f"sudo {SCREENCAPTURE_REMOTE}; echo rc=$?", check=False)
-    out = cp.stdout.decode(errors="replace").strip()
-    ssh.run(ctx.fqdn, f"sudo rm -f {SCREENCAPTURE_REMOTE}", check=False)
-
-    rc = 1
-    for line in out.splitlines():
-        if line.startswith("rc="):
-            rc = int(line[3:] or 1)
+    for attempt in range(1, SCREENCAPTURE_ATTEMPTS + 1):
+        rc, out = _run_screencapture_script(ctx)
+        reason = next(
+            (ln for ln in out.splitlines() if ln.startswith("[SKIP]")),
+            "[SKIP] not applicable",
+        )
+        transient = rc == 3 and any(m in reason for m in SCREENCAPTURE_TRANSIENT_SKIPS)
+        if not transient or attempt == SCREENCAPTURE_ATTEMPTS:
+            break
+        ui.wire(
+            f"{reason.replace('[SKIP] ', '')} -- retrying in "
+            f"{SCREENCAPTURE_RETRY_SECONDS}s ({attempt}/{SCREENCAPTURE_ATTEMPTS})"
+        )
+        time.sleep(SCREENCAPTURE_RETRY_SECONDS)
 
     if rc == 0:
         ui.ok("Screen Recording granted (auth_value 2, flags 0)")
         return
     if rc == 3:
-        reason = next(
-            (ln for ln in out.splitlines() if ln.startswith("[SKIP]")),
-            "[SKIP] not applicable",
-        )
         ui.warn(reason.replace("[SKIP] ", "skipped: "))
         return
     raise ReprovisionError(
