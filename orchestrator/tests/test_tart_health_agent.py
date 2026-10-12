@@ -129,6 +129,44 @@ def test_collect_host_recovers_on_the_retry():
     assert slots[0]["vm_name"] == "sequoia-tester-1"
 
 
+def test_host_probe_never_pipes_sudo_into_an_early_exit():
+    # sudo piped into `head` leaked a stuck zsh+zsh+sudo per occurrence, fleet-wide,
+    # until admin ran out of processes (2026-10-12).
+    import re
+    rendered = agent.HOST_PROBE % {"repo": "/r", "cert": "/c", "key": "/k", "probe_key": "/p"}
+    for line in rendered.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        assert not re.search(r"sudo [^|]*\|\s*(head|grep -m|awk[^|]*exit)", line), line
+    assert "fetch=$(printf '%s\\n' \"$fetch\" | head -1)" in rendered
+
+
+def test_host_probe_renders_and_checks_the_probe_key():
+    rendered = agent.HOST_PROBE % {"repo": "/r", "cert": "/c", "key": "/k", "probe_key": "/etc/tart/guest_probe_key"}
+    assert 'probe_key=$(sudo test -r /etc/tart/guest_probe_key' in rendered
+
+
+def test_no_probe_key_skips_the_guest_and_says_so():
+    # Most hosts never had the key placed. Probing anyway costs an ssh per slot and
+    # reads as "guest unreachable", which Hangar used to paint warn on 28/42 slots.
+    host = "slot1_vm=sequoia-tester-1\nslot1_state=running\nslot1_ip=192.168.64.2\nprobe_key=0\n"
+    with patch.object(agent, "_ssh", return_value=(host, "")), \
+         patch.object(agent, "_guest") as guest:
+        slots = agent.collect_host("macmini-m4-185.test", {}, True)
+    guest.assert_not_called()
+    assert slots[0]["probe_key_present"] is False
+
+
+def test_probe_key_present_still_probes_the_guest():
+    host = "slot1_vm=sequoia-tester-1\nslot1_state=running\nslot1_ip=192.168.64.2\nprobe_key=1\n"
+    with patch.object(agent, "_ssh", return_value=(host, "")), \
+         patch.object(agent, "_guest", return_value={"guest_up_s": "600"}) as guest:
+        slots = agent.collect_host("macmini-m4-235.test", {}, True)
+    guest.assert_called_once()
+    assert slots[0]["probe_key_present"] is True
+    assert slots[0]["guest_reachable"] is True
+
+
 # ---- auth: prod is cert-only ----------------------------------------------------
 
 def test_ssl_context_none_without_both_halves():

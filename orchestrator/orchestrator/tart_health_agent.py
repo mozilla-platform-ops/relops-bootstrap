@@ -81,7 +81,13 @@ T=/usr/local/bin/tart
 D=%(repo)s
 echo "checkout_sha=$(sudo git -C $D rev-parse --short HEAD 2>/dev/null)"
 # A single-branch refspec means this host can never see master, however often it fetches.
-fetch=$(sudo git -C $D config --get-all remote.origin.fetch 2>/dev/null | head -1)
+# Never pipe sudo into something that exits early (head, awk exit, grep -m). When the
+# reader closes first, sudo can block forever holding the pipe, the $(...) never sees
+# EOF, and the session is orphaned when the agent times out: 2 zsh + 1 sudo leaked per
+# hit. That leaked ~10 processes a day per host until admin hit kern.maxprocperuid
+# (2666) and tart could no longer fork. m4-190/191/236/239 went down that way.
+fetch=$(sudo git -C $D config --get-all remote.origin.fetch 2>/dev/null)
+fetch=$(printf '%%s\n' "$fetch" | head -1)
 case "$fetch" in
   '+refs/heads/*:refs/remotes/origin/*') echo "refspec_pinned=false" ;;
   '') ;;
@@ -98,6 +104,9 @@ if sudo test -f %(cert)s; then
   # read a root-owned key, which silently disables injection.
   echo "cert_owner=$(sudo stat -f '%%Su' %(key)s 2>/dev/null)"
 fi
+# The guest probe key is placed by hand, so most hosts lack it. Reported so Hangar can
+# tell "never asked" (coverage gap) from "asked, no answer" (possible fault).
+echo "probe_key=$(sudo test -r %(probe_key)s && echo 1 || echo 0)"
 echo "tart_user=$(sudo /usr/libexec/PlistBuddy -c 'Print :UserName' /Library/LaunchDaemons/com.mozilla.tartworker-1.plist 2>/dev/null)"
 for i in 1 2; do
   vm=$($T list 2>/dev/null | awk -v n="$i" '$1=="local" && $2 ~ ("-" n "$") {print $2; exit}')
@@ -289,7 +298,7 @@ def task_state(task_id: str) -> str | None:
 
 def collect_host(host: str, tc: dict[str, dict[str, Any]], probe_guests: bool) -> list[dict[str, Any]]:
     short = host.split(".")[0]
-    probe = HOST_PROBE % {"repo": PUPPET_REPO, "cert": CERT, "key": KEY}
+    probe = HOST_PROBE % {"repo": PUPPET_REPO, "cert": CERT, "key": KEY, "probe_key": GUEST_PROBE_KEY}
     # Retry once, with a short pause. A single ssh failure is usually transient —
     # observed 2026-07-30, when m4-237 and then m4-239 each reported unreachable in a
     # sweep and answered fine seconds later, both up 13 days. Monitoring that cries
@@ -337,9 +346,10 @@ def collect_host(host: str, tc: dict[str, dict[str, Any]], probe_guests: bool) -
             "cert_owner_ok": (h.get("cert_owner") == tart_user) if h.get("cert_owner") else None,
             "checkout_sha": h.get("checkout_sha"),
             "refspec_pinned": h.get("refspec_pinned") == "true",
+            "probe_key_present": {"1": True, "0": False}.get(h.get("probe_key", "")),
         }
         ip = h.get(f"slot{i}_ip")
-        if probe_guests and ip:
+        if probe_guests and ip and s["probe_key_present"] is not False:
             g = _guest(host, ip)
             if g.get("guest_up_s", "").lstrip("-").isdigit():
                 s["guest_reachable"] = True
