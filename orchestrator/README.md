@@ -95,6 +95,7 @@ a worker has to run on-network and push results outbound.
 |---|---|
 | `hangar-screen-agent` | On-demand VNC frames for Hangar's live worker view. |
 | `hangar-tart-health-agent` | Sweeps the tart VM hosts and pushes per-slot health to Hangar. |
+| `hangar-sbom-agent` | Collects the macOS CycloneDX SBOM fingerprints (and new documents) for Hangar. |
 
 ```bash
 hangar-tart-health-agent --hosts-file hosts.txt --loop --interval 600   # as the LaunchDaemon runs it
@@ -140,6 +141,22 @@ resolution falls through to an `op://` ref and the 1Password CLI isn't installed
 sudo bash -c 'set -a; . /var/root/reprovision-runner/runner.env; set +a;
   /opt/reprovision-runner/.venv/bin/hangar-tart-health-agent \
     --hosts-file /var/root/reprovision-runner/tart-hosts.txt --no-guests --dry-run'
+```
+
+**`hangar-sbom-agent`** collects what ronin_puppet's `macos_sbom` writes on every macOS worker:
+`/var/sbom/fingerprint.json` (role, OS, `sbom_sha256`) and `/var/sbom/sbom.cdx.json` (CycloneDX 1.6,
+rewritten only on drift). The hash covers component identity only, so hosts of one role share a hash
+and the fleet holds a handful of distinct documents. Each sweep reads every host's fingerprint in one
+small ssh round trip, then fetches a full document (gzip+base64 over ssh) only for hashes Hangar
+doesn't already have, from one host per hash, at most `--max-documents` per sweep.
+
+The host list and the known hashes come from Hangar (`GET /api/sbom/agent/targets`); `--hosts-file`
+overrides the host list. Drift (a host off its role's modal hash) is judged in Hangar, not here.
+**It needs the Hangar LB path rule `/api/sbom/agent/*` on the runner hostname**, same as the tart agent.
+
+```bash
+sudo bash -c 'set -a; . /var/root/reprovision-runner/runner.env; set +a;
+  /opt/reprovision-runner/.venv/bin/hangar-sbom-agent --dry-run'
 ```
 
 ## Two golden paths

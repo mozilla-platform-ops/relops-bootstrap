@@ -38,6 +38,7 @@ reprovision = "orchestrator.cli:app"
 reprovision-runner = "orchestrator.runner:main"
 hangar-screen-agent = "orchestrator.screen_agent:main"
 hangar-tart-health-agent = "orchestrator.tart_health_agent:main"
+hangar-sbom-agent = "orchestrator.sbom_agent:main"
 
 [build-system]
 requires = ["setuptools>=68"]
