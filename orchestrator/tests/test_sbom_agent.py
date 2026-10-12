@@ -187,3 +187,19 @@ def test_resolve_uses_targets():
         hosts, known = agent.resolve(_args())
     assert hosts == ["a"]
     assert known == {"s1"}
+
+
+def test_plan_fetches_prefers_newest_generator_then_most_hosts():
+    def r(host, sha, gen):
+        return {"hostname": host, "fingerprint": {"sbom_sha256": sha, "generator_version": gen}}
+
+    results = [
+        r("h1", "old", "2.1.0"),
+        r("h2", "new-one", "2.2.0"),
+        r("h3", "new-many", "2.2.0"),
+        r("h4", "new-many", "2.2.0"),
+        r("h5", "known", "2.2.0"),
+    ]
+    plan = agent.plan_fetches(results, known={"known"}, limit=2)
+    assert list(plan) == ["new-many", "new-one"]
+    assert plan["new-many"] == "h3"
