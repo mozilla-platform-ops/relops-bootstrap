@@ -106,17 +106,32 @@ def fetch_document(host: str) -> tuple[dict[str, Any] | None, str]:
         return None, f"bad document: {e}"
 
 
+def _gen_key(version: Any) -> tuple[int, ...]:
+    try:
+        return tuple(int(x) for x in str(version or "").split("."))
+    except ValueError:
+        return (0,)
+
+
 def plan_fetches(results: list[dict[str, Any]], known: set[str], limit: int) -> dict[str, str]:
-    """sha256 -> one host to fetch it from, for hashes Hangar lacks. At most `limit`."""
-    plan: dict[str, str] = {}
+    """sha256 -> one host to fetch it from, for hashes Hangar lacks. At most `limit`.
+
+    Newest generator first, then the states shared by the most hosts. During a
+    macos_sbom rollout most unknown hashes come from the old generator and are about
+    to be replaced; spending the per-sweep budget on them leaves Hangar unable to say
+    why the hosts that matter drifted.
+    """
+    hosts_for: dict[str, list[str]] = {}
+    gen_for: dict[str, tuple[int, ...]] = {}
     for r in results:
-        sha = (r.get("fingerprint") or {}).get("sbom_sha256")
-        if not sha or sha in known or sha in plan:
+        fp = r.get("fingerprint") or {}
+        sha = fp.get("sbom_sha256")
+        if not sha or sha in known:
             continue
-        if len(plan) >= limit:
-            break
-        plan[sha] = r["hostname"]
-    return plan
+        hosts_for.setdefault(sha, []).append(r["hostname"])
+        gen_for[sha] = max(gen_for.get(sha, (0,)), _gen_key(fp.get("generator_version")))
+    order = sorted(hosts_for, key=lambda sha: (gen_for[sha], len(hosts_for[sha])), reverse=True)
+    return {sha: hosts_for[sha][0] for sha in order[:limit]}
 
 
 def sweep(hosts: list[str], known: set[str], args: argparse.Namespace) -> dict[str, Any]:
@@ -179,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="env var holding the runner token (local dev only; production requires the cert)")
     ap.add_argument("--concurrency", type=int, default=8,
                     help="fingerprint reads are tiny; document fetches stay sequential")
-    ap.add_argument("--max-documents", type=int, default=10,
+    ap.add_argument("--max-documents", type=int, default=40,
                     help="cap on full documents fetched per sweep; the rest come next sweep")
     ap.add_argument("--dry-run", action="store_true", help="print the payload instead of pushing")
     ap.add_argument("--loop", action="store_true",
