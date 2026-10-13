@@ -203,3 +203,17 @@ def test_plan_fetches_prefers_newest_generator_then_most_hosts():
     plan = agent.plan_fetches(results, known={"known"}, limit=2)
     assert list(plan) == ["new-many", "new-one"]
     assert plan["new-many"] == "h3"
+
+
+def test_r8_minis_log_in_as_relops_everyone_else_as_admin(monkeypatch):
+    monkeypatch.setattr(agent, "user_host", lambda h: f"admin@{h}")
+    assert agent.ssh_target("macmini-r8-1.test.releng.mdc1.mozilla.com") == "relops@macmini-r8-1.test.releng.mdc1.mozilla.com"
+    assert agent.ssh_target("macmini-m4-61.test.releng.mdc1.mozilla.com") == "admin@macmini-m4-61.test.releng.mdc1.mozilla.com"
+
+
+def test_ssh_passes_the_per_host_login_through(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(agent, "_tart_ssh", lambda host, script, timeout, target=None: seen.update(target=target) or ("ok", ""))
+    monkeypatch.setattr(agent, "user_host", lambda h: f"admin@{h}")
+    agent._ssh("macmini-r8-36.test.releng.mdc1.mozilla.com", "true")
+    assert seen["target"] == "relops@macmini-r8-36.test.releng.mdc1.mozilla.com"

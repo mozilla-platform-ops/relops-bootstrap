@@ -40,7 +40,26 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from .tart_health_agent import _api_base, _ssh, _ssl_context
+from .clients.ssh import user_host
+from .tart_health_agent import _api_base, _ssl_context
+from .tart_health_agent import _ssh as _tart_ssh
+
+# The M4 minis log in as the admin user (clients/ssh.py); the r8 minis predate that
+# and use relops, with the same key. Without this every r8 failed with a refused
+# admin login and reported no fingerprint.
+HOST_USERS = {"macmini-r8-": "relops"}
+
+
+def ssh_target(host: str) -> str:
+    short = host.split(".", 1)[0]
+    for prefix, user in HOST_USERS.items():
+        if short.startswith(prefix):
+            return f"{user}@{host}"
+    return user_host(host)
+
+
+def _ssh(host: str, script: str, timeout: int = 120) -> tuple[str, str]:
+    return _tart_ssh(host, script, timeout, target=ssh_target(host))
 
 FINGERPRINT = "/var/sbom/fingerprint.json"
 DOCUMENT = "/var/sbom/sbom.cdx.json"
