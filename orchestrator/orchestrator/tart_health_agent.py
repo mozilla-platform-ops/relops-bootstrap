@@ -169,8 +169,11 @@ def _etime_s(v: str) -> int | None:
     return days * 86400 + h * 3600 + m * 60 + sec
 
 
-def _ssh(host: str, script: str, timeout: int = 120) -> tuple[str, str]:
+def _ssh(host: str, script: str, timeout: int = 120, target: str | None = None) -> tuple[str, str]:
     """Run `script` on `host`. Returns (stdout, failure_reason).
+
+    `target` overrides the `admin@host` login for callers whose hosts use another
+    account (the r8 minis log in as relops); the identity and options are unchanged.
 
     The reason is returned rather than dropped: a health checker that can only say
     "unreachable" makes its own failures indistinguishable from the host's, which
@@ -178,7 +181,7 @@ def _ssh(host: str, script: str, timeout: int = 120) -> tuple[str, str]:
     """
     try:
         r = subprocess.run(
-            ["ssh", *admin_ssh_opts(), user_host(host), script],
+            ["ssh", *admin_ssh_opts(), target or user_host(host), script],
             capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired:
