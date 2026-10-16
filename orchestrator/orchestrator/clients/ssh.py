@@ -273,7 +273,9 @@ def platform_serial(hostname: str) -> str:
     return cp.stdout.decode(errors="replace").strip()
 
 
-def run(hostname: str, command: str, *, stdin: bytes | None = None, check: bool = True) -> subprocess.CompletedProcess:
+def run(
+    hostname: str, command: str, *, stdin: bytes | None = None, check: bool = True, timeout: int | None = None
+) -> subprocess.CompletedProcess:
     """Run `command` over SSH on hostname. Returns CompletedProcess.
 
     With check=True, a transport failure (exit 255 — can't connect: off-VPN, host down, key
@@ -281,7 +283,7 @@ def run(hostname: str, command: str, *, stdin: bytes | None = None, check: bool 
     `command`, which may embed the admin password. Callers that inspect the result themselves
     (the wipe guard, sentinel poll) pass check=False and read `returncode`.
     """
-    timeout = get_settings().ssh_command_timeout_seconds
+    timeout = timeout or get_settings().ssh_command_timeout_seconds
     args = [
         "ssh",
         "-o", "BatchMode=yes",

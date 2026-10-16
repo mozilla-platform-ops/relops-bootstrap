@@ -6,8 +6,9 @@ for re-running steps after partial failure.
 from __future__ import annotations
 
 import typer
+from rich.markup import escape
 
-from . import ui, workflow
+from . import tart_host, ui, workflow
 from .errors import NotReadyError, ReprovisionError
 
 _app = typer.Typer(
@@ -436,6 +437,24 @@ def demo(
     _demo.run(flow, host)
 
 
+@_app.command("tart-host-update")
+def tart_host_update(
+    hostname: str = typer.Argument(..., help="Short hostname of a tart VM host, e.g. macmini-m4-249"),
+    branch: str = typer.Option("master", "--branch", help="ronin_puppet branch to apply."),
+    min_os: str = typer.Option(
+        "15.8", "--min-os",
+        help="Update via SimpleMDM (latest MINOR only) if the host is below this. Never changes the major.",
+    ),
+    puppet_only: bool = typer.Option(False, "--puppet-only", help="Skip the OS update; drain, apply, verify."),
+    job: str = typer.Option("", "--job", help="Hangar job id, recorded in quarantineInfo."),
+) -> None:
+    """Drain a tart host's VMs, minor-update macOS, apply tart_worker, reboot, verify, re-enable.
+
+    Any failure after the quarantine leaves the VM workers QUARANTINED, never half-done.
+    """
+    tart_host.update(hostname, branch=branch, min_os=min_os, puppet_only=puppet_only, job=job)
+
+
 def app() -> None:
     """Entry point. Turns expected operational failures — not signed in to 1Password, off the
     VPN, host unreachable, BST not escrowed, timeouts — into one clean red line instead of a
@@ -448,10 +467,12 @@ def app() -> None:
     try:
         _app()
     except NotReadyError as e:  # subclass of ReprovisionError — must be caught first
-        ui.warn(str(e))
+        ui.warn(escape(str(e)))
         raise SystemExit(2) from None
     except (ReprovisionError, TimeoutError, ValueError) as e:
-        ui.err(str(e))
+        # escape: messages carry host output (ssh stderr, puppet lines) and rich would read any
+        # [..] in them as markup -- a bracket in an error must not turn it into a MarkupError.
+        ui.err(escape(str(e)))
         raise SystemExit(1) from None
 
 
