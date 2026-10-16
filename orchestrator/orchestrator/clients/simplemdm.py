@@ -245,5 +245,33 @@ def wipe(device_id: int, *, obliteration_behavior: str = "DoNotObliterate") -> N
     )
 
 
+UPDATE_OS_MODES = frozenset({"smart_update", "download_only", "notify_only", "install_asap", "force_update"})
+UPDATE_OS_VERSION_TYPES = frozenset({"latest_minor_version", "latest_major_version"})
+
+
+def update_os(device_id: int, *, os_update_mode: str, version_type: str) -> None:
+    """
+    Ask the device to install a macOS update (ScheduleOSUpdate under the hood).
+
+    Both arguments are keyword-only and deliberately have NO default. The API's own default for
+    version_type is `latest_major_version`: a call that omits it would put a tart host on the next
+    major macOS (m4-245 already had a macOS 27 major offered, with no deferral profile). There is
+    no way to name an exact version and no API to list pending updates, so callers must check the
+    version after the reboot themselves.
+
+    Commands only reach these hosts at MDM check-in or boot (puppet disables apsd), so this
+    returning means "queued", not "started".
+    """
+    if os_update_mode not in UPDATE_OS_MODES:
+        raise ValueError(f"os_update_mode must be one of {sorted(UPDATE_OS_MODES)}, got {os_update_mode!r}")
+    if version_type not in UPDATE_OS_VERSION_TYPES:
+        raise ValueError(f"version_type must be one of {sorted(UPDATE_OS_VERSION_TYPES)}, got {version_type!r}")
+    _request(
+        "POST",
+        f"/devices/{device_id}/update_os",
+        data={"os_update_mode": os_update_mode, "version_type": version_type},
+    )
+
+
 # NB: no script_jobs client. The bootstrap used to be triggered as a SimpleMDM script-job;
 # it's now delivered as a signed PKG (managed install) that lands during DEP convergence.

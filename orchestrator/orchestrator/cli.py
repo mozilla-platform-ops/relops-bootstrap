@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import typer
 
-from . import ui, workflow
+from . import tart_host, ui, workflow
 from .errors import NotReadyError, ReprovisionError
 
 _app = typer.Typer(
@@ -434,6 +434,24 @@ def demo(
     from . import demo as _demo
 
     _demo.run(flow, host)
+
+
+@_app.command("tart-host-update")
+def tart_host_update(
+    hostname: str = typer.Argument(..., help="Short hostname of a tart VM host, e.g. macmini-m4-249"),
+    branch: str = typer.Option("master", "--branch", help="ronin_puppet branch to apply."),
+    min_os: str = typer.Option(
+        "15.8", "--min-os",
+        help="Update via SimpleMDM (latest MINOR only) if the host is below this. Never changes the major.",
+    ),
+    puppet_only: bool = typer.Option(False, "--puppet-only", help="Skip the OS update; drain, apply, verify."),
+    job: str = typer.Option("", "--job", help="Hangar job id, recorded in quarantineInfo."),
+) -> None:
+    """Drain a tart host's VMs, minor-update macOS, apply tart_worker, reboot, verify, re-enable.
+
+    Any failure after the quarantine leaves the VM workers QUARANTINED, never half-done.
+    """
+    tart_host.update(hostname, branch=branch, min_os=min_os, puppet_only=puppet_only, job=job)
 
 
 def app() -> None:

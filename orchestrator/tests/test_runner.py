@@ -233,3 +233,24 @@ def test_main_installs_a_sigterm_drain_handler(monkeypatch):
     finally:
         signal.signal(signal.SIGTERM, previous)
     assert seen["stopped"] is True
+
+
+def test_job_cmd_tart_host_update_passes_params():
+    import sys
+
+    with patch.object(sys, "executable", "/nonexistent/dir/python"):
+        job = {"id": 77, "action": "tart-host-update", "params": {"branch": "master", "min_os": "15.8"}}
+        assert runner._job_cmd("macmini-m4-249", job, _Cfg()) == [
+            "reprovision", "tart-host-update", "macmini-m4-249", "--job", "77",
+            "--branch", "master", "--min-os", "15.8",
+        ]
+
+
+def test_job_cmd_tart_host_update_puppet_only():
+    import sys
+
+    with patch.object(sys, "executable", "/nonexistent/dir/python"):
+        job = {"id": 78, "action": "tart-host-update", "params": {"puppet_only": True}}
+        assert runner._job_cmd("macmini-m4-249", job, _Cfg()) == [
+            "reprovision", "tart-host-update", "macmini-m4-249", "--job", "78", "--puppet-only",
+        ]
