@@ -6,6 +6,7 @@ for re-running steps after partial failure.
 from __future__ import annotations
 
 import typer
+from rich.markup import escape
 
 from . import tart_host, ui, workflow
 from .errors import NotReadyError, ReprovisionError
@@ -466,10 +467,12 @@ def app() -> None:
     try:
         _app()
     except NotReadyError as e:  # subclass of ReprovisionError — must be caught first
-        ui.warn(str(e))
+        ui.warn(escape(str(e)))
         raise SystemExit(2) from None
     except (ReprovisionError, TimeoutError, ValueError) as e:
-        ui.err(str(e))
+        # escape: messages carry host output (ssh stderr, puppet lines) and rich would read any
+        # [..] in them as markup -- a bracket in an error must not turn it into a MarkupError.
+        ui.err(escape(str(e)))
         raise SystemExit(1) from None
 
 

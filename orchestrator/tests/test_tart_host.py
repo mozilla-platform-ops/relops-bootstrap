@@ -318,3 +318,28 @@ def test_flow_puppet_only_does_not_need_simplemdm():
     steps = _flow_patches(step_puppet_apply=MagicMock(return_value=False), boot_time=MagicMock(return_value=1))
     _run_flow(steps, puppet_only=True)
     steps["step_resolve_mdm_device"].assert_not_called()
+
+
+def test_puppet_output_with_brackets_prints_without_markup_errors():
+    """Regression: 'File[/var/sbom]' was read as a rich closing tag and crashed m4-249's run."""
+    table = {
+        "puppet apply": _cp(
+            "Notice: /Stage[main]/Macos_sbom/File[/var/sbom]/ensure: created\n"
+            "Notice: /Stage[main]/Roles_profiles::Profiles::Tart/Exec[tart_local_network_allow]/returns: "
+            "REBOOT REQUIRED for it to take effect",
+            rc=2,
+        ),
+        "local-network": "10.49.56.161/32",
+        "log -1": "checkout 93472d87 tart: allowlist [things] (#1469)",
+    }
+    with patch("orchestrator.tart_host.ssh.run", _fake_ssh(table)):
+        assert tart_host.step_puppet_apply(_host(), branch="master") is True
+
+
+def test_cli_error_with_brackets_is_printed_not_parsed():
+    from orchestrator import cli
+
+    with patch.object(cli, "_app", side_effect=ReprovisionError("bad [/var/sbom] and ['mac-1']")):
+        with pytest.raises(SystemExit) as e:
+            cli.app()
+    assert e.value.code == 1

@@ -21,6 +21,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from rich.markup import escape
+
 from . import ui
 from .clients import simplemdm, ssh, taskcluster
 from .errors import NotReadyError, ReprovisionError
@@ -148,6 +150,13 @@ def slot_pulls_since(h: TartHost, since_iso: str) -> dict[str, tuple[int, int]]:
     return res
 
 
+def _fmt_pulls(pulls: dict) -> str:
+    """{'tartworker-1.out': (2, 0)} -> 'tartworker-1.out 2 reverts/0 failed' -- no brackets."""
+    v = pulls.values()
+    pairs = v if all(isinstance(x, tuple) for x in v) else [(0, x) for x in v]
+    return ", ".join(f"{s} {r} reverts/{p} failed" for s, (r, p) in zip(pulls, pairs)) or "no slots"
+
+
 # --- steps ---------------------------------------------------------------------------------
 
 
@@ -166,7 +175,7 @@ def step_preflight(h: TartHost, *, min_free_gb: int = 40) -> str:
         raise NotReadyError(f"{h.hostname} is on macOS {ver}; this tool only handles macOS {HOST_MAJOR} hosts")
     console = _sh(h, "stat -f %Su /dev/console")
     if console != "admin":
-        raise NotReadyError(f"console is '{console}', not admin -- tart needs admin's GUI session")
+        raise NotReadyError(f"console is '{escape(console)}', not admin -- tart needs admin's GUI session")
     if "ENABLED" not in ssh.secure_token_status(h.fqdn):
         raise NotReadyError("admin has no SecureToken -- a macOS update would fail")
     bst = _sh(h, "sudo profiles status -type bootstraptoken", check=False)
@@ -287,7 +296,9 @@ def step_puppet_apply(h: TartHost, *, branch: str) -> bool:
     ui.step("PUPPET", f"apply {PUPPET_ROLE} from ronin_puppet {branch}")
     b = shlex.quote(branch)
     _sh(h, f"sudo git -C {RONIN} fetch --quiet origin {b} && sudo git -C {RONIN} checkout --quiet -B {b} origin/{b}")
-    ui.ok(_sh(h, f"sudo git -C {RONIN} log -1 --format='checkout %h %s'"))
+    # Everything printed from the host is escaped: rich reads [..] as markup, and puppet output
+    # is full of brackets (File[/var/sbom] crashed the first real run on m4-249, 2026-10-16).
+    ui.ok(escape(_sh(h, f"sudo git -C {RONIN} log -1 --format='checkout %h %s'")))
     cp = ssh.run(
         h.fqdn,
         f"cd {RONIN} && sudo FACTER_puppet_role={PUPPET_ROLE} /opt/puppetlabs/bin/puppet apply --detailed-exitcodes "
@@ -298,7 +309,7 @@ def step_puppet_apply(h: TartHost, *, branch: str) -> bool:
     out = _out(cp)
     for line in out.splitlines():
         if "Notice: /Stage" in line or "Error" in line:
-            ui.info(line[:200])
+            ui.info(escape(line[:200]))
     if cp.returncode not in (0, 2):  # --detailed-exitcodes: 2 = changes applied
         raise ReprovisionError(f"puppet apply failed (exit {cp.returncode})")
     if allowlist(h) != REGISTRY_ALLOW:
@@ -340,7 +351,9 @@ def step_reboot_healthy(h: TartHost, *, timeout: int = 1800, poll: int = 20) -> 
             )
     ids = read_worker_ids(h)
     if ids != h.worker_ids:
-        raise ReprovisionError(f"workerIds changed across the reboot: {h.worker_ids} -> {ids}")
+        raise ReprovisionError(
+            f"workerIds changed across the reboot: {', '.join(h.worker_ids)} -> {', '.join(ids) or 'none'}"
+        )
     ui.ok(f"back: console=admin, {expected} VMs running, workerIds unchanged")
     return bt
 
@@ -381,16 +394,16 @@ def step_verify_pulls(h: TartHost, *, boot_epoch: int, timeout: int = 7200, poll
             pulls = slot_pulls_since(h, since)
             failed = {s: p for s, (r, p) in pulls.items() if p}
             if failed:
-                raise ReprovisionError(f"pull failures after the update: {failed}")
+                raise ReprovisionError(f"pull failures after the update: {_fmt_pulls(failed)}")
             denials = local_network_denials_since_boot(h)
             if denials:
                 raise ReprovisionError(f"{denials} 'Local network prohibited' events for tart since boot")
             done = [s for s, (r, _) in pulls.items() if r >= 1]
             if pulls and len(done) == len(pulls):
-                ui.ok(f"verified: {pulls} (reverts, failed pulls) per slot, 0 Local Network denials")
+                ui.ok(f"verified: {_fmt_pulls(pulls)}; 0 Local Network denials")
                 return True
             if time.monotonic() > deadline:
-                ui.warn(f"UNVERIFIED after {timeout // 60} min -- pool too quiet; slots so far: {pulls}")
+                ui.warn(f"UNVERIFIED after {timeout // 60} min -- pool too quiet; so far: {_fmt_pulls(pulls)}")
                 return False
             tick(f"{len(done)}/{len(pulls)} slots have reverted since boot")
             time.sleep(poll)
