@@ -151,10 +151,24 @@ def slot_pulls_since(h: TartHost, since_iso: str) -> dict[str, tuple[int, int]]:
 
 
 def _fmt_pulls(pulls: dict) -> str:
-    """{'tartworker-1.out': (2, 0)} -> 'tartworker-1.out 2 reverts/0 failed' -- no brackets."""
-    v = pulls.values()
-    pairs = v if all(isinstance(x, tuple) for x in v) else [(0, x) for x in v]
-    return ", ".join(f"{s} {r} reverts/{p} failed" for s, (r, p) in zip(pulls, pairs)) or "no slots"
+    """{'tartworker-1.out': (2, 1)} -> 'slot 1: 2 reverts, 1 failed pull' -- no brackets.
+
+    Values may be (reverts, failed) tuples or a bare failed-pull count."""
+    parts = []
+    for name, val in pulls.items():
+        r, p = val if isinstance(val, tuple) else (None, val)
+        slot = name.replace("tartworker-", "slot ").replace(".out", "")
+        bits = ([f"{r} revert{'s' * (r != 1)}"] if r is not None else []) + [f"{p} failed pull{'s' * (p != 1)}"]
+        parts.append(f"{slot}: {', '.join(bits)}")
+    return "; ".join(parts) or "no slots"
+
+
+def _fmt_reverts(pulls: dict) -> str:
+    """Success-path summary that never contains the word 'failed'."""
+    return ", ".join(
+        f"{n.replace('tartworker-', 'slot ').replace('.out', '')} {r} revert{'s' * (r != 1)}"
+        for n, (r, _) in pulls.items()
+    ) or "no slots"
 
 
 # --- steps ---------------------------------------------------------------------------------
@@ -400,7 +414,7 @@ def step_verify_pulls(h: TartHost, *, boot_epoch: int, timeout: int = 7200, poll
                 raise ReprovisionError(f"{denials} 'Local network prohibited' events for tart since boot")
             done = [s for s, (r, _) in pulls.items() if r >= 1]
             if pulls and len(done) == len(pulls):
-                ui.ok(f"verified: {_fmt_pulls(pulls)}; 0 Local Network denials")
+                ui.ok(f"verified: all pulls clean, 0 Local Network denials ({_fmt_reverts(pulls)})")
                 return True
             if time.monotonic() > deadline:
                 ui.warn(f"UNVERIFIED after {timeout // 60} min -- pool too quiet; so far: {_fmt_pulls(pulls)}")
@@ -436,8 +450,13 @@ def update(hostname: str, *, branch: str = "master", min_os: str = "15.8", puppe
         raise
     step_unquarantine(h)
     try:
-        step_verify_pulls(h, boot_epoch=boot)
+        verified = step_verify_pulls(h, boot_epoch=boot)
     except Exception:
         step_quarantine(h, info=f"tart-host-update {job} verify failed".strip())
         ui.err(f"verify failed -- {', '.join(h.worker_ids)} re-QUARANTINED")
         raise
+    # Last line on purpose: the runner reports a job's final stdout line as its Hangar detail.
+    ui.ok(
+        f"tart-host-update complete: {h.hostname} back in service, "
+        + ("pulls verified" if verified else "pulls UNVERIFIED (pool too quiet)")
+    )
