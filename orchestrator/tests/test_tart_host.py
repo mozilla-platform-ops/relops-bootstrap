@@ -148,7 +148,7 @@ def test_os_update_serial_mismatch_never_sends_the_command():
         patch("orchestrator.tart_host.simplemdm.find_device_by_name", return_value=device),
         patch("orchestrator.tart_host.simplemdm.update_os") as upd,
     ):
-        with pytest.raises(ReprovisionError, match="serial mismatch"):
+        with pytest.raises(NotReadyError, match="serial mismatch"):
             tart_host.step_os_update(_host(), min_os="15.8")
         upd.assert_not_called()
 
@@ -253,6 +253,7 @@ def _flow_patches(**overrides):
     steps = {
         "resolve": MagicMock(return_value=_host()),
         "step_preflight": MagicMock(return_value="15.3"),
+        "step_resolve_mdm_device": MagicMock(),
         "step_resolve_workers": MagicMock(),
         "step_quarantine": MagicMock(),
         "step_drain": MagicMock(),
@@ -304,3 +305,16 @@ def test_flow_puppet_only_skips_os_update_and_reboots_only_if_needed():
     _run_flow(steps, puppet_only=True)
     steps["step_os_update"].assert_not_called()
     steps["step_reboot_healthy"].assert_not_called()
+
+
+def test_flow_mdm_device_problem_fails_before_any_quarantine():
+    steps = _flow_patches(step_resolve_mdm_device=MagicMock(side_effect=NotReadyError("serial mismatch")))
+    with pytest.raises(NotReadyError):
+        _run_flow(steps)
+    steps["step_quarantine"].assert_not_called()
+
+
+def test_flow_puppet_only_does_not_need_simplemdm():
+    steps = _flow_patches(step_puppet_apply=MagicMock(return_value=False), boot_time=MagicMock(return_value=1))
+    _run_flow(steps, puppet_only=True)
+    steps["step_resolve_mdm_device"].assert_not_called()

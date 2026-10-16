@@ -182,6 +182,26 @@ def step_preflight(h: TartHost, *, min_free_gb: int = 40) -> str:
     return ver
 
 
+def step_resolve_mdm_device(h: TartHost) -> None:
+    """Find the SimpleMDM device and prove it is THIS box (hardware serial), before any change.
+
+    Name lookup has picked the wrong device before; the serial is the only reliable join key.
+    Done up front so a missing or mismatched record fails the run before the quarantine.
+    """
+    ui.step("MDM DEVICE", "find the SimpleMDM record and match its serial to the host")
+    device = simplemdm.find_device_by_name(h.hostname)
+    if not device:
+        raise NotReadyError(f"no SimpleMDM device named {h.hostname}")
+    mdm_serial = device.get("attributes", {}).get("serial_number", "")
+    box_serial = ssh.platform_serial(h.fqdn)
+    if not box_serial or mdm_serial != box_serial:
+        raise NotReadyError(
+            f"serial mismatch: SimpleMDM device {device['id']} has {mdm_serial!r}, the host reports {box_serial!r}"
+        )
+    h.simplemdm_device_id = int(device["id"])
+    ui.ok(f"device {h.simplemdm_device_id}, serial {box_serial}")
+
+
 def step_resolve_workers(h: TartHost) -> None:
     ui.step("WORKERS", "map each VM slot to its Taskcluster workerId and check TC knows it")
     ids = read_worker_ids(h)
@@ -236,18 +256,9 @@ def step_os_update(h: TartHost, *, min_os: str, timeout: int = 3 * 3600, poll: i
     if _ver(cur) >= _ver(min_os):
         ui.ok(f"already on {cur} -- skipping")
         return cur
-    # Cross-check the MDM record against the box before sending anything. Name lookup has picked
-    # the wrong device before; the hardware serial is the only reliable join key.
-    device = simplemdm.find_device_by_name(h.hostname)
-    if not device:
-        raise ReprovisionError(f"no SimpleMDM device named {h.hostname}")
-    mdm_serial = device.get("attributes", {}).get("serial_number", "")
-    box_serial = ssh.platform_serial(h.fqdn)
-    if not box_serial or mdm_serial != box_serial:
-        raise ReprovisionError(
-            f"serial mismatch: SimpleMDM device {device['id']} has {mdm_serial!r}, the host reports {box_serial!r}"
-        )
-    h.simplemdm_device_id = int(device["id"])
+    # Re-check right before sending, even though update() already did it in preflight: this step
+    # can be called on its own, and the cost is one API call.
+    step_resolve_mdm_device(h)
     ui.wire(f"POST devices/{h.simplemdm_device_id}/update_os force_update latest_minor_version")
     simplemdm.update_os(h.simplemdm_device_id, os_update_mode="force_update", version_type="latest_minor_version")
 
@@ -393,6 +404,8 @@ def update(hostname: str, *, branch: str = "master", min_os: str = "15.8", puppe
     h = resolve(hostname)
     ui.banner(h.hostname, PUPPET_ROLE, POOL)
     step_preflight(h)
+    if not puppet_only:
+        step_resolve_mdm_device(h)
     step_resolve_workers(h)
     step_quarantine(h, info=f"tart-host-update {job}".strip())
     try:
