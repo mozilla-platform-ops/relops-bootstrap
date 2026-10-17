@@ -16,6 +16,8 @@ Vocabulary the steps use:
 
 from __future__ import annotations
 
+import sys
+
 import itertools
 import time
 from contextlib import contextmanager
@@ -29,7 +31,10 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-console = Console(highlight=False)
+# soft_wrap off a TTY: the runner streams stdout to Hangar line by line and reports the LAST
+# line as the job's detail. Hard-wrapping at 80 columns split a success message so Hangar
+# showed only its tail ("…failed; 0 Local Network denials") for a job that had succeeded.
+console = Console(highlight=False, soft_wrap=not sys.stdout.isatty())
 
 # Classic Apple six-color logo palette, top stripe → bottom stripe.
 GREEN, YELLOW, ORANGE, RED, PURPLE, BLUE = (

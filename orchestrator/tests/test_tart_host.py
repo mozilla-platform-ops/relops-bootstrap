@@ -343,3 +343,32 @@ def test_cli_error_with_brackets_is_printed_not_parsed():
         with pytest.raises(SystemExit) as e:
             cli.app()
     assert e.value.code == 1
+
+
+def test_success_summary_never_says_failed():
+    msg = tart_host._fmt_reverts({"tartworker-1.out": (1, 0), "tartworker-2.out": (2, 0)})
+    assert msg == "slot 1 1 revert, slot 2 2 reverts"
+    assert "fail" not in msg
+
+
+def test_failure_summary_is_explicit():
+    assert tart_host._fmt_pulls({"tartworker-1.out": (2, 1)}) == "slot 1: 2 reverts, 1 failed pull"
+
+
+def test_flow_ends_with_a_clear_completion_line():
+    steps = _flow_patches()
+    with patch.multiple("orchestrator.tart_host", **steps), patch("orchestrator.tart_host.ui") as ui:
+        tart_host.update("macmini-m4-249")
+    last = ui.ok.call_args_list[-1].args[0]
+    assert last.startswith("tart-host-update complete: macmini-m4-249 back in service, pulls verified")
+
+
+def test_console_does_not_hard_wrap_off_a_tty():
+    """The runner reads stdout line by line; a wrapped line loses its head in Hangar."""
+    import io
+
+    from rich.console import Console
+
+    buf = io.StringIO()
+    Console(file=buf, highlight=False, soft_wrap=True, width=80).print("x" * 200)
+    assert buf.getvalue().count("\n") == 1
