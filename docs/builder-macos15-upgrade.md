@@ -63,8 +63,9 @@ tester's `worker:` hash must not survive — it carries the tester pool, client 
 
 ## Open questions
 
-1. `startosinstall` on 18P+ Intel hosts is untested — r8-241/242 used the GUI installer.
-   Try the CLI by hand on the next host (r8-139) before step 5 depends on it.
+1. ~~`startosinstall` on 18P+ Intel hosts is untested.~~ **Answered:** works. r8-368 (T2
+   20P5058) went 10.15.7 → 15.8.1 / 24P6005 via the CLI in ~27 min, hands-off, on
+   2026-10-19. r8-195's failures were its 17P T2 running out of room, not the CLI.
 2. releng-pxe1 has the 15.3 installer for the M4s; it needs 15.8.1.
 3. Old builders get MDM changes only at boot (`apsd` disabled) and some never received
    group profiles at all (r8-202). Is the sudo pkg reliable enough to drop the password
