@@ -7,6 +7,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
 
 from orchestrator import runner
 
@@ -93,6 +94,27 @@ def test_job_cmd_unquarantine():
     with patch.object(sys, "executable", "/nonexistent/dir/python"):
         job = {"action": "unquarantine", "params": {}}
         assert runner._job_cmd("macmini-m4-80", job, _Cfg()) == ["reprovision", "unquarantine", "macmini-m4-80"]
+
+
+def test_job_cmd_explicit_reprovision_action_runs_the_workflow():
+    job = {"action": "reprovision", "params": {}}
+    assert runner._job_cmd("macmini-m4-80", job, _Cfg())[1:] == ["run", "macmini-m4-80"]
+
+
+def test_job_cmd_unknown_action_is_rejected_not_run():
+    # A Hangar newer than this runner can queue an action it doesn't know. Falling through
+    # to `run` would turn that into an EACS wipe.
+    with pytest.raises(ValueError, match="unknown action"):
+        runner._job_cmd("macmini-r8-124", {"action": "some-future-action", "params": {}}, _Cfg())
+
+
+def test_run_job_fails_unknown_action_without_starting_anything():
+    client = MagicMock()
+    with patch("orchestrator.runner.subprocess.Popen") as popen:
+        runner._run_job(client, _Cfg(), {"id": 11, "short": "macmini-r8-124", "action": "some-future-action"})
+    popen.assert_not_called()
+    body = client.post.call_args.kwargs["json"]
+    assert body["success"] is False and "unknown action" in body["detail"]
 
 
 def test_complete_retries_until_success():

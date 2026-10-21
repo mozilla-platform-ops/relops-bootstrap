@@ -204,7 +204,9 @@ def _job_cmd(host: str, job: dict, cfg: "Config") -> list[str]:
     matching lightweight CLI subcommand — a single TC quarantineWorker call, using
     this runner's existing TC creds. "tart-host-update" runs the tart VM host maintenance
     flow (orchestrator/tart_host.py); "builder-upgrade" the Intel builder macOS 15 upgrade
-    (orchestrator/builder_upgrade.py). Anything else is the full reprovision workflow.
+    (orchestrator/builder_upgrade.py). "reprovision" (or no action: old rows) is the full EACS
+    workflow. Anything else raises ValueError: a newer Hangar can queue an action this runner
+    predates, and falling through to `run` would turn it into a wipe.
     """
     exe = _reprovision_exe()
     action = job.get("action") or "reprovision"
@@ -234,6 +236,8 @@ def _job_cmd(host: str, job: dict, cfg: "Config") -> list[str]:
         if params.get("puppet_only"):
             cmd.append("--puppet-only")
         return cmd
+    if action != "reprovision":
+        raise ValueError(f"unknown action {action!r} -- this runner predates it; update relops-bootstrap")
     cmd = [exe, "run", host]
     if cfg.unquarantine:
         cmd.append("--unquarantine")
@@ -250,7 +254,11 @@ def _run_job(client: httpx.Client, cfg: Config, job: dict) -> None:
     except ValueError as e:
         _complete(client, cfg, job_id, False, f"rejected: {e}")
         return
-    cmd = _job_cmd(host, job, cfg)
+    try:
+        cmd = _job_cmd(host, job, cfg)
+    except ValueError as e:
+        _complete(client, cfg, job_id, False, f"rejected: {e}")
+        return
     _event(client, cfg, job_id, f"runner {cfg.runner_id} starting: {' '.join(cmd[1:])}")
     try:
         proc = subprocess.Popen(
