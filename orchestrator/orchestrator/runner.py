@@ -203,7 +203,8 @@ def _job_cmd(host: str, job: dict, cfg: "Config") -> list[str]:
     action "quarantine"/"unquarantine" (from Hangar's quarantine control) run the
     matching lightweight CLI subcommand — a single TC quarantineWorker call, using
     this runner's existing TC creds. "tart-host-update" runs the tart VM host maintenance
-    flow (orchestrator/tart_host.py). Anything else is the full reprovision workflow.
+    flow (orchestrator/tart_host.py); "builder-upgrade" the Intel builder macOS 15 upgrade
+    (orchestrator/builder_upgrade.py). Anything else is the full reprovision workflow.
     """
     exe = _reprovision_exe()
     action = job.get("action") or "reprovision"
@@ -217,6 +218,13 @@ def _job_cmd(host: str, job: dict, cfg: "Config") -> list[str]:
         return cmd
     if action == "unquarantine":
         return [exe, "unquarantine", host]
+    if action == "builder-upgrade":
+        cmd = [exe, "builder-upgrade", host, "--job", str(job.get("id", ""))]
+        if params.get("dry_run"):
+            cmd.append("--dry-run")
+        if params.get("unquarantine"):
+            cmd.append("--unquarantine")
+        return cmd
     if action == "tart-host-update":
         cmd = [exe, "tart-host-update", host, "--job", str(job.get("id", ""))]
         if params.get("branch"):
