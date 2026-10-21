@@ -125,6 +125,18 @@ def test_preflight_skips_t2_gate_once_on_15():
     assert ver == "15.8.1"
 
 
+@pytest.mark.parametrize("ver", ["13.4", "13.6.5"])
+def test_preflight_accepts_app_services_on_13(ver):
+    _, got, _ = _preflight({"sw_vers -productVersion": ver, "cat /etc/puppet_role": "applicationservices_1_b_osx_1015"})
+    assert got == ver
+
+
+@pytest.mark.parametrize("ver", ["10.14.6", "11.7", "14.7.5"])
+def test_preflight_refuses_other_source_versions(ver):
+    with pytest.raises(NotReadyError, match="10.15 or 13"):
+        _preflight({"sw_vers -productVersion": ver})
+
+
 def test_preflight_refuses_branch_override():
     with pytest.raises(NotReadyError, match="override"):
         _preflight({"PUPPET_BRANCH": 'PUPPET_BRANCH="mac-builder-disk-leaks"'})
