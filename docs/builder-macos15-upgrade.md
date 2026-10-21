@@ -2,7 +2,7 @@
 
 **Status:** built as `orchestrator/builder_upgrade.py` (`reprovision builder-upgrade <host> [--dry-run] [--unquarantine]`, runner action `builder-upgrade`). Tracks RELOPS-2594.
 
-Moves an Intel Mac mini builder (`*_b_osx_1015` roles, macOS 10.15) to macOS 15 in place:
+Moves an Intel Mac mini builder (`*_b_osx_1015` roles; gecko/nss on macOS 10.15, applicationservices on 13) to macOS 15 in place:
 no wipe, same pool, same vault.yaml, new role (`*_b_osx_1500`). Every step below was done by
 hand on macmini-r8-202, r8-241 and r8-242 in Sept–Oct 2026; each one exists because skipping
 it broke something.

@@ -1,5 +1,6 @@
 """
-In-place upgrade of an Intel r8 builder (Mac mini 2018, `*_b_osx_1015` roles) to macOS 15:
+In-place upgrade of an Intel r8 builder (Mac mini 2018, `*_b_osx_1015` roles, on macOS 10.15
+or 13) to macOS 15:
 same pool, same vault.yaml, new `*_b_osx_1500` role. One command, drivable from Hangar.
 
 Separate from workflow.py for the same reason as tart_host.py: those steps guard EACS wipes
@@ -49,6 +50,8 @@ KCPASSWORD_ASIDE = "/etc/kcpassword.disabled"
 CLT_TRIGGER = "/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress"
 # Installer + upgrade + Xcode. r8-241 had 49G of worker cache; clear_caches frees it.
 MIN_FREE_GB = 60
+# Where builders start from: gecko/nss are on 10.15, applicationservices on macOS 13.
+SOURCE_OS = ((10, 15), (13,))
 
 ROLE_UPGRADES = {
     "gecko_1_b_osx_1015": "gecko_1_b_osx_1500",
@@ -186,8 +189,8 @@ def step_preflight(h: BuilderHost) -> str:
     ui.step("PREFLIGHT", "T2 >= 20P, builder role, stock hiera, no override, pinned task user, disk")
     ver = os_version(h)
     on_target = _ver(ver)[0] == TARGET_MAJOR
-    if not on_target and _ver(ver)[:2] != (10, 15):
-        raise NotReadyError(f"{h.hostname} is on macOS {ver}; this tool upgrades 10.15 builders")
+    if not on_target and not any(_ver(ver)[: len(src)] == src for src in SOURCE_OS):
+        raise NotReadyError(f"{h.hostname} is on macOS {ver}; this tool upgrades builders on 10.15 or 13")
     model = _sh(h, "sysctl -n hw.model")
     if model != "Macmini8,1":
         raise NotReadyError(f"{h.hostname} is a {model}, not a Mac mini 2018 (Macmini8,1)")
