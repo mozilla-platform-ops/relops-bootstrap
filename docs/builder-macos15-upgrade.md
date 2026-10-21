@@ -1,6 +1,6 @@
 # Intel r8 builders → macOS 15: `reprovision builder-upgrade`
 
-**Status:** design, not built. Tracks RELOPS-2594.
+**Status:** built as `orchestrator/builder_upgrade.py` (`reprovision builder-upgrade <host> [--dry-run] [--unquarantine]`, runner action `builder-upgrade`). Tracks RELOPS-2594.
 
 Moves an Intel Mac mini builder (`*_b_osx_1015` roles, macOS 10.15) to macOS 15 in place:
 no wipe, same pool, same vault.yaml, new role (`*_b_osx_1500`). Every step below was done by
@@ -21,7 +21,7 @@ it broke something.
 
 | # | Step | What it does | Why (what broke without it) |
 |---|---|---|---|
-| 1 | `preflight` | **T2 bridgeOS ≥ 18P**; `puppet config print certname` == `facter networking.fqdn`; stock `hiera.yaml` (no `hiera_vault`); free disk; record the pinned task user from `/opt/worker/current-task-user.json`; target role exists | 17P6610 T2s can't stage the 24P6005 firmware (≈67 MB short on the T2's own storage) and every install path boots straight back to 10.15 — r8-195, four attempts. Those hosts need a DFU revive, not this tool. |
+| 1 | `preflight` | **T2 bridgeOS ≥ 20P**; `puppet config print certname` == `facter networking.fqdn`; stock `hiera.yaml` (no `hiera_vault`); free disk; record the pinned task user from `/opt/worker/current-task-user.json`; target role exists | 17P6610 T2s can't stage the 24P6005 firmware (≈67 MB short on the T2's own storage) and every install path boots straight back to 10.15 — r8-195, four attempts. 18P4347 hung the installer and went dark (r8-139). Those hosts need a DFU revive, not this tool. |
 | 2 | `quarantine`, `drain` | reuse | |
 | 3 | `stop_worker` | `rm /var/tmp/semaphore/run-buildbot`; `launchctl bootout system/org.mozilla.worker-runner`; move `/etc/kcpassword` → `/etc/kcpassword.disabled`, then log out the console user with `launchctl bootout gui/$(id -u $(stat -f%Su /dev/console))` (expect the console owner to become `root`) | Otherwise worker-runner reboots mid-upgrade. Autologin leaves the pinned task user holding the console (its `loginwindow` and Aqua session), which gets in the way of the installer; Autologin re-fires after every logout, not just at boot — without moving kcpassword aside the bootout succeeds and the task user is back in seconds (r8-368). The AppleScript `log out` route times out waiting on an Automation prompt nobody can click. `autoLoginUser` is left alone so step 13 only has to move kcpassword back. |
 | 4 | `clear_caches` | as root: `/opt/worker/cache/*`, `/opt/worker/tasks/*`, `{}` → `directory-caches.json`; dead `/Users/cltbld/caches`; stale `macOS Install Data`; `Xcode.app.pre-*` | Installer + upgrade + Xcode need ~60 GB. r8-241 had 49 GB of cache; r8-195 had 22 GB of 2020-era caches. `/opt/worker/cache` is 0700 — a bare `sudo rm` glob deletes nothing. |

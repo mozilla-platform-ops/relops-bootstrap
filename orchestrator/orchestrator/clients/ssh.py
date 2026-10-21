@@ -23,8 +23,8 @@ from ..errors import ReprovisionError
 from ..secrets import ssh_admin_key, ssh_admin_password
 
 
-def _user_host(hostname: str) -> str:
-    return f"{get_settings().ssh_admin_user}@{hostname}"
+def _user_host(hostname: str, user: str | None = None) -> str:
+    return f"{user or get_settings().ssh_admin_user}@{hostname}"
 
 
 def _tool_known_hosts() -> str:
@@ -274,7 +274,13 @@ def platform_serial(hostname: str) -> str:
 
 
 def run(
-    hostname: str, command: str, *, stdin: bytes | None = None, check: bool = True, timeout: int | None = None
+    hostname: str,
+    command: str,
+    *,
+    stdin: bytes | None = None,
+    check: bool = True,
+    timeout: int | None = None,
+    user: str | None = None,
 ) -> subprocess.CompletedProcess:
     """Run `command` over SSH on hostname. Returns CompletedProcess.
 
@@ -282,6 +288,9 @@ def run(
     mismatch) or any nonzero exit raises a clean ReprovisionError. The error never echoes
     `command`, which may embed the admin password. Callers that inspect the result themselves
     (the wipe guard, sentinel poll) pass check=False and read `returncode`.
+
+    `user` overrides the login (default ssh_admin_user): the Intel r8 builders have no admin
+    account and take the same key as `relops`.
     """
     timeout = timeout or get_settings().ssh_command_timeout_seconds
     args = [
@@ -291,7 +300,7 @@ def run(
         "-o", f"UserKnownHostsFile={_tool_known_hosts()}",
         "-o", "ConnectTimeout=15",
         *_identity_opts(),
-        _user_host(hostname),
+        _user_host(hostname, user),
         command,
     ]
     try:
@@ -307,7 +316,9 @@ def run(
     return cp
 
 
-def write_file_as_root(hostname: str, remote_path: str, content: bytes, mode: str = "0600") -> None:
+def write_file_as_root(
+    hostname: str, remote_path: str, content: bytes, mode: str = "0600", *, user: str | None = None
+) -> None:
     """
     SCP-style file drop with sudo. Pipes the content into `sudo tee` on the host,
     then chmod's it. Used for /var/root/vault.yaml.
@@ -318,9 +329,9 @@ def write_file_as_root(hostname: str, remote_path: str, content: bytes, mode: st
         f"sudo chmod {mode} {shlex.quote(remote_path)} && "
         f"sudo chown root:wheel {shlex.quote(remote_path)}"
     )
-    run(hostname, cmd, stdin=content, check=True)
+    run(hostname, cmd, stdin=content, check=True, user=user)
 
 
-def file_exists(hostname: str, path: str) -> bool:
-    cp = run(hostname, f"test -f {shlex.quote(path)} && echo yes || echo no", check=False)
+def file_exists(hostname: str, path: str, *, user: str | None = None) -> bool:
+    cp = run(hostname, f"test -f {shlex.quote(path)} && echo yes || echo no", check=False, user=user)
     return cp.stdout.strip() == b"yes"

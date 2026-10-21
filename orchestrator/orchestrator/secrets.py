@@ -160,3 +160,10 @@ def ssh_admin_password() -> str:
             "REPROVISION_SSH_ADMIN_PASSWORD_REF (an op:// ref or a Secret Manager id)."
         )
     return pw
+
+
+@functools.lru_cache(maxsize=None)
+def builder_sudo_password() -> str:
+    """relops's password for builder-upgrade's sudo fallback, or '' if not configured."""
+    s = get_settings()
+    return _resolve(s.builder_sudo_password, s.builder_sudo_password_ref, s.gcp_project)

@@ -8,7 +8,7 @@ from __future__ import annotations
 import typer
 from rich.markup import escape
 
-from . import tart_host, ui, workflow
+from . import builder_upgrade, tart_host, ui, workflow
 from .errors import NotReadyError, ReprovisionError
 
 _app = typer.Typer(
@@ -453,6 +453,21 @@ def tart_host_update(
     Any failure after the quarantine leaves the VM workers QUARANTINED, never half-done.
     """
     tart_host.update(hostname, branch=branch, min_os=min_os, puppet_only=puppet_only, job=job)
+
+
+@_app.command("builder-upgrade")
+def builder_upgrade_cmd(
+    hostname: str = typer.Argument(..., help="Short hostname of an Intel r8 builder, e.g. macmini-r8-124"),
+    unquarantine: bool = typer.Option(False, "--unquarantine", help="Put it back in service at the end."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preflight only: is this host eligible? Changes nothing."),
+    job: str = typer.Option("", "--job", help="Hangar job id, recorded in quarantineInfo."),
+) -> None:
+    """Upgrade a 10.15 builder to macOS 15 in place: drain, startosinstall, Xcode 16.4, CLT,
+    1500 role, puppet x2, verify, autologin back, reboot.
+
+    Safe to re-run: finished steps are skipped. Any failure leaves the worker QUARANTINED.
+    """
+    builder_upgrade.upgrade(hostname, unquarantine=unquarantine, dry_run=dry_run, job=job)
 
 
 def app() -> None:

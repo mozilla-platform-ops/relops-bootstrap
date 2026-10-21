@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     )
     ssh_command_timeout_seconds: int = Field(default=120)
 
+    # builder-upgrade: relops's password, used ONLY if the SimpleMDM sudo pkg hasn't restored
+    # passwordless sudo after the macOS upgrade reset /etc/sudoers. Empty -> wait for the pkg.
+    builder_sudo_password: str = Field(default="")
+    builder_sudo_password_ref: str = Field(default="")
+
     # Polling cadence
     drain_poll_seconds: int = Field(default=15)
     drain_max_wait_seconds: int = Field(default=3600)
