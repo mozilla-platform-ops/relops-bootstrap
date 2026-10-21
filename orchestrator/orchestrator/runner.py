@@ -83,6 +83,66 @@ class Config:
         return {}
 
 
+class _ReloadingClient:
+    """An httpx.Client that rebuilds itself when the mTLS cert/key files change on disk.
+
+    step-ca renews the runner's ~23h cert every ~15h. A single long-lived httpx.Client keeps the
+    cert it loaded at startup, which is why the renew daemon used to `kickstart -k` the runner --
+    and that restart killed whatever job was in flight once the drain outlived ExitTimeOut
+    (m4-191's tart-host-update, 2026-10-20). Re-reading the files makes the restart unnecessary.
+    The old client is not closed: another job thread may be mid-request on it; it is GC'd.
+    """
+
+    def __init__(self, cfg: "Config") -> None:
+        self._cfg = cfg
+        self._lock = threading.Lock()
+        self._client: httpx.Client | None = None
+        self._stamp: tuple | None = None
+
+    def _files_stamp(self) -> tuple | None:
+        if not (self._cfg.client_cert and self._cfg.client_key):
+            return None
+        try:
+            return tuple(os.stat(p).st_mtime_ns for p in (self._cfg.client_cert, self._cfg.client_key))
+        except OSError:
+            return self._stamp  # mid-rename: keep using what we have
+
+    def _current(self) -> httpx.Client:
+        with self._lock:
+            stamp = self._files_stamp()
+            if self._client is None or stamp != self._stamp:
+                if self._client is not None:
+                    print("client cert changed on disk; reloading it", flush=True)
+                self._client = httpx.Client(**self._cfg.client_kwargs)
+                self._stamp = stamp
+            return self._client
+
+    def post(self, *args, **kwargs) -> httpx.Response:
+        return self._current().post(*args, **kwargs)
+
+    def get(self, *args, **kwargs) -> httpx.Response:
+        return self._current().get(*args, **kwargs)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._client is not None:
+                self._client.close()
+                self._client = None
+
+
+def _reset(client, cfg: Config) -> None:
+    """Tell Hangar we just started, so it fails any job this runner still had open: its
+    subprocess died with the previous process. Best-effort -- an older Hangar returns 404."""
+    try:
+        r = client.post(f"{cfg.api}/reprovision/runner/reset", headers=cfg.headers, timeout=30)
+        r.raise_for_status()
+        failed = r.json().get("failed") or []
+        if failed:
+            print(f"startup reset: marked orphaned job(s) {failed} failed", flush=True)
+    except httpx.HTTPError as e:
+        print(f"startup reset skipped: {e}", flush=True)
+
+
 def _claim(client: httpx.Client, cfg: Config) -> dict | None:
     r = client.post(f"{cfg.api}/reprovision/runner/claim", headers=cfg.headers, timeout=30)
     r.raise_for_status()
@@ -224,8 +284,8 @@ def main() -> None:
         f"reprovision-runner [{cfg.runner_id}] → {cfg.api} "
         f"(auth: {auth}, poll {cfg.poll}s, max_concurrent {cfg.max_concurrent})"
     )
-    # SIGTERM drains instead of dying. launchd sends it on every restart -- the step-ca
-    # renewal's `kickstart -k`, a puppet reload's bootout -- and a job's `reprovision`
+    # SIGTERM drains instead of dying. launchd sends it on every restart -- a puppet reload's
+    # bootout, and (before _ReloadingClient) the step-ca renewal's `kickstart -k` -- and a job's `reprovision`
     # subprocess dying with the runner strands its host mid-EACS. launchd waits up to the
     # plist's ExitTimeOut before SIGKILL, so that must cover a whole reprovision.
     stop = threading.Event()
@@ -236,11 +296,15 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, _on_sigterm)
     # httpx.Client is thread-safe (pooled connections), so one client is shared across job
-    # threads. Claim up to max_concurrent jobs and run them in parallel — a whole pool of
-    # workers reprovisions "at once" instead of serially.
-    with httpx.Client(**cfg.client_kwargs) as client, \
-            ThreadPoolExecutor(max_workers=cfg.max_concurrent, thread_name_prefix="job") as pool:
-        _serve(client, cfg, pool, stop)
+    # threads -- wrapped so a renewed cert is picked up without a restart. Claim up to
+    # max_concurrent jobs and run them in parallel.
+    client = _ReloadingClient(cfg)
+    _reset(client, cfg)
+    try:
+        with ThreadPoolExecutor(max_workers=cfg.max_concurrent, thread_name_prefix="job") as pool:
+            _serve(client, cfg, pool, stop)
+    finally:
+        client.close()
     print("drained: no jobs in flight, exiting", flush=True)
 
 

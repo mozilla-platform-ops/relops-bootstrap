@@ -26,7 +26,7 @@ import time
 import httpx
 
 from .hostnames import validate_fqdn
-from .runner import Config
+from .runner import Config, _ReloadingClient
 
 VNC_PORT = 5900
 POLL = int(os.environ.get("SCREEN_POLL_SECONDS", "6"))
@@ -85,7 +85,10 @@ def main() -> None:
     password = _admin_password()
     auth = "mTLS cert" if cfg.client_cert else "shared token"
     print(f"hangar-screen-agent [{cfg.runner_id}] → {cfg.api} (auth: {auth}, poll {POLL}s)")
-    with httpx.Client(**cfg.client_kwargs) as client:
+    # Reloads the mTLS cert when step-ca renews it; nothing restarts this agent on renewal, so a
+    # client built once at startup started failing every poll once its ~23h cert expired.
+    client = _ReloadingClient(cfg)
+    try:
         while True:
             try:
                 hosts = _pending(client, cfg)
@@ -105,6 +108,8 @@ def main() -> None:
                 except Exception as e:  # noqa: BLE001 — one bad host must not stop the loop
                     print(f"capture {fqdn} failed: {e}")
             time.sleep(POLL)
+    finally:
+        client.close()
 
 
 if __name__ == "__main__":
