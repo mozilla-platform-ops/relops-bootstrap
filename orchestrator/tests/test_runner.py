@@ -254,3 +254,62 @@ def test_job_cmd_tart_host_update_puppet_only():
         assert runner._job_cmd("macmini-m4-249", job, _Cfg()) == [
             "reprovision", "tart-host-update", "macmini-m4-249", "--job", "78", "--puppet-only",
         ]
+
+
+# --- cert reload without restart + startup reset ---
+
+
+class _CertCfg(_Cfg):
+    def __init__(self, cert, key):
+        self.client_cert, self.client_key = str(cert), str(key)
+
+    @property
+    def client_kwargs(self):
+        return {"cert": (self.client_cert, self.client_key)}
+
+
+def test_reloading_client_rebuilds_only_when_cert_files_change(tmp_path):
+    """A renewed cert must be picked up without restarting the runner (a restart killed m4-191's job)."""
+    import os
+
+    cert, key = tmp_path / "c.crt", tmp_path / "c.key"
+    cert.write_text("a")
+    key.write_text("a")
+    made = []
+    with patch("orchestrator.runner.httpx.Client", side_effect=lambda **kw: made.append(kw) or MagicMock()):
+        c = runner._ReloadingClient(_CertCfg(cert, key))
+        first = c._current()
+        assert c._current() is first and len(made) == 1  # unchanged files: same client
+        st = cert.stat()
+        os.utime(cert, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))  # step-ca renewal rewrites the file
+        second = c._current()
+        assert second is not first and len(made) == 2
+
+
+def test_reloading_client_with_token_auth_builds_once():
+    made = []
+    cfg = _Cfg()
+    cfg.client_cert = cfg.client_key = ""
+    cfg.client_kwargs = {}
+    with patch("orchestrator.runner.httpx.Client", side_effect=lambda **kw: made.append(kw) or MagicMock()):
+        c = runner._ReloadingClient(cfg)
+        c._current()
+        c._current()
+    assert len(made) == 1
+
+
+def test_reset_reports_orphaned_jobs(capsys):
+    client = MagicMock()
+    client.post.return_value = MagicMock(status_code=200, json=lambda: {"failed": [73]})
+    runner._reset(client, _Cfg())
+    assert client.post.call_args.args[0] == "http://hangar/api/reprovision/runner/reset"
+    assert "orphaned job(s) [73]" in capsys.readouterr().out
+
+
+def test_reset_is_best_effort_against_an_older_hangar(capsys):
+    client = MagicMock()
+    resp = MagicMock()
+    resp.raise_for_status.side_effect = httpx.HTTPStatusError("404", request=MagicMock(), response=MagicMock())
+    client.post.return_value = resp
+    runner._reset(client, _Cfg())  # must not raise
+    assert "startup reset skipped" in capsys.readouterr().out
