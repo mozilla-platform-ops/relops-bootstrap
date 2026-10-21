@@ -120,6 +120,9 @@ class _ReloadingClient:
     def post(self, *args, **kwargs) -> httpx.Response:
         return self._current().post(*args, **kwargs)
 
+    def get(self, *args, **kwargs) -> httpx.Response:
+        return self._current().get(*args, **kwargs)
+
     def close(self) -> None:
         with self._lock:
             if self._client is not None:

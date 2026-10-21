@@ -313,3 +313,13 @@ def test_reset_is_best_effort_against_an_older_hangar(capsys):
     client.post.return_value = resp
     runner._reset(client, _Cfg())  # must not raise
     assert "startup reset skipped" in capsys.readouterr().out
+
+
+def test_reloading_client_get_delegates_for_the_screen_agent(tmp_path):
+    cert, key = tmp_path / "c.crt", tmp_path / "c.key"
+    cert.write_text("a")
+    key.write_text("a")
+    inner = MagicMock()
+    with patch("orchestrator.runner.httpx.Client", return_value=inner):
+        runner._ReloadingClient(_CertCfg(cert, key)).get("http://hangar/api/screen/agent/requests", timeout=30)
+    inner.get.assert_called_once_with("http://hangar/api/screen/agent/requests", timeout=30)
