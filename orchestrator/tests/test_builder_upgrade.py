@@ -188,6 +188,19 @@ def test_stop_worker_fails_if_task_user_comes_straight_back():
             bu.step_stop_worker(_host(), logout_wait=0)
 
 
+def test_clear_caches_allows_a_long_rm():
+    timeouts = {}
+
+    def run(_h, command, *, stdin=None, check=True, timeout=None, user=None):
+        timeouts[command] = timeout
+        return _cp("90")
+
+    with patch("orchestrator.builder_upgrade.ssh.run", run):
+        bu.step_clear_caches(_host())
+    rm = [t for c, t in timeouts.items() if "rm -rf" in c]
+    assert rm and all(t and t >= 1800 for t in rm)
+
+
 # --- os update ---
 
 
