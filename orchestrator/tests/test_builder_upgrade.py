@@ -266,6 +266,78 @@ def test_sudo_without_password_tells_operator_what_to_do():
             bu.step_ensure_sudo(_host(), wait=0)
 
 
+# --- xcode ---
+
+
+def test_xcode_ready_reads_the_plist_not_xcodebuild():
+    fake = FakeSSH({"ProductBuildVersion": "16F6\n/Applications/Xcode.app/Contents/Developer"})
+    with patch("orchestrator.builder_upgrade.ssh.run", fake.run):
+        assert bu.xcode_ready(_host())
+    assert not any("xcodebuild" in c for c in fake.commands())  # 12.x's xcodebuild hangs on 15
+
+
+def test_xcode_ready_false_for_old_build_or_wrong_selection():
+    for out in ("12B45b\n/Applications/Xcode.app/Contents/Developer",
+                "16F6\n/Library/Developer/CommandLineTools", ""):
+        with patch("orchestrator.builder_upgrade.ssh.run", FakeSSH({"ProductBuildVersion": out}).run):
+            assert not bu.xcode_ready(_host())
+
+
+def _xcode_fake(polls, after="16F6\n/Applications/Xcode.app/Contents/Developer"):
+    """ProductBuildVersion reads old until the install reports done; polls is an iterator of
+    (log, expand_kb, state) tuples."""
+    state = {"done": False}
+
+    def poll():
+        log, kb, st = next(polls)
+        state["done"] = state["done"] or log == "done"
+        return f"log={log}\nexpand={kb}\nstate={st}"
+
+    def version():
+        return after if state["done"] else "12B45b\n/Applications/Xcode.app/Contents/Developer"
+
+    return FakeSSH({"ProductBuildVersion": version, 'echo "log=': poll})
+
+
+def test_install_xcode_runs_as_launchdaemon_and_cleans_up():
+    fake = _xcode_fake(iter([("== downloading", "", "running"), ("== expanding (takes a while)", "0", "running"), ("done", "", "exited")]))
+    writes = []
+    with patch("orchestrator.builder_upgrade.ssh.run", fake.run), \
+         patch("orchestrator.builder_upgrade.ssh.write_file_as_root", lambda host, path, data, mode="0600", user=None: writes.append((path, data))), \
+         patch("orchestrator.builder_upgrade.time.sleep"):
+        bu.step_install_xcode(_host())
+    paths = [p for p, _ in writes]
+    assert bu.XCODE_PLIST in paths and bu.XCODE_REMOTE in paths
+    plist = dict(writes)[bu.XCODE_PLIST].decode()
+    assert bu.XCODE_DAEMON in plist and bu.XCODE_URL in plist and "<key>KeepAlive</key><false/>" in plist
+    cmds = fake.commands()
+    assert any(f"launchctl bootstrap system {bu.XCODE_PLIST}" in c for c in cmds)
+    assert not any(c.startswith("sudo bash ") for c in cmds), "must not run the installer inside the ssh session"
+    assert f"bootout system/{bu.XCODE_DAEMON}" in cmds[-2] or any(f"bootout system/{bu.XCODE_DAEMON}" in c for c in cmds[-3:])
+
+
+def test_install_xcode_fails_fast_when_daemon_exits_early_and_still_cleans_up():
+    fake = _xcode_fake(iter([("curl: (22) 403", "", "exited")]))
+    with patch("orchestrator.builder_upgrade.ssh.run", fake.run), \
+         patch("orchestrator.builder_upgrade.ssh.write_file_as_root"), \
+         patch("orchestrator.builder_upgrade.time.sleep"):
+        with pytest.raises(ReprovisionError, match="exited without finishing"):
+            bu.step_install_xcode(_host())
+    assert any(f"bootout system/{bu.XCODE_DAEMON}" in c for c in fake.commands()[-2:])
+
+
+def test_install_xcode_detects_a_stall():
+    # r8-138: xip sat at 0% CPU with an empty expand dir for an hour.
+    clock = iter(range(0, 10**6, 600))  # every poll advances 10 min
+    fake = _xcode_fake(iter([("== expanding (takes a while)", "0", "running")] * 10))
+    with patch("orchestrator.builder_upgrade.ssh.run", fake.run), \
+         patch("orchestrator.builder_upgrade.ssh.write_file_as_root"), \
+         patch("orchestrator.builder_upgrade.time.sleep"), \
+         patch("orchestrator.builder_upgrade.time.monotonic", lambda: next(clock)):
+        with pytest.raises(ReprovisionError, match="stalled"):
+            bu.step_install_xcode(_host())
+
+
 # --- puppet ---
 
 

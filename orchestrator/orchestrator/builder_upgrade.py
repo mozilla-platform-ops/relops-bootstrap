@@ -44,6 +44,10 @@ XCODE_BUILD = "16F6"
 CLT_LABEL = "Command Line Tools for Xcode-16.4"
 INSTALLER = "/Applications/Install macOS Sequoia.app"
 XCODE_REMOTE = "/var/root/install-xcode.sh"
+XCODE_DAEMON = "org.mozilla.relops.xcode-install"
+XCODE_PLIST = f"/Library/LaunchDaemons/{XCODE_DAEMON}.plist"
+XCODE_LOG = "/var/log/builder-upgrade-xcode.log"
+XCODE_EXPAND = "/private/var/tmp/xcode-install/expand"
 SEMAPHORE = "/var/tmp/semaphore/run-buildbot"
 KCPASSWORD = "/etc/kcpassword"
 KCPASSWORD_ASIDE = "/etc/kcpassword.disabled"
@@ -164,8 +168,16 @@ def reclaimable_gb(h: BuilderHost) -> int:
 
 
 def xcode_ready(h: BuilderHost) -> bool:
-    out = _sh(h, "xcodebuild -version 2>/dev/null", check=False)
-    return f"Build version {XCODE_BUILD}" in out
+    """Xcode.app is the target build and selected. Reads version.plist instead of running
+    xcodebuild: with Xcode 12.x still selected, `xcodebuild -version` can hang on macOS 15
+    (r8-138, 2026-10-22)."""
+    out = _sh(
+        h,
+        "defaults read /Applications/Xcode.app/Contents/version ProductBuildVersion 2>/dev/null; xcode-select -p 2>/dev/null",
+        check=False,
+    )
+    lines = out.splitlines()
+    return len(lines) == 2 and lines[0] == XCODE_BUILD and lines[1].startswith("/Applications/Xcode.app/")
 
 
 def clt_ready(h: BuilderHost) -> bool:
@@ -390,20 +402,77 @@ def step_ensure_sudo(h: BuilderHost, *, wait: int = 15 * 60, poll: int = 30) -> 
     ui.ok("passwordless")
 
 
-def step_install_xcode(h: BuilderHost) -> None:
+def _xcode_daemon_plist() -> bytes:
+    args = "".join(f"<string>{a}</string>" for a in ("/bin/bash", XCODE_REMOTE, XCODE_URL, XCODE_BUILD))
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        f'<plist version="1.0"><dict><key>Label</key><string>{XCODE_DAEMON}</string>'
+        f"<key>ProgramArguments</key><array>{args}</array>"
+        "<key>RunAtLoad</key><true/><key>KeepAlive</key><false/>"
+        f"<key>StandardOutPath</key><string>{XCODE_LOG}</string>"
+        f"<key>StandardErrorPath</key><string>{XCODE_LOG}</string>"
+        "</dict></plist>\n"
+    ).encode()
+
+
+def _xcode_daemon_cleanup(h: BuilderHost) -> None:
+    _sh(h, f"sudo launchctl bootout system/{XCODE_DAEMON} 2>/dev/null; sudo rm -f {XCODE_PLIST} {XCODE_REMOTE}", check=False)
+
+
+def step_install_xcode(h: BuilderHost, *, poll: int = 30, stall: int = 20 * 60, timeout: int = 90 * 60) -> None:
     """Before puppet: with Xcode 12.x still selected, /usr/bin/git crashes in xcodebuild's
-    plugin loader on macOS 15, and run-puppet.sh dies silently at its first git command."""
+    plugin loader on macOS 15, and run-puppet.sh dies silently at its first git command.
+
+    Runs install-xcode.sh as a one-off LaunchDaemon and polls it. Run from an ssh session,
+    `xip --expand` hangs at 0% CPU: PackageKit asks the ssh user's containermanagerd agent for
+    a secure container and that agent can't serve outside a GUI session (r8-138, three tries,
+    2026-10-22). From launchd's system context it finished in ~3 min. It also keeps the step
+    off ssh's timeout, which killed an earlier run after 60 min.
+    """
     ui.step("XCODE", f"Xcode {XCODE_BUILD} from the ronin package bucket (signature + build checked)")
     if xcode_ready(h):
         ui.ok(f"Xcode {XCODE_BUILD} already selected -- skipping")
         return
     script = (resources.files("orchestrator") / "data" / "install-xcode.sh").read_bytes()
+    _xcode_daemon_cleanup(h)  # a previous attempt's daemon, if any
     ssh.write_file_as_root(h.fqdn, XCODE_REMOTE, script, mode="0700", user=USER)
-    ui.wire(f"sudo bash {XCODE_REMOTE} <xip> {XCODE_BUILD}  (~3G download, ~15 min expand)")
-    out = _sh(h, f"sudo bash {XCODE_REMOTE} {shlex.quote(XCODE_URL)} {XCODE_BUILD} 2>&1", timeout=3600)
+    ssh.write_file_as_root(h.fqdn, XCODE_PLIST, _xcode_daemon_plist(), mode="0644", user=USER)
+    _sh(h, f"sudo rm -f {XCODE_LOG} && sudo launchctl bootstrap system {XCODE_PLIST}")
+    ui.wire(f"launchctl bootstrap system {XCODE_PLIST}  (~3G download, then xip; log {XCODE_LOG})")
+    deadline, last_progress, last_mark = time.monotonic() + timeout, time.monotonic(), ""
+    try:
+        with ui.waiting("downloading and expanding Xcode", eta_seconds=900) as tick:
+            while True:
+                time.sleep(poll)
+                fields = dict(
+                    line.split("=", 1)
+                    for line in _sh(
+                        h,
+                        f'echo "log=$(sudo tail -1 {XCODE_LOG} 2>/dev/null)"; '
+                        f'echo "expand=$(sudo du -sk {XCODE_EXPAND} 2>/dev/null | cut -f1)"; '
+                        f'echo "state=$(sudo launchctl print system/{XCODE_DAEMON} 2>/dev/null | grep -q "state = running" && echo running || echo exited)"',
+                        check=False,
+                    ).splitlines()
+                    if "=" in line
+                )
+                log_tail, expand_kb, state = fields.get("log", ""), fields.get("expand", ""), fields.get("state", "")
+                if log_tail.strip() == "done":
+                    break
+                if state == "exited" or "!!" in log_tail:
+                    raise ReprovisionError(f"Xcode install exited without finishing: {escape(log_tail[:200])}")
+                mark = f"{log_tail}|{expand_kb}"
+                if mark != last_mark:
+                    last_mark, last_progress = mark, time.monotonic()
+                elif time.monotonic() - last_progress > stall:
+                    raise ReprovisionError(f"Xcode install stalled for {stall // 60} min at: {escape(log_tail[:200])}")
+                if time.monotonic() > deadline:
+                    raise ReprovisionError(f"Xcode install still running after {timeout // 60} min")
+                tick(escape(log_tail[:60]) or "starting")
+    finally:
+        _xcode_daemon_cleanup(h)
     if not xcode_ready(h):
-        raise ReprovisionError(f"Xcode {XCODE_BUILD} not selected after install: {escape(out[-300:])}")
-    _sh(h, f"sudo rm -f {XCODE_REMOTE}", check=False)
+        raise ReprovisionError(f"Xcode {XCODE_BUILD} not selected after install")
     ui.ok(f"Xcode {XCODE_BUILD} selected")
 
 
