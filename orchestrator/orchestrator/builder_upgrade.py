@@ -52,6 +52,7 @@ SEMAPHORE = "/var/tmp/semaphore/run-buildbot"
 KCPASSWORD = "/etc/kcpassword"
 KCPASSWORD_ASIDE = "/etc/kcpassword.disabled"
 CLT_TRIGGER = "/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress"
+SUDOERS_DROPIN = "/etc/sudoers.d/zz-builder-upgrade"
 # Installer + upgrade + Xcode. r8-241 had 49G of worker cache; clear_caches frees it.
 MIN_FREE_GB = 60
 # Where builders start from: gecko/nss are on 10.15, applicationservices on macOS 13.
@@ -66,7 +67,7 @@ ROLE_UPGRADES = {
     "applicationservices_3_b_osx_1015": "applicationservices_3_b_osx_1500",
 }
 # A second puppet run should change nothing but this always-run exec.
-ALWAYS_RUNS = ("Exec[install_mercurial_py311]",)
+ALWAYS_RUNS = ("Exec[install_mercurial_py311]", "Exec[pmset_SleepDisabled]")
 
 
 @dataclass
@@ -289,6 +290,11 @@ def step_stop_worker(h: BuilderHost, *, logout_wait: int = 60) -> None:
     _sh(h, f"sudo rm -f {SEMAPHORE}")
     _sh(h, "sudo launchctl bootout system/org.mozilla.worker-runner 2>/dev/null; true", check=False)
     _sh(h, f"if [ -e {KCPASSWORD} ]; then sudo mv {KCPASSWORD} {KCPASSWORD_ASIDE}; fi")
+    # The upgrade resets /etc/sudoers to Apple's stock file, which reads /etc/sudoers.d. Drop
+    # relops's NOPASSWD there now, while sudo still works, so it can survive the upgrade.
+    # Puppet's sudo class purges the dir on its first run under the new role.
+    _sh(h, f"sudo mkdir -p /etc/sudoers.d && echo 'relops ALL=(ALL) NOPASSWD: ALL' | sudo tee {SUDOERS_DROPIN} >/dev/null "
+           f"&& sudo chmod 0440 {SUDOERS_DROPIN}")
     who = console_user(h)
     if who.startswith("task_"):
         _sh(h, f"sudo launchctl bootout gui/$(id -u {shlex.quote(who)})", check=False)
@@ -382,8 +388,8 @@ def step_ensure_sudo(h: BuilderHost, *, wait: int = 15 * 60, poll: int = 30) -> 
         ui.wire("sudo -S: temporary /etc/sudoers.d/zz-builder-upgrade (puppet removes it)")
         _sh(
             h,
-            "sudo -S -p '' sh -c \"echo 'relops ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/zz-builder-upgrade "
-            '&& chmod 0440 /etc/sudoers.d/zz-builder-upgrade"',
+            "sudo -S -p '' sh -c \"mkdir -p /etc/sudoers.d && echo 'relops ALL=(ALL) NOPASSWD: ALL' > " + SUDOERS_DROPIN + " "
+            "&& chmod 0440 " + SUDOERS_DROPIN + "\"",
             stdin=(pw + "\n").encode(),
         )
     else:

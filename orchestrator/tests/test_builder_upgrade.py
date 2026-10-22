@@ -181,6 +181,19 @@ def test_stop_worker_sets_kcpassword_aside_before_logging_out():
     assert any(bu.SEMAPHORE in c and "rm -f" in c for c in cmds)
 
 
+def test_stop_worker_drops_relops_sudoers_before_the_upgrade():
+    console = iter(["root"])
+    fake = FakeSSH({"stat -f %Su /dev/console": lambda: next(console)})
+    with patch("orchestrator.builder_upgrade.ssh.run", fake.run):
+        bu.step_stop_worker(_host())
+    drop = next(c for c in fake.commands() if bu.SUDOERS_DROPIN in c)
+    assert "NOPASSWD" in drop and "0440" in drop
+
+
+def test_mercurial_and_pmset_execs_are_expected_on_every_run():
+    assert any("pmset_SleepDisabled" in a for a in bu.ALWAYS_RUNS)
+
+
 def test_stop_worker_fails_if_task_user_comes_straight_back():
     fake = FakeSSH({"stat -f %Su /dev/console": "task_174593007134490"})
     with patch("orchestrator.builder_upgrade.ssh.run", fake.run), patch("orchestrator.builder_upgrade.time.sleep"):
