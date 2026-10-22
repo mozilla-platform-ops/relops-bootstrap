@@ -159,7 +159,7 @@ def free_gb(h: BuilderHost) -> int:
 
 
 def reclaimable_gb(h: BuilderHost) -> int:
-    out = _sh(h, "sudo -n du -sg /opt/worker/cache /opt/worker/tasks /Users/cltbld/caches 2>/dev/null | awk '{s+=$1} END{print s+0}'", check=False)
+    out = _sh(h, "sudo -n du -sg /opt/worker/cache /opt/worker/tasks /Users/cltbld/caches 2>/dev/null | awk '{s+=$1} END{print s+0}'", check=False, timeout=600)
     return int(out or 0)
 
 
@@ -295,8 +295,10 @@ def step_clear_caches(h: BuilderHost) -> None:
     staging dir, and the Xcode the previous run moved aside."""
     ui.step("CLEAR CACHES", "worker cache + tasks, stale caches, leftover installer data")
     before = free_gb(h)
-    _sh(h, "sudo sh -c 'rm -rf /opt/worker/cache/* /opt/worker/tasks/* && echo {} > /opt/worker/directory-caches.json'")
-    _sh(h, "sudo rm -rf /Users/cltbld/caches '/System/Volumes/Data/macOS Install Data' /Applications/Xcode.app.pre-*", check=False)
+    # Deleting ~20G of hg stores outlasts ssh.run's 120s default (r8-138, 2026-10-22): the rm
+    # finished on the host but the tool had already given up.
+    _sh(h, "sudo sh -c 'rm -rf /opt/worker/cache/* /opt/worker/tasks/* && echo {} > /opt/worker/directory-caches.json'", timeout=1800)
+    _sh(h, "sudo rm -rf /Users/cltbld/caches '/System/Volumes/Data/macOS Install Data' /Applications/Xcode.app.pre-*", check=False, timeout=1800)
     ui.ok(f"{before}G -> {free_gb(h)}G free")
 
 
