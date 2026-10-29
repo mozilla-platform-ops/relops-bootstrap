@@ -56,6 +56,9 @@ KCPASSWORD = "/etc/kcpassword"
 KCPASSWORD_ASIDE = "/etc/kcpassword.disabled"
 CLT_TRIGGER = "/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress"
 SUDOERS_DROPIN = "/etc/sudoers.d/zz-builder-upgrade"
+PERSONA_KB = "/private/var/db/keybags/persona.kb"
+PERSONA_KB_MAX = 1_000_000  # healthy hosts: 1-20 KB; usermanagerd's jetsam cap on 15 is 15 MB
+PERSONA_ASIDE_DIR = "/var/root/persona-aside"
 # Installer + upgrade + Xcode. r8-241 had 49G of worker cache; clear_caches frees it.
 MIN_FREE_GB = 60
 # Where builders start from: gecko/nss are on 10.15, applicationservices on macOS 13.
@@ -429,6 +432,23 @@ def _xcode_daemon_cleanup(h: BuilderHost) -> None:
     _sh(h, f"sudo launchctl bootout system/{XCODE_DAEMON} 2>/dev/null; sudo rm -f {XCODE_PLIST} {XCODE_REMOTE}", check=False)
 
 
+def step_reset_persona_keybag(h: BuilderHost) -> None:
+    """Move an oversized persona keybag aside; the return reboot rebuilds it (~1 KB).
+
+    usermanagerd loads persona.kb whole at startup. Years of per-task users left it at 9-23 MB
+    on some builders, harmless on 10.15/13; macOS 15 caps usermanagerd at 15 MB, so jetsam
+    kills it every 10s, loginwindow never finishes the task user's login, and anything that
+    needs a GUI session (PGO generate-profile) hangs to max-run-time (r8-138/180/198/200,
+    2026-10-29). FileVault is off on these hosts, so a fresh keybag locks nothing."""
+    ui.step("PERSONA KEYBAG", f"move {PERSONA_KB} aside if it's over {PERSONA_KB_MAX // 1_000_000} MB")
+    size = _sh(h, f"sudo stat -f %z {PERSONA_KB} 2>/dev/null", check=False).strip()
+    if not size.isdigit() or int(size) <= PERSONA_KB_MAX:
+        ui.ok(f"{size or 'absent'} bytes -- leaving it")
+        return
+    _sh(h, f"sudo mkdir -p {PERSONA_ASIDE_DIR} && sudo mv {PERSONA_KB} {PERSONA_ASIDE_DIR}/persona.kb.$(date +%Y%m%d%H%M%S)")
+    ui.ok(f"{int(size) // 1_000_000} MB keybag moved to {PERSONA_ASIDE_DIR}; rebuilt at the next boot")
+
+
 def step_install_xcode(h: BuilderHost, *, poll: int = 30, stall: int = 20 * 60, timeout: int = 90 * 60) -> None:
     """Before puppet: with Xcode 12.x still selected, /usr/bin/git crashes in xcodebuild's
     plugin loader on macOS 15, and run-puppet.sh dies silently at its first git command.
@@ -583,7 +603,7 @@ def step_verify(h: BuilderHost) -> None:
     ui.ok(f"{pool}, {client}, Xcode {XCODE_BUILD}, CLT, autologin {h.task_user}")
 
 
-def step_return(h: BuilderHost, *, reboot_timeout: int = 1800, register_timeout: int = 1200, poll: int = 20) -> None:
+def step_return(h: BuilderHost, *, reboot_timeout: int = 1800, session_timeout: int = 300, register_timeout: int = 1200, poll: int = 20) -> None:
     """kcpassword back, semaphore, reboot, wait for autologin + Taskcluster.
 
     kcpassword first: nothing on a builder rewrites it (generic-worker's early return skips
@@ -614,6 +634,20 @@ def step_return(h: BuilderHost, *, reboot_timeout: int = 1800, register_timeout:
             if who == h.task_user:
                 break
             tick(f"console={who or '?'}")
+    # Autologin can "succeed" with no desktop: loginwindow owns the console but never launches
+    # the session (usermanagerd jetsam-looping on a big persona.kb). gw still checks in and
+    # builds pass; only GUI tasks hang. The Dock is the cheap tell.
+    deadline = time.monotonic() + session_timeout
+    with ui.waiting(f"waiting for {h.task_user}'s desktop session (Dock)") as tick:
+        while ssh.run(h.fqdn, f"pgrep -u {shlex.quote(h.task_user)} -x Dock", check=False, user=USER).returncode != 0:
+            if time.monotonic() > deadline:
+                umd = _sh(h, "sudo launchctl print system/com.apple.mobile.usermanagerd | grep -E 'state =|runs =|exit reason'", check=False)
+                raise ReprovisionError(
+                    f"{h.task_user} is at the console but has no desktop session after {session_timeout // 60} min "
+                    f"-- check usermanagerd / {PERSONA_KB}: {escape(' '.join(umd.split()))}"
+                )
+            tick("no Dock yet")
+            time.sleep(poll)
     since = datetime.fromtimestamp(boot_time(h), timezone.utc).isoformat()
     deadline = time.monotonic() + register_timeout
     while (taskcluster.get_worker(h.pool, WORKER_GROUP, h.hostname).get("lastDateActive") or "") <= since:
@@ -659,6 +693,7 @@ def upgrade(hostname: str, *, unquarantine: bool = False, dry_run: bool = False,
         step_clear_caches(h)
         step_os_update(h)
         step_ensure_sudo(h)
+        step_reset_persona_keybag(h)
         step_install_xcode(h)
         step_install_clt(h)
         step_puppet(h)
