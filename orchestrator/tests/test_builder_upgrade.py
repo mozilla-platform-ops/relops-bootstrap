@@ -406,7 +406,7 @@ def test_return_refuses_to_reboot_without_kcpassword():
 
 def _patch_steps(fail_at: str | None = None):
     names = ["step_drain", "step_stop_worker", "step_clear_caches", "step_os_update", "step_ensure_sudo",
-             "step_install_xcode", "step_install_clt", "step_puppet", "step_verify", "step_return"]
+             "step_reset_persona_keybag", "step_install_xcode", "step_install_clt", "step_puppet", "step_verify", "step_return"]
     patches = {}
     for n in names:
         side = ReprovisionError(f"boom in {n}") if n == fail_at else None
@@ -528,3 +528,36 @@ def test_install_clt_refuses_a_dmg_pkg_not_signed_by_apple():
     cmds = fake.commands()
     assert not any("installer -pkg" in c for c in cmds)
     assert any("hdiutil detach" in c for c in cmds)
+
+
+# --- persona keybag / desktop session ---
+
+
+def test_persona_keybag_moved_aside_when_oversized():
+    # r8-200: 21 MB persona.kb, usermanagerd jetsam-looping, no desktop for the task user.
+    fake = FakeSSH({"stat -f %z " + bu.PERSONA_KB: "21198439\n"})
+    with patch("orchestrator.builder_upgrade.ssh.run", fake.run):
+        bu.step_reset_persona_keybag(_host())
+    assert any(f"mv {bu.PERSONA_KB} {bu.PERSONA_ASIDE_DIR}/" in c for c in fake.commands())
+
+
+def test_persona_keybag_left_alone_when_small_or_absent():
+    for out in ("4963\n", ""):
+        fake = FakeSSH({"stat -f %z " + bu.PERSONA_KB: out})
+        with patch("orchestrator.builder_upgrade.ssh.run", fake.run):
+            bu.step_reset_persona_keybag(_host())
+        assert not any(" mv " in f" {c}" for c in fake.commands())
+
+
+def test_return_fails_when_autologin_has_no_desktop_session():
+    boots = iter([100, 200, 200, 200])
+    fake = FakeSSH({"kern.boottime": lambda: str(next(boots)), "stat -f %Su /dev/console": "task_174593007134490",
+                    "-x Dock": _cp("", rc=1), "usermanagerd": "state = spawn scheduled runs = 52"})
+    clock = iter(range(0, 10**6, 60))
+    with patch("orchestrator.builder_upgrade.ssh.run", fake.run), \
+         patch("orchestrator.builder_upgrade.ssh.file_exists", return_value=True), \
+         patch("orchestrator.builder_upgrade.taskcluster.get_worker", return_value={"lastDateActive": "2099-01-01T00:00:00"}), \
+         patch("orchestrator.builder_upgrade.time.monotonic", lambda: next(clock)), \
+         patch("orchestrator.builder_upgrade.time.sleep"):
+        with pytest.raises(ReprovisionError, match="no desktop session"):
+            bu.step_return(_host())
