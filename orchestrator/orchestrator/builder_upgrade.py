@@ -42,6 +42,9 @@ MIN_T2_MAJOR = 20
 XCODE_URL = "https://ronin-puppet-package-repo.s3.us-west-2.amazonaws.com/macos/public/15/Xcode_16.4.xip"
 XCODE_BUILD = "16F6"
 CLT_LABEL = "Command Line Tools for Xcode-16.4"
+CLT_DMG_URL = "https://ronin-puppet-package-repo.s3.us-west-2.amazonaws.com/macos/public/common/Command_Line_Tools_for_Xcode_16.4.dmg"
+CLT_DMG = "/private/var/tmp/clt.dmg"
+CLT_MOUNT = "/private/var/tmp/clt-mnt"
 INSTALLER = "/Applications/Install macOS Sequoia.app"
 XCODE_REMOTE = "/var/root/install-xcode.sh"
 XCODE_DAEMON = "org.mozilla.relops.xcode-install"
@@ -482,6 +485,23 @@ def step_install_xcode(h: BuilderHost, *, poll: int = 30, stall: int = 20 * 60, 
     ui.ok(f"Xcode {XCODE_BUILD} selected")
 
 
+def _install_clt_dmg(h: BuilderHost) -> None:
+    """softwareupdate offered no CLT at all on r8-198 (2026-10-29: only the 15.8.2 update was
+    listed). Install the dmg ronin ships instead, and only if the pkg is Apple-signed --
+    Software Update pkgs report "signed Apple Software", not a Developer ID naming Apple Inc."""
+    ui.wire(f"CLT not offered by softwareupdate -- installing {CLT_DMG_URL.rsplit('/', 1)[-1]}")
+    _sh(h, f"sudo curl -fsSL --retry 3 -o {CLT_DMG} {shlex.quote(CLT_DMG_URL)}", timeout=1800)
+    try:
+        _sh(h, f"sudo mkdir -p {CLT_MOUNT} && sudo hdiutil attach -quiet -nobrowse -readonly -mountpoint {CLT_MOUNT} {CLT_DMG}")
+        pkg = _sh(h, f"ls {CLT_MOUNT}/*.pkg | head -1").strip()
+        sig = _sh(h, f"pkgutil --check-signature {shlex.quote(pkg)}", check=False)
+        if "Status: signed Apple Software" not in sig:
+            raise ReprovisionError(f"{escape(pkg)} is not Apple-signed: {escape(sig[:200])}")
+        _sh(h, f"sudo installer -pkg {shlex.quote(pkg)} -target /", timeout=1800)
+    finally:
+        _sh(h, f"sudo hdiutil detach -quiet {CLT_MOUNT}; sudo rm -rf {CLT_DMG} {CLT_MOUNT}", check=False)
+
+
 def step_install_clt(h: BuilderHost) -> None:
     """The upgrade leaves a CommandLineTools stub with no usr/bin/git. Done here because the
     download outlasts puppet's old 300s exec timeout (ronin #1470 raises it)."""
@@ -491,9 +511,12 @@ def step_install_clt(h: BuilderHost) -> None:
         return
     _sh(h, f"sudo touch {CLT_TRIGGER}")
     try:
-        _sh(h, f"sudo softwareupdate -i {shlex.quote(CLT_LABEL)} --verbose", timeout=3600)
+        # check=False: "No such update" is the case the dmg below covers.
+        _sh(h, f"sudo softwareupdate -i {shlex.quote(CLT_LABEL)} --verbose", check=False, timeout=3600)
     finally:
         _sh(h, f"sudo rm -f {CLT_TRIGGER}", check=False)
+    if not clt_ready(h):
+        _install_clt_dmg(h)
     if not clt_ready(h):
         raise ReprovisionError("Command Line Tools still missing usr/bin/git after the install")
     ui.ok("installed")
