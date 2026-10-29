@@ -477,3 +477,54 @@ def test_runner_maps_builder_upgrade_action():
     assert cmd[1:] == ["builder-upgrade", "macmini-r8-124", "--job", "7", "--unquarantine"]
     dry = runner._job_cmd("macmini-r8-124", {"id": 8, "action": "builder-upgrade", "params": {"dry_run": True}}, None)
     assert "--dry-run" in dry and "--unquarantine" not in dry
+
+
+def _clt_fake(*, softwareupdate_installs: bool, sig: str = "Status: signed Apple Software"):
+    state = {"installed": False}
+
+    def softwareupdate():
+        state["installed"] = softwareupdate_installs
+        return _cp("" if softwareupdate_installs else "Command Line Tools for Xcode-16.4: No such update", rc=0 if softwareupdate_installs else 1)
+
+    def installer():
+        state["installed"] = True
+        return _cp("installer: The install was successful.")
+
+    def ready():
+        return _cp("", rc=0 if state["installed"] else 1)
+
+    return FakeSSH({
+        "CommandLineTools/usr/bin/git": ready,
+        "softwareupdate -i": softwareupdate,
+        "ls /private/var/tmp/clt-mnt": "/private/var/tmp/clt-mnt/Command Line Tools.pkg\n",
+        "pkgutil --check-signature": sig,
+        "installer -pkg": installer,
+    })
+
+
+def test_install_clt_uses_softwareupdate_when_offered():
+    fake = _clt_fake(softwareupdate_installs=True)
+    with patch("orchestrator.builder_upgrade.ssh.run", fake.run):
+        bu.step_install_clt(_host())
+    assert not any("curl" in c for c in fake.commands())
+
+
+def test_install_clt_falls_back_to_the_ronin_dmg():
+    # r8-198: softwareupdate listed no CLT at all.
+    fake = _clt_fake(softwareupdate_installs=False)
+    with patch("orchestrator.builder_upgrade.ssh.run", fake.run):
+        bu.step_install_clt(_host())
+    cmds = fake.commands()
+    assert any(bu.CLT_DMG_URL in c for c in cmds)
+    assert any("installer -pkg" in c for c in cmds)
+    assert "hdiutil detach" in cmds[-2] or any("hdiutil detach" in c for c in cmds[-3:])
+
+
+def test_install_clt_refuses_a_dmg_pkg_not_signed_by_apple():
+    fake = _clt_fake(softwareupdate_installs=False, sig="Status: no signature")
+    with patch("orchestrator.builder_upgrade.ssh.run", fake.run):
+        with pytest.raises(ReprovisionError, match="not Apple-signed"):
+            bu.step_install_clt(_host())
+    cmds = fake.commands()
+    assert not any("installer -pkg" in c for c in cmds)
+    assert any("hdiutil detach" in c for c in cmds)
